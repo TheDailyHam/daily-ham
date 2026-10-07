@@ -60,7 +60,7 @@ nothing is faked.
 1. Push this repo to GitHub. In Render: **New → Web Service**, point at the repo.
 2. Render detects the `Dockerfile` automatically. Set env vars:
    `SPORTSGAMEODDS_KEY=<your key>`. Leave `PORT` unset (Render injects it).
-3. Add a **persistent disk** mounted at `/app/data` so the SQLite DB survives deploys.
+3. Optional (paid tiers only): add a **persistent disk** mounted at `/app/data` so the SQLite DB survives deploys. The free tier has no persistent disk — the app still works fine, it just rebuilds its data from the free NHL feeds on each deploy/restart.
 4. **Cron**: Render → **New → Cron Job**, same repo, schedule `0 9 * * *`
    (9:00 UTC ≈ 5:00 AM ET), command:
    `APP_URL=https://<your-service>.onrender.com node scripts/refresh.js`
