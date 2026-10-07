@@ -1,0 +1,16 @@
+services:
+  daily-ham:
+    build: .
+    image: daily-ham:latest
+    container_name: daily-ham
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      DB_PATH: /app/data/app.db
+      MIGRATIONS_DIR: /app/drizzle
+      CLIENT_DIR: /app/client/dist
+    volumes:
+      - ./data:/app/data

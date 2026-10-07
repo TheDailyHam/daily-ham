@@ -1,0 +1,55 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1791370754274,
+      "tag": "0001_initial",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1791370754274,
+      "tag": "0002_add_projection_snapshots",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1791372648610,
+      "tag": "0003_add_provider_credentials",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1791374941355,
+      "tag": "0004_add_premium_odds_cache",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1791375343842,
+      "tag": "0005_remove_nba_data",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1791376266163,
+      "tag": "0006_add_league_roster_cache",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1791377827826,
+      "tag": "0007_hockey_only_insights",
+      "breakpoints": true
+    }
+  ]
+}
