@@ -234,12 +234,13 @@ function eventEntity(event: PremiumEvent, odd: PremiumOdd): string {
 type OddsProviderName = "sportsgameodds" | "theoddsapi";
 type OddsProvider = { name: OddsProviderName; apiKey: string };
 
-function providerError(result: { status: number; reason: "missing" | "rejected" | "rate_limited" | "provider_error" }, provider: OddsProviderName = "sportsgameodds"): Error {
+function providerError(result: { status: number; reason: "missing" | "rejected" | "rate_limited" | "provider_error"; detail?: string | null }, provider: OddsProviderName = "sportsgameodds"): Error {
   if (result.reason === "missing") return new Error("Add a SportsGameOdds or The Odds API key in Settings to unlock Pro Odds.");
+  const detail = result.detail ? ` — ${result.detail}` : "";
   if (provider === "theoddsapi") {
     if (result.reason === "rejected") return new Error("The Odds API rejected the saved key. Replace it in Settings.");
     if (result.reason === "rate_limited") return new Error("The Odds API is temporarily unavailable. Your last successful board will remain available.");
-    return new Error(`The Odds API returned ${result.status}`);
+    return new Error(`The Odds API returned ${result.status}${detail}`);
   }
   if (result.reason === "rejected") return new Error("SportsGameOdds rejected the saved key. Replace it in Settings.");
   if (result.reason === "rate_limited") return new Error("The live odds provider is temporarily unavailable. Your last successful board will remain available.");

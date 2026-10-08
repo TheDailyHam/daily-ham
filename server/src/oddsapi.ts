@@ -11,10 +11,21 @@ function text(value: unknown): string | null {
   return null;
 }
 function num(value: unknown): number | null { return typeof value === "number" && Number.isFinite(value) ? value : null; }
-function failure(status: number) {
-  if (status === 401 || status === 403) return { ok: false as const, status, reason: "rejected" as const };
-  if (status === 429) return { ok: false as const, status, reason: "rate_limited" as const };
-  return { ok: false as const, status, reason: "provider_error" as const };
+function failure(status: number, detail?: string) {
+  const base = { ok: false as const, status, detail: detail ?? null };
+  if (status === 401 || status === 403) return { ...base, reason: "rejected" as const };
+  if (status === 429) return { ...base, reason: "rate_limited" as const };
+  return { ...base, reason: "provider_error" as const };
+}
+
+// The Odds API explains parameter problems in the response body — capture it
+// so the UI can show something useful instead of a bare status code.
+async function errorDetail(response: Response): Promise<string | undefined> {
+  try {
+    const body = (await response.json()) as unknown;
+    const message = record(body)?.message;
+    return typeof message === "string" && message.trim() ? message.trim().slice(0, 200) : undefined;
+  } catch { return undefined; }
 }
 
 // Full NHL team-name -> team-code map, keyed on a normalized form
@@ -43,7 +54,7 @@ export async function validateOddsApiKey(args: { apiKey: string }) {
   // One cheap request: a single market keeps validation inside the free budget.
   const params = new URLSearchParams({ apiKey: args.apiKey, regions: "us", markets: "h2h" });
   const response = await fetch(`https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds/?${params.toString()}`, { headers: { Accept: "application/json" } });
-  if (!response.ok) return failure(response.status);
+  if (!response.ok) return failure(response.status, await errorDetail(response));
   return { ok: true as const };
 }
 
@@ -56,14 +67,18 @@ const WINDOW_DAYS_AFTER = 3;
 
 export async function fetchOddsApiEvents(args: { apiKey: string }) {
   const now = new Date();
-  const commenceTimeFrom = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - WINDOW_DAYS_BEFORE, 0, 0, 0)).toISOString();
-  const commenceTimeTo = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + WINDOW_DAYS_AFTER, 23, 59, 59)).toISOString();
+  // The Odds API requires commence times as YYYY-MM-DDTHH:MM:SSZ — no
+  // milliseconds. Date.toISOString() emits ".000Z", which the API rejects
+  // with 422 INVALID_COMMENCE_TIME_FROM.
+  const isoNoMs = (d: Date) => d.toISOString().replace(/\.\d{3}Z$/, "Z");
+  const commenceTimeFrom = isoNoMs(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - WINDOW_DAYS_BEFORE, 0, 0, 0)));
+  const commenceTimeTo = isoNoMs(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + WINDOW_DAYS_AFTER, 23, 59, 59)));
   const params = new URLSearchParams({
     apiKey: args.apiKey, regions: "us", markets: "h2h,spreads,totals",
     oddsFormat: "american", dateFormat: "iso", commenceTimeFrom, commenceTimeTo,
   });
   const response = await fetch(`https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds/?${params.toString()}`, { headers: { Accept: "application/json" } });
-  if (!response.ok) return failure(response.status);
+  if (!response.ok) return failure(response.status, await errorDetail(response));
   const payload = (await response.json()) as unknown;
   const events = Array.isArray(payload) ? payload : [];
   return { ok: true as const, status: 200 as const, payload: { data: events } };
