@@ -588,4 +588,5 @@ h1, h2, h3 { font-family: Rockwell, Georgia, serif; margin: 0; }
 .welcome-sign.team { border-left-color: var(--team-color); }
 .welcome-sign.team img { border-color: var(--team-color); }
 .welcome-sign.team::after { content: ""; position: absolute; inset: 0; background: linear-gradient(115deg, transparent 55%, color-mix(in srgb, var(--team-color) 26%, transparent)); pointer-events: none; }
-.welcome-team-badge { position: absolute; top: 10px; right: 12px; z-index: 1; padding: 4px 10px; border: 2px solid var(--team-color); border-radius: 999px; color: var(--team-color); font-size: 12px; font-weight: 900; letter-spacing: .08em; background: color-mix(in srgb, var(--team-color) 14%, transparent); }
+.welcome-team-badge { padding: 3px 10px; border: 2px solid var(--team-color); border-radius: 999px; color: var(--team-color); font-size: 11px; font-weight: 900; letter-spacing: .08em; background: color-mix(in srgb, var(--team-color) 14%, transparent); white-space: nowrap; }
+.welcome-sign .welcome-kicker { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }

@@ -580,11 +580,10 @@ function WelcomeBanner() {
   return <section className={"welcome-sign" + (team ? " team" : "")} style={team ? ({ "--team-color": team.color, "--team-secondary": team.secondary } as CSSProperties) : undefined}>
     <img src={logo} alt="Daily Ham ham chef logo" />
     <div>
-      <p>{team ? `Welcome, ${team.name} fan` : "Welcome to the Daily Ham"}</p>
+      <p className="welcome-kicker">{team ? <>Welcome, {team.name} fan <b className="welcome-team-badge">{team.code}</b></> : "Welcome to the Daily Ham"}</p>
       <strong>Fresh Cuts Daily</strong>
       <span>{team ? "Tonight's board, dressed in your team's colors." : "Every NHL market, official league data, model projections and sharp price comparison."}</span>
     </div>
-    {team && <b className="welcome-team-badge" aria-label={`Favorite team: ${team.name}`}>{team.code}</b>}
   </section>;
 }
 
