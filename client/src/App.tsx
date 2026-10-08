@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type CSSProperties, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 // Local replacement for the platform's SafeAreaTopScrim: a slim bar that
 // occupies the device's top safe-area inset (notch / status bar) so content
@@ -376,7 +376,7 @@ function ProView({ parlay, setParlay, home = false }: { parlay: ParlayPick[]; se
     setParlay(parlay.some((item) => item.id === pick.id) ? parlay.filter((item) => item.id !== pick.id) : [...parlay, pick]);
   };
   return <>
-    {home && <><section className="brand-banner"><img src={logo} alt="Daily Ham ham chef logo"/><div><p>HOCKEY ONLY</p><strong>Fresh Cuts Daily</strong><span>Every NHL market, official league data, model projections and sharp price comparison.</span></div></section><ScheduleStrip compact/></>}
+    {home && <><WelcomeBanner/><ScheduleStrip compact/></>}
     <ProviderStatus pending={board.isPending || board.isFetching} error={board.error instanceof Error ? board.error.message : null} onRetry={() => board.refetch()} />
     {board.data && <section className="pro-board">
       <div className="roster-title"><div><p className="kicker">{home ? "TODAY'S COMPLETE BOARD" : "LIVE SPORTSBOOK BOARD"}</p><h2>{groups.length.toLocaleString()} markets · {board.data.offerCount.toLocaleString()} book prices</h2><p className="roster-intro">Every market returned by the feed, paired across sides when both are offered.</p></div><span>{board.data.eventCount} events · {dateTime(board.data.fetchedAt)}</span></div>
@@ -566,6 +566,25 @@ function SettingsView() {
     <div className="settings-heading"><p className="kicker">PROVIDER SETTINGS</p><h1>Sportsbook connection</h1><p>Connect a sportsbook odds provider — SportsGameOdds or The Odds API — to power the complete NHL odds board. Your keys are used only for hockey markets.</p></div>
     <ProviderCard storageKey="sportsgameodds" providerLabel="SportsGameOdds" statusQueryKey="sports-game-odds-key-status" getStatus={() => api.getSportsGameOddsKeyStatus({})} saveKey={(args) => api.saveSportsGameOddsKey(args)} removeKey={() => api.removeSportsGameOddsKey({})} helpText="The field is cleared immediately after submission. The saved value is never displayed." />
     <ProviderCard storageKey="theoddsapi" providerLabel="The Odds API" statusQueryKey="odds-api-key-status" getStatus={() => api.getOddsApiKeyStatus({})} saveKey={(args) => api.saveOddsApiKey(args)} removeKey={() => api.removeOddsApiKey({})} helpText="Free tier: 500 requests/month, no credit card — one board refresh costs a single request. Get a key at the-odds-api.com. The field is cleared immediately after submission." />
+  </section>;
+}
+
+function WelcomeBanner() {
+  const [fav, setFav] = useState<string | null>(() => loadFavoriteTeam());
+  useEffect(() => {
+    const onChange = () => setFav(loadFavoriteTeam());
+    window.addEventListener("dh-team-change", onChange);
+    return () => window.removeEventListener("dh-team-change", onChange);
+  }, []);
+  const team = TEAM_THEMES.find((t) => t.code === fav) ?? null;
+  return <section className={"welcome-sign" + (team ? " team" : "")} style={team ? ({ "--team-color": team.color, "--team-secondary": team.secondary } as CSSProperties) : undefined}>
+    <img src={logo} alt="Daily Ham ham chef logo" />
+    <div>
+      <p>{team ? `Welcome, ${team.name} fan` : "Welcome to the Daily Ham"}</p>
+      <strong>Fresh Cuts Daily</strong>
+      <span>{team ? "Tonight's board, dressed in your team's colors." : "Every NHL market, official league data, model projections and sharp price comparison."}</span>
+    </div>
+    {team && <b className="welcome-team-badge" aria-label={`Favorite team: ${team.name}`}>{team.code}</b>}
   </section>;
 }
 

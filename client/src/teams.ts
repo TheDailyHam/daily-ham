@@ -74,4 +74,9 @@ export function saveFavoriteTeam(code: string | null): void {
     /* storage unavailable; theme still applies for the session */
   }
   applyTeamTheme(code);
+  try {
+    window.dispatchEvent(new CustomEvent("dh-team-change", { detail: code }));
+  } catch {
+    /* event dispatch is best-effort */
+  }
 }
