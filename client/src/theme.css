@@ -436,6 +436,11 @@ h1, h2, h3 { font-family: Rockwell, Georgia, serif; margin: 0; }
 .broadcasts { display: block; margin-top: 9px; color: var(--dim); }
 .market-goalies { display: block; margin-top: 6px; color: var(--orange); font-size: 10px; font-weight: 800; white-space: normal; }
 .standings-table { border-top: 3px solid var(--text); }
+/* Horizontal scroll for the league table on narrow screens: the inner table
+   keeps a comfortable minimum width and the wrapper scrolls instead of
+   clipping columns. -webkit-overflow-scrolling gives smooth swipe on iOS. */
+.standings-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: thin; }
+.standings-scroll > .standings-table { min-width: 460px; }
 .standings-row { display: grid; grid-template-columns: minmax(125px,1fr) repeat(6, 32px); gap: 4px; align-items: center; padding: 10px 3px; border-bottom: 1px solid var(--border); font-size: 11px; text-align: right; }
 .standings-row > span:first-child { display: grid; grid-template-columns: 22px minmax(0,1fr); gap: 1px 6px; text-align: left; min-width: 0; }
 .standings-row > span:first-child > b { grid-row: 1 / span 2; color: var(--orange); }
