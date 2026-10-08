@@ -3,8 +3,11 @@
 // Settings/UI uses, against the local server. Designed to run from the system
 // cron (see README) or any scheduler. Exits non-zero when a refresh fails.
 //
-//   APP_URL=http://localhost:3000 node scripts/refresh.js
-//   # or: APP_URL=https://ham.example.com node scripts/refresh.js
+//   APP_URL=http://localhost:3000 ADMIN_TOKEN=your-admin-token node scripts/refresh.js
+//   # or: APP_URL=https://ham.example.com ADMIN_TOKEN=your-admin-token node scripts/refresh.js
+//
+// The sportsbook leg requires ADMIN_TOKEN (same value as the server's
+// ADMIN_TOKEN env var). The free-data leg (refreshDaily) needs no token.
 
 const base = (process.env.APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
 
@@ -29,7 +32,7 @@ async function main() {
 
   let books = null;
   try {
-    books = await callAction("refreshAllSportsbooks", {});
+    books = await callAction("refreshAllSportsbooks", { adminToken: process.env.ADMIN_TOKEN });
     console.log(`[refresh] refreshAllSportsbooks: status=${books.status} refreshed=${books.refreshedSports} message=${books.message}`);
   } catch (error) {
     // The sportsbook leg is allowed to fail (missing key, provider quota);

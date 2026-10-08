@@ -1,5 +1,21 @@
 import { z } from "zod";
+import { timingSafeEqual } from "node:crypto";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
+
+// Admin gate: key management and manual sportsbook refreshes require the
+// ADMIN_TOKEN environment variable. This keeps public visitors from
+// replacing/removing the owner's provider keys or burning provider quota.
+// Fail closed: with no ADMIN_TOKEN set, the gated actions refuse to run.
+const adminTokenSchema = z.string().optional();
+function requireAdmin(args: { adminToken?: string }): void {
+  const expected = process.env.ADMIN_TOKEN?.trim();
+  if (!expected) throw new Error("Admin access is not configured on this server.");
+  const provided = Buffer.from(args.adminToken ?? "");
+  const want = Buffer.from(expected);
+  if (provided.length !== want.length || !timingSafeEqual(provided, want)) {
+    throw new Error("Admin access required.");
+  }
+}
 
 // Standalone context: plain object holding the drizzle better-sqlite3 instance.
 // (Replaces the Muse platform Ctx; ctx.db becomes ctx.db,
@@ -313,7 +329,11 @@ async function fetchPremiumAndCache(ctx: Ctx, sport: Sport, provider: OddsProvid
     if (!result.ok) throw providerError(result);
     parsed = parsePremiumPayload(sport, result.payload, fetchedAt);
   }
-  const expiresAt = new Date(fetchedAt.getTime() + 30 * 60 * 1000);
+  // The board is cached for ~22 hours: visitor page loads almost never trigger
+  // a provider request. The scheduled daily refresh (scripts/refresh.js via
+  // cron-job.org) performs the one real fetch per day, keeping the free
+  // provider quota shared across all visitors instead of per visit.
+  const expiresAt = new Date(fetchedAt.getTime() + 22 * 60 * 60 * 1000);
   const db = ctx.db;
   await db.delete(schema.premiumOddsCache).where(eq(schema.premiumOddsCache.sport, sport));
   await db.insert(schema.premiumOddsCache).values({ sport, payloadJson: JSON.stringify(parsed), fetchedAt, expiresAt, status: "fresh", message: parsed.healthMessage });
@@ -676,12 +696,14 @@ export const Actions = {
   getNhlRoster: defineAction({ request: z.object({ team: z.enum(teamCodes) }), response: rosterResponse, async handler(_ctx, args) { return loadRoster(args.team); } }),
   getNhlPlayerGameLog: defineAction({ request: z.object({ playerId: z.number().int().positive() }), response: gameLogResponse, async handler(_ctx, args) { return loadNhlPlayerGameLog(args.playerId); } }),
   getPremiumBoard: defineAction({ request: z.object({ sport: z.enum(sports) }), response: premiumResponse, async handler(ctx, args) { return loadPremium(ctx, args.sport); } }),
-  refreshAllSportsbooks: defineAction({ request: z.object({}), response: premiumRefreshResponse, async handler(ctx) { return refreshAllPremium(ctx); } }),
+  getAdminStatus: defineAction({ request: z.object({}), response: z.object({ configured: z.boolean() }), async handler() { return { configured: !!process.env.ADMIN_TOKEN?.trim() }; } }),
+  refreshAllSportsbooks: defineAction({ request: z.object({ adminToken: adminTokenSchema }), response: premiumRefreshResponse, async handler(ctx, args) { requireAdmin(args); return refreshAllPremium(ctx); } }),
   getSportsGameOddsKeyStatus: defineAction({ request: z.object({}), response: providerStatusResponse, async handler(ctx) { return getProviderStatus(ctx, "sportsgameodds"); } }),
   saveSportsGameOddsKey: defineAction({
-    request: z.object({ key: z.string().trim().min(16).max(512) }),
+    request: z.object({ key: z.string().trim().min(16).max(512), adminToken: adminTokenSchema }),
     response: providerStatusResponse,
     async handler(ctx, args): Promise<z.infer<typeof providerStatusResponse>> {
+      requireAdmin(args);
       const apiKey = args.key.trim();
       const validation = await validateSportsGameOddsKey({ apiKey });
       if (!validation.ok) throw providerError(validation);
@@ -689,17 +711,19 @@ export const Actions = {
     },
   }),
   removeSportsGameOddsKey: defineAction({
-    request: z.object({}),
+    request: z.object({ adminToken: adminTokenSchema }),
     response: removedResponse,
-    async handler(ctx): Promise<z.infer<typeof removedResponse>> {
+    async handler(ctx, args): Promise<z.infer<typeof removedResponse>> {
+      requireAdmin(args);
       return removeProviderKey(ctx, "sportsgameodds");
     },
   }),
   getOddsApiKeyStatus: defineAction({ request: z.object({}), response: providerStatusResponse, async handler(ctx) { return getProviderStatus(ctx, "theoddsapi"); } }),
   saveOddsApiKey: defineAction({
-    request: z.object({ key: z.string().trim().min(16).max(512) }),
+    request: z.object({ key: z.string().trim().min(16).max(512), adminToken: adminTokenSchema }),
     response: providerStatusResponse,
     async handler(ctx, args): Promise<z.infer<typeof providerStatusResponse>> {
+      requireAdmin(args);
       const apiKey = args.key.trim();
       const validation = await validateOddsApiKey({ apiKey });
       if (!validation.ok) throw providerError(validation, "theoddsapi");
@@ -707,9 +731,10 @@ export const Actions = {
     },
   }),
   removeOddsApiKey: defineAction({
-    request: z.object({}),
+    request: z.object({ adminToken: adminTokenSchema }),
     response: removedResponse,
-    async handler(ctx): Promise<z.infer<typeof removedResponse>> {
+    async handler(ctx, args): Promise<z.infer<typeof removedResponse>> {
+      requireAdmin(args);
       return removeProviderKey(ctx, "theoddsapi");
     },
   }),

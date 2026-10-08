@@ -37,6 +37,7 @@ export const api = {
   getNhlRoster: (args: ActionArgs<"getNhlRoster">) => callAction("getNhlRoster", args),
   getNhlPlayerGameLog: (args: ActionArgs<"getNhlPlayerGameLog">) => callAction("getNhlPlayerGameLog", args),
   getPremiumBoard: (args: ActionArgs<"getPremiumBoard">) => callAction("getPremiumBoard", args),
+  getAdminStatus: (args: ActionArgs<"getAdminStatus">) => callAction("getAdminStatus", args),
   refreshAllSportsbooks: (args: ActionArgs<"refreshAllSportsbooks">) => callAction("refreshAllSportsbooks", args),
   getSportsGameOddsKeyStatus: (args: ActionArgs<"getSportsGameOddsKeyStatus">) => callAction("getSportsGameOddsKeyStatus", args),
   saveSportsGameOddsKey: (args: ActionArgs<"saveSportsGameOddsKey">) => callAction("saveSportsGameOddsKey", args),

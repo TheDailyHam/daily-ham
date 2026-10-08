@@ -48,6 +48,7 @@ npm run dev -w client   # vite on :5173, proxies /api -> localhost:3000
 | `MIGRATIONS_DIR` | `./drizzle` | Migration SQL folder |
 | `CLIENT_DIR` | `./client/dist` | Built client folder the server serves |
 | `APP_URL` | `http://localhost:3000` | Base URL used by `scripts/refresh.js` |
+| `ADMIN_TOKEN` | — | **Sharing lockdown.** When set, provider key save/remove and manual sportsbook refreshes require this token (entered once in Settings → unlocked per session). Without it, those actions refuse to run — visitors can't touch your keys or burn your quota. Set it before sharing the link. |
 
 No key? The app still works: the free NHL data river (rosters, schedules,
 standings, game logs, hot streaks, matchup calculator) needs no key. The premium
@@ -105,14 +106,14 @@ docker compose up -d --build
 Daily refresh via system cron (`crontab -e`):
 
 ```cron
-15 9 * * * cd /path/to/daily-ham && APP_URL=http://localhost:3000 node scripts/refresh.js >> /var/log/daily-ham-refresh.log 2>&1
+15 9 * * * cd /path/to/daily-ham && APP_URL=http://localhost:3000 ADMIN_TOKEN=your-admin-token node scripts/refresh.js >> /var/log/daily-ham-refresh.log 2>&1
 ```
 
 Curl alternative (no node needed on the cron host — hits the public URL):
 
 ```cron
 15 9 * * * curl -s -X POST https://ham.example.com/api/actions -H 'Content-Type: application/json' -d '{"action":"refreshDaily","args":{}}' >/dev/null
-15 9 * * * sleep 120 && curl -s -X POST https://ham.example.com/api/actions -H 'Content-Type: application/json' -d '{"action":"refreshAllSportsbooks","args":{}}' >/dev/null
+15 9 * * * sleep 120 && curl -s -X POST https://ham.example.com/api/actions -H 'Content-Type: application/json' -d '{"action":"refreshAllSportsbooks","args":{"adminToken":"your-admin-token"}}' >/dev/null
 ```
 
 Point a domain at it: create an `A` record for `ham.example.com` → your server IP,

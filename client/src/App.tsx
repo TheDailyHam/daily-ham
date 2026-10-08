@@ -495,14 +495,15 @@ function MatchupCalculator() {
   </section>;
 }
 
-function ProviderCard({ storageKey, providerLabel, statusQueryKey, getStatus, saveKey, removeKey, helpText }: {
+function ProviderCard({ storageKey, providerLabel, statusQueryKey, getStatus, saveKey, removeKey, helpText, adminToken }: {
   storageKey: string;
   providerLabel: string;
   statusQueryKey: string;
   getStatus: () => Promise<{ configured: boolean; updatedAt: string | null }>;
-  saveKey: (args: { key: string }) => Promise<unknown>;
-  removeKey: () => Promise<unknown>;
+  saveKey: (args: { key: string; adminToken?: string }) => Promise<unknown>;
+  removeKey: (args: { adminToken?: string }) => Promise<unknown>;
   helpText: string;
+  adminToken: string | null;
 }) {
   const queryClient = useQueryClient();
   const status = useQuery({ queryKey: [statusQueryKey], queryFn: getStatus });
@@ -511,7 +512,7 @@ function ProviderCard({ storageKey, providerLabel, statusQueryKey, getStatus, sa
   const [message, setMessage] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const remove = useMutation({
-    mutationFn: removeKey,
+    mutationFn: () => removeKey({ adminToken: adminToken ?? undefined }),
     onSuccess: async () => {
       setConfirmRemove(false);
       setMessage(`${providerLabel} key removed.`);
@@ -531,7 +532,7 @@ function ProviderCard({ storageKey, providerLabel, statusQueryKey, getStatus, sa
     }
     setSaving(true);
     try {
-      await saveKey({ key: secret });
+      await saveKey({ key: secret, adminToken: adminToken ?? undefined });
       setMessage("Key verified and saved.");
       await queryClient.invalidateQueries({ queryKey: [statusQueryKey] });
       queryClient.removeQueries({ queryKey: ["premium-board"] });
@@ -543,11 +544,13 @@ function ProviderCard({ storageKey, providerLabel, statusQueryKey, getStatus, sa
   }
 
   const inputId = `${storageKey}-key`;
+  const locked = !adminToken;
   return <div className="credential-card">
     <div className="credential-status" aria-live="polite">
       <span className={status.data?.configured ? "status-dot configured" : "status-dot"} />
       <div><small>{providerLabel.replace(/\s+/g, "").toUpperCase()}</small><strong>{status.isPending ? "Checking…" : status.data?.configured ? "Configured" : "Not configured"}</strong>{status.data?.updatedAt && <span>Updated {dateTime(status.data.updatedAt)}</span>}</div>
     </div>
+    {locked ? <p className="settings-message">Provider keys are managed by the site owner — admin access is required to add, replace, or remove keys.</p> : <>
     <form onSubmit={handleSave}>
       <label htmlFor={inputId}>{status.data?.configured ? "Replace API key" : "API key"}</label>
       <div className="credential-entry"><input id={inputId} type="password" autoComplete="new-password" spellCheck={false} value={key} onChange={(event) => setKey(event.target.value)} placeholder="Paste key" aria-describedby={`${inputId}-help`}/><button className="primary" type="submit" disabled={saving || !key.trim()}>{saving ? "Verifying…" : status.data?.configured ? "Replace key" : "Save key"}</button></div>
@@ -558,14 +561,45 @@ function ProviderCard({ storageKey, providerLabel, statusQueryKey, getStatus, sa
     {status.data?.configured && !confirmRemove && <button className="remove-key" onClick={() => setConfirmRemove(true)}>Remove key</button>}
     {status.data?.configured && confirmRemove && <div className="remove-confirm" role="group" aria-label="Confirm key removal"><p>Remove the saved key? Pro Odds will stop loading until another key is added.</p><div><button onClick={() => setConfirmRemove(false)} disabled={remove.isPending}>Cancel</button><button className="danger" onClick={() => remove.mutate()} disabled={remove.isPending}>{remove.isPending ? "Removing…" : "Remove key"}</button></div></div>}
     {remove.isError && <p className="settings-message error" role="alert">The key could not be removed. Try again.</p>}
+    </>}
   </div>;
 }
 
+const ADMIN_SESSION_KEY = "dh-admin-token";
+
 function SettingsView() {
+  const adminStatus = useQuery({ queryKey: ["admin-status"], queryFn: () => api.getAdminStatus({}), retry: false });
+  const [adminToken, setAdminToken] = useState<string | null>(() => {
+    try { return sessionStorage.getItem(ADMIN_SESSION_KEY); } catch { return null; }
+  });
+  const [draft, setDraft] = useState("");
+
+  function unlock(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const token = draft.trim();
+    setDraft("");
+    if (!token) return;
+    try { sessionStorage.setItem(ADMIN_SESSION_KEY, token); } catch { /* private mode: token lasts for this page view only */ }
+    setAdminToken(token);
+  }
+  function lock() {
+    try { sessionStorage.removeItem(ADMIN_SESSION_KEY); } catch { /* noop */ }
+    setAdminToken(null);
+  }
+
+  const gateConfigured = adminStatus.data?.configured ?? false;
   return <section className="settings-panel">
     <div className="settings-heading"><p className="kicker">PROVIDER SETTINGS</p><h1>Sportsbook connection</h1><p>Connect a sportsbook odds provider — SportsGameOdds or The Odds API — to power the complete NHL odds board. Your keys are used only for hockey markets.</p></div>
-    <ProviderCard storageKey="sportsgameodds" providerLabel="SportsGameOdds" statusQueryKey="sports-game-odds-key-status" getStatus={() => api.getSportsGameOddsKeyStatus({})} saveKey={(args) => api.saveSportsGameOddsKey(args)} removeKey={() => api.removeSportsGameOddsKey({})} helpText="The field is cleared immediately after submission. The saved value is never displayed." />
-    <ProviderCard storageKey="theoddsapi" providerLabel="The Odds API" statusQueryKey="odds-api-key-status" getStatus={() => api.getOddsApiKeyStatus({})} saveKey={(args) => api.saveOddsApiKey(args)} removeKey={() => api.removeOddsApiKey({})} helpText="Free tier: 500 requests/month, no credit card — one board refresh costs a single request. Get a key at the-odds-api.com. The field is cleared immediately after submission." />
+    {adminStatus.isPending && <p className="settings-message">Checking admin access…</p>}
+    {adminStatus.data && !gateConfigured && <div className="credential-card"><p className="settings-message" role="status"><strong>Admin access is not set up on this server yet. </strong><span>Add an <code>ADMIN_TOKEN</code> environment variable and redeploy — then only someone with that token can manage provider keys or trigger manual refreshes.</span></p></div>}
+    {gateConfigured && !adminToken && <form className="credential-card" onSubmit={unlock}>
+      <label htmlFor="admin-token">Site owner access</label>
+      <div className="credential-entry"><input id="admin-token" type="password" autoComplete="off" spellCheck={false} value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Enter admin token" /><button className="primary" type="submit" disabled={!draft.trim()}>Unlock</button></div>
+      <small>Provider settings are locked for visitors. Unlock with the site's admin token to add, replace, or remove keys.</small>
+    </form>}
+    {gateConfigured && adminToken && <div className="credential-card"><div className="credential-status"><span className="status-dot configured" /><div><small>ADMIN</small><strong>Unlocked</strong><span>Key management is enabled for this session.</span></div></div><button className="remove-key" onClick={lock}>Lock settings</button></div>}
+    <ProviderCard storageKey="sportsgameodds" providerLabel="SportsGameOdds" statusQueryKey="sports-game-odds-key-status" getStatus={() => api.getSportsGameOddsKeyStatus({})} saveKey={(args) => api.saveSportsGameOddsKey(args)} removeKey={(args) => api.removeSportsGameOddsKey(args)} helpText="The field is cleared immediately after submission. The saved value is never displayed." adminToken={adminToken} />
+    <ProviderCard storageKey="theoddsapi" providerLabel="The Odds API" statusQueryKey="odds-api-key-status" getStatus={() => api.getOddsApiKeyStatus({})} saveKey={(args) => api.saveOddsApiKey(args)} removeKey={(args) => api.removeOddsApiKey(args)} helpText="Free tier: 500 requests/month, no credit card — one board refresh costs a single request. Get a key at the-odds-api.com. The field is cleared immediately after submission." adminToken={adminToken} />
   </section>;
 }
 
