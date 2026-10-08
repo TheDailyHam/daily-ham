@@ -56,14 +56,41 @@ export function applyTeamTheme(code: string | null): void {
     const team = TEAM_THEMES.find((t) => t.code === code);
     if (team) {
       root.style.setProperty("--accent", team.color);
+      // Dark team colors need a lightened variant for text sitting on
+      // accent-colored buttons/bars; light team colors keep the default
+      // dark text via the CSS fallbacks.
+      if (luminance(team.color) < 0.18) {
+        root.style.setProperty("--accent-ink", lighten(team.color, 0.72));
+      } else {
+        root.style.removeProperty("--accent-ink");
+      }
       root.setAttribute("data-fav-team", team.code);
     } else {
       root.style.removeProperty("--accent");
+      root.style.removeProperty("--accent-ink");
       root.removeAttribute("data-fav-team");
     }
   } catch {
     /* theming is decorative; never break the app */
   }
+}
+
+function luminance(hex: string): number {
+  const n = hex.replace("#", "");
+  const r = parseInt(n.slice(0, 2), 16) / 255;
+  const g = parseInt(n.slice(2, 4), 16) / 255;
+  const b = parseInt(n.slice(4, 6), 16) / 255;
+  const f = (c: number) => (c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+  return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+}
+
+function lighten(hex: string, amount: number): string {
+  const n = hex.replace("#", "");
+  const r = parseInt(n.slice(0, 2), 16);
+  const g = parseInt(n.slice(2, 4), 16);
+  const b = parseInt(n.slice(4, 6), 16);
+  const m = (c: number) => Math.round(c + (255 - c) * amount).toString(16).padStart(2, "0");
+  return `#${m(r)}${m(g)}${m(b)}`;
 }
 
 export function saveFavoriteTeam(code: string | null): void {
