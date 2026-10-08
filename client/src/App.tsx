@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 // Local replacement for the platform's SafeAreaTopScrim: a slim bar that
 // occupies the device's top safe-area inset (notch / status bar) so content
@@ -9,6 +9,7 @@ function SafeAreaTopScrim({ backgroundColor }: { backgroundColor: string }) {
 import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api, type ApiResponse } from "./api";
 import logo from "./assets/daily-ham-logo.jpg";
+import { TEAM_THEMES, applyTeamTheme, loadFavoriteTeam, saveFavoriteTeam } from "./teams";
 
 type Mode = "board" | "matchup" | "rosters" | "hot" | "standings" | "settings";
 type PremiumBoard = ApiResponse<typeof api, "getPremiumBoard">;
@@ -568,8 +569,41 @@ function SettingsView() {
   </section>;
 }
 
+function TeamThemePicker() {
+  const [open, setOpen] = useState(false);
+  const [fav, setFav] = useState<string | null>(() => loadFavoriteTeam());
+  const current = TEAM_THEMES.find((t) => t.code === fav) ?? null;
+
+  function pick(code: string | null) {
+    saveFavoriteTeam(code);
+    setFav(code);
+    setOpen(false);
+  }
+
+  return <>
+    <button type="button" className="team-picker-btn" onClick={() => setOpen(true)} aria-label={current ? `Favorite team: ${current.name}. Change favorite team.` : "Pick your favorite team"}>
+      <span className="team-picker-dot" style={current ? { background: current.color } : undefined} aria-hidden="true" />
+      <span>{current ? current.code : "My team"}</span>
+    </button>
+    {open && <div className="team-modal-backdrop" onClick={() => setOpen(false)}>
+      <div className="team-modal" role="dialog" aria-modal="true" aria-label="Pick your favorite team" onClick={(e) => e.stopPropagation()}>
+        <div className="team-modal-head"><h3>Your team, your colors</h3><button type="button" className="team-modal-close" onClick={() => setOpen(false)} aria-label="Close">×</button></div>
+        <p>Pick a favorite and the whole site dresses in their colors. Saved on this device.</p>
+        <div className="team-grid">
+          {TEAM_THEMES.map((t) => <button key={t.code} type="button" className={"team-cell" + (fav === t.code ? " sel" : "")} onClick={() => pick(t.code)} aria-pressed={fav === t.code}>
+            <span className="team-swatch" style={{ background: `linear-gradient(135deg, ${t.color} 50%, ${t.secondary} 50%)` }} aria-hidden="true" />
+            <b>{t.code}</b><small>{t.name}</small>
+          </button>)}
+        </div>
+        {fav && <button type="button" className="team-clear" onClick={() => pick(null)}>Reset to Daily Ham colors</button>}
+      </div>
+    </div>}
+  </>;
+}
+
 export function App(){
   const [mode, setMode] = useState<Mode>("board");
   const [parlay, setParlay] = useState<ParlayPick[]>([]);
-  return <div className="app-shell"><SafeAreaTopScrim backgroundColor="var(--paper)"/><main><div className="topbar"><nav className="mode-tabs" aria-label="Data view"><button className={mode==="board"?"active":""} onClick={()=>setMode("board")}>Ice board</button><button className={mode==="matchup"?"active":""} onClick={()=>setMode("matchup")}>Matchup</button><button className={mode==="rosters"?"active":""} onClick={()=>setMode("rosters")}>Players</button><button className={mode==="hot"?"active":""} onClick={()=>setMode("hot")}>Hot streaks</button><button className={mode==="standings"?"active":""} onClick={()=>setMode("standings")}>League</button><button className={mode==="settings"?"active":""} onClick={()=>setMode("settings")}>Settings</button></nav></div>{mode==="board"&&<ProView parlay={parlay} setParlay={setParlay} home/>} {mode==="matchup"&&<MatchupCalculator/>} {mode==="rosters"&&<RosterView parlay={parlay} setParlay={setParlay}/>} {mode==="hot"&&<HotStreaksView/>} {mode==="standings"&&<LeagueView/>} {mode==="settings"&&<SettingsView/>}</main></div>;
+  useEffect(() => { applyTeamTheme(loadFavoriteTeam()); }, []);
+  return <div className="app-shell"><SafeAreaTopScrim backgroundColor="var(--paper)"/><main><div className="topbar"><nav className="mode-tabs" aria-label="Data view"><button className={mode==="board"?"active":""} onClick={()=>setMode("board")}>Ice board</button><button className={mode==="matchup"?"active":""} onClick={()=>setMode("matchup")}>Matchup</button><button className={mode==="rosters"?"active":""} onClick={()=>setMode("rosters")}>Players</button><button className={mode==="hot"?"active":""} onClick={()=>setMode("hot")}>Hot streaks</button><button className={mode==="standings"?"active":""} onClick={()=>setMode("standings")}>League</button><button className={mode==="settings"?"active":""} onClick={()=>setMode("settings")}>Settings</button></nav><TeamThemePicker/></div>{mode==="board"&&<ProView parlay={parlay} setParlay={setParlay} home/>} {mode==="matchup"&&<MatchupCalculator/>} {mode==="rosters"&&<RosterView parlay={parlay} setParlay={setParlay}/>} {mode==="hot"&&<HotStreaksView/>} {mode==="standings"&&<LeagueView/>} {mode==="settings"&&<SettingsView/>}</main></div>;
 }
