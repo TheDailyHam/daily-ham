@@ -494,37 +494,45 @@ function MatchupCalculator() {
   </section>;
 }
 
-function SettingsView() {
+function ProviderCard({ storageKey, providerLabel, statusQueryKey, getStatus, saveKey, removeKey, helpText }: {
+  storageKey: string;
+  providerLabel: string;
+  statusQueryKey: string;
+  getStatus: () => Promise<{ configured: boolean; updatedAt: string | null }>;
+  saveKey: (args: { key: string }) => Promise<unknown>;
+  removeKey: () => Promise<unknown>;
+  helpText: string;
+}) {
   const queryClient = useQueryClient();
-  const status = useQuery({ queryKey: ["sports-game-odds-key-status"], queryFn: () => api.getSportsGameOddsKeyStatus({}) });
+  const status = useQuery({ queryKey: [statusQueryKey], queryFn: getStatus });
   const [key, setKey] = useState("");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const remove = useMutation({
-    mutationFn: () => api.removeSportsGameOddsKey({}),
+    mutationFn: removeKey,
     onSuccess: async () => {
       setConfirmRemove(false);
-      setMessage("SportsGameOdds key removed.");
-      await queryClient.invalidateQueries({ queryKey: ["sports-game-odds-key-status"] });
+      setMessage(`${providerLabel} key removed.`);
+      await queryClient.invalidateQueries({ queryKey: [statusQueryKey] });
       queryClient.removeQueries({ queryKey: ["premium-board"] });
     },
   });
 
-  async function saveKey(event: FormEvent<HTMLFormElement>) {
+  async function handleSave(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const secret = key.trim();
     setKey("");
     setMessage(null);
     if (secret.length < 16) {
-      setMessage("Enter the complete SportsGameOdds API key.");
+      setMessage(`Enter the complete ${providerLabel} API key.`);
       return;
     }
     setSaving(true);
     try {
-      await api.saveSportsGameOddsKey({ key: secret });
+      await saveKey({ key: secret });
       setMessage("Key verified and saved.");
-      await queryClient.invalidateQueries({ queryKey: ["sports-game-odds-key-status"] });
+      await queryClient.invalidateQueries({ queryKey: [statusQueryKey] });
       queryClient.removeQueries({ queryKey: ["premium-board"] });
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "The key could not be saved.");
@@ -533,24 +541,30 @@ function SettingsView() {
     }
   }
 
-  return <section className="settings-panel">
-    <div className="settings-heading"><p className="kicker">PROVIDER SETTINGS</p><h1>Sportsbook connection</h1><p>Connect SportsGameOdds to power the complete NHL odds board. Your key is used only for hockey markets.</p></div>
-    <div className="credential-card">
-      <div className="credential-status" aria-live="polite">
-        <span className={status.data?.configured ? "status-dot configured" : "status-dot"} />
-        <div><small>SPORTSGAMEODDS</small><strong>{status.isPending ? "Checking…" : status.data?.configured ? "Configured" : "Not configured"}</strong>{status.data?.updatedAt && <span>Updated {dateTime(status.data.updatedAt)}</span>}</div>
-      </div>
-      <form onSubmit={saveKey}>
-        <label htmlFor="provider-key">{status.data?.configured ? "Replace API key" : "API key"}</label>
-        <div className="credential-entry"><input id="provider-key" type="password" autoComplete="new-password" spellCheck={false} value={key} onChange={(event) => setKey(event.target.value)} placeholder="Paste key" aria-describedby="provider-key-help"/><button className="primary" type="submit" disabled={saving || !key.trim()}>{saving ? "Verifying…" : status.data?.configured ? "Replace key" : "Save key"}</button></div>
-        <small id="provider-key-help">The field is cleared immediately after submission. The saved value is never displayed.</small>
-      </form>
-      {message && <p className="settings-message" role="status">{message}</p>}
-      {status.isError && <p className="settings-message error" role="alert">Could not read provider status. <button onClick={() => status.refetch()}>Retry</button></p>}
-      {status.data?.configured && !confirmRemove && <button className="remove-key" onClick={() => setConfirmRemove(true)}>Remove key</button>}
-      {status.data?.configured && confirmRemove && <div className="remove-confirm" role="group" aria-label="Confirm key removal"><p>Remove the saved key? Pro Odds will stop loading until another key is added.</p><div><button onClick={() => setConfirmRemove(false)} disabled={remove.isPending}>Cancel</button><button className="danger" onClick={() => remove.mutate()} disabled={remove.isPending}>{remove.isPending ? "Removing…" : "Remove key"}</button></div></div>}
-      {remove.isError && <p className="settings-message error" role="alert">The key could not be removed. Try again.</p>}
+  const inputId = `${storageKey}-key`;
+  return <div className="credential-card">
+    <div className="credential-status" aria-live="polite">
+      <span className={status.data?.configured ? "status-dot configured" : "status-dot"} />
+      <div><small>{providerLabel.replace(/\s+/g, "").toUpperCase()}</small><strong>{status.isPending ? "Checking…" : status.data?.configured ? "Configured" : "Not configured"}</strong>{status.data?.updatedAt && <span>Updated {dateTime(status.data.updatedAt)}</span>}</div>
     </div>
+    <form onSubmit={handleSave}>
+      <label htmlFor={inputId}>{status.data?.configured ? "Replace API key" : "API key"}</label>
+      <div className="credential-entry"><input id={inputId} type="password" autoComplete="new-password" spellCheck={false} value={key} onChange={(event) => setKey(event.target.value)} placeholder="Paste key" aria-describedby={`${inputId}-help`}/><button className="primary" type="submit" disabled={saving || !key.trim()}>{saving ? "Verifying…" : status.data?.configured ? "Replace key" : "Save key"}</button></div>
+      <small id={`${inputId}-help`}>{helpText}</small>
+    </form>
+    {message && <p className="settings-message" role="status">{message}</p>}
+    {status.isError && <p className="settings-message error" role="alert">Could not read provider status. <button onClick={() => status.refetch()}>Retry</button></p>}
+    {status.data?.configured && !confirmRemove && <button className="remove-key" onClick={() => setConfirmRemove(true)}>Remove key</button>}
+    {status.data?.configured && confirmRemove && <div className="remove-confirm" role="group" aria-label="Confirm key removal"><p>Remove the saved key? Pro Odds will stop loading until another key is added.</p><div><button onClick={() => setConfirmRemove(false)} disabled={remove.isPending}>Cancel</button><button className="danger" onClick={() => remove.mutate()} disabled={remove.isPending}>{remove.isPending ? "Removing…" : "Remove key"}</button></div></div>}
+    {remove.isError && <p className="settings-message error" role="alert">The key could not be removed. Try again.</p>}
+  </div>;
+}
+
+function SettingsView() {
+  return <section className="settings-panel">
+    <div className="settings-heading"><p className="kicker">PROVIDER SETTINGS</p><h1>Sportsbook connection</h1><p>Connect a sportsbook odds provider — SportsGameOdds or The Odds API — to power the complete NHL odds board. Your keys are used only for hockey markets.</p></div>
+    <ProviderCard storageKey="sportsgameodds" providerLabel="SportsGameOdds" statusQueryKey="sports-game-odds-key-status" getStatus={() => api.getSportsGameOddsKeyStatus({})} saveKey={(args) => api.saveSportsGameOddsKey(args)} removeKey={() => api.removeSportsGameOddsKey({})} helpText="The field is cleared immediately after submission. The saved value is never displayed." />
+    <ProviderCard storageKey="theoddsapi" providerLabel="The Odds API" statusQueryKey="odds-api-key-status" getStatus={() => api.getOddsApiKeyStatus({})} saveKey={(args) => api.saveOddsApiKey(args)} removeKey={() => api.removeOddsApiKey({})} helpText="Free tier: 500 requests/month, no credit card — one board refresh costs a single request. Get a key at the-odds-api.com. The field is cleared immediately after submission." />
   </section>;
 }
 

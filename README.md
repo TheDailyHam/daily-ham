@@ -25,7 +25,7 @@ SportsGameOdds key.
 ```bash
 npm install
 npm run build        # builds server (tsc) then client (vite)
-cp .env.example .env # then set SPORTSGAMEODDS_KEY in .env
+cp .env.example .env # then set SPORTSGAMEODDS_KEY or ODDS_API_KEY in .env
 npm start            # serves API + client on http://localhost:3000
 ```
 
@@ -43,6 +43,7 @@ npm run dev -w client   # vite on :5173, proxies /api -> localhost:3000
 |---|---|---|
 | `PORT` | `3000` | HTTP port (hosts like Render/Railway/Fly inject their own) |
 | `SPORTSGAMEODDS_KEY` | — | Your SportsGameOdds API key. **Takes precedence** over a key saved via Settings |
+| `ODDS_API_KEY` | — | Your The Odds API key (the-odds-api.com, free tier). **Takes precedence** over SportsGameOdds when set — the board refreshes from The Odds API instead, at 1 request per refresh |
 | `DB_PATH` | `./data/app.db` | SQLite file (keep on a persistent volume in Docker) |
 | `MIGRATIONS_DIR` | `./drizzle` | Migration SQL folder |
 | `CLIENT_DIR` | `./client/dist` | Built client folder the server serves |
@@ -59,8 +60,9 @@ nothing is faked.
 
 1. Push this repo to GitHub. In Render: **New → Web Service**, point at the repo.
 2. Render detects the `Dockerfile` automatically. Set env vars:
-   `SPORTSGAMEODDS_KEY=<your key>`. Leave `PORT` unset (Render injects it).
-3. Optional (paid tiers only): add a **persistent disk** mounted at `/app/data` so the SQLite DB survives deploys. The free tier has no persistent disk — the app still works fine, it just rebuilds its data from the free NHL feeds on each deploy/restart.
+   `SPORTSGAMEODDS_KEY=<your key>` and/or `ODDS_API_KEY=<your key>`. Leave `PORT` unset (Render injects it).
+   Set `ODDS_API_KEY` to use The Odds API as the odds provider (1 request per refresh on its free tier); otherwise the app uses SportsGameOdds.
+3. Add a **persistent disk** mounted at `/app/data` so the SQLite DB survives deploys.
 4. **Cron**: Render → **New → Cron Job**, same repo, schedule `0 9 * * *`
    (9:00 UTC ≈ 5:00 AM ET), command:
    `APP_URL=https://<your-service>.onrender.com node scripts/refresh.js`

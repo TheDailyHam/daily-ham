@@ -41,6 +41,9 @@ export const api = {
   getSportsGameOddsKeyStatus: (args: ActionArgs<"getSportsGameOddsKeyStatus">) => callAction("getSportsGameOddsKeyStatus", args),
   saveSportsGameOddsKey: (args: ActionArgs<"saveSportsGameOddsKey">) => callAction("saveSportsGameOddsKey", args),
   removeSportsGameOddsKey: (args: ActionArgs<"removeSportsGameOddsKey">) => callAction("removeSportsGameOddsKey", args),
+  getOddsApiKeyStatus: (args: ActionArgs<"getOddsApiKeyStatus">) => callAction("getOddsApiKeyStatus", args),
+  saveOddsApiKey: (args: ActionArgs<"saveOddsApiKey">) => callAction("saveOddsApiKey", args),
+  removeOddsApiKey: (args: ActionArgs<"removeOddsApiKey">) => callAction("removeOddsApiKey", args),
 };
 
 // Re-exported for convenience so client code can do

@@ -16,6 +16,7 @@ function defineAction<Req extends z.ZodTypeAny, Res extends z.ZodTypeAny>(opts: 
   return opts;
 }
 import { fetchSportsGameOddsEvents, validateSportsGameOddsKey } from "./provider.js";
+import { fetchOddsApiEvents, parseOddsApiPayload, validateOddsApiKey } from "./oddsapi.js";
 import { and, desc, eq, gte, lt } from "drizzle-orm";
 import * as schema from "./schema.js";
 
@@ -230,8 +231,16 @@ function eventEntity(event: PremiumEvent, odd: PremiumOdd): string {
   return entityId.replaceAll("_", " ");
 }
 
-function providerError(result: { status: number; reason: "missing" | "rejected" | "rate_limited" | "provider_error" }): Error {
-  if (result.reason === "missing") return new Error("Add your SportsGameOdds key in Settings to unlock Pro Odds.");
+type OddsProviderName = "sportsgameodds" | "theoddsapi";
+type OddsProvider = { name: OddsProviderName; apiKey: string };
+
+function providerError(result: { status: number; reason: "missing" | "rejected" | "rate_limited" | "provider_error" }, provider: OddsProviderName = "sportsgameodds"): Error {
+  if (result.reason === "missing") return new Error("Add a SportsGameOdds or The Odds API key in Settings to unlock Pro Odds.");
+  if (provider === "theoddsapi") {
+    if (result.reason === "rejected") return new Error("The Odds API rejected the saved key. Replace it in Settings.");
+    if (result.reason === "rate_limited") return new Error("The Odds API is temporarily unavailable. Your last successful board will remain available.");
+    return new Error(`The Odds API returned ${result.status}`);
+  }
   if (result.reason === "rejected") return new Error("SportsGameOdds rejected the saved key. Replace it in Settings.");
   if (result.reason === "rate_limited") return new Error("The live odds provider is temporarily unavailable. Your last successful board will remain available.");
   return new Error(`SportsGameOdds returned ${result.status}`);
@@ -275,12 +284,34 @@ function parsePremiumPayload(sport: Sport, raw: unknown, fetchedAt: Date): z.inf
   return { sport, fetchedAt: fetchedAt.toISOString(), eventCount: events.length, marketCount, offerCount: offers.length, offers, cacheStatus: "fresh", healthMessage: "Odds updated successfully" };
 }
 
-async function fetchPremiumAndCache(ctx: Ctx, sport: Sport, apiKey: string): Promise<z.infer<typeof premiumResponse>> {
-  let result = await fetchSportsGameOddsEvents({ apiKey });
-  if (!result.ok && result.reason === "provider_error") result = await fetchSportsGameOddsEvents({ apiKey });
-  if (!result.ok) throw providerError(result);
+async function loadOddsProvider(ctx: Ctx): Promise<OddsProvider> {
+  // The ODDS_API_KEY environment variable takes precedence, then a The Odds
+  // API key saved through the Settings UI (provider_credentials table).
+  // Otherwise fall back to the SportsGameOdds key (env var or saved key).
+  const envKey = process.env.ODDS_API_KEY?.trim();
+  if (envKey) return { name: "theoddsapi", apiKey: envKey };
+  const rows = await ctx.db.select({ secretValue: schema.providerCredentials.secretValue }).from(schema.providerCredentials).where(eq(schema.providerCredentials.provider, "theoddsapi")).limit(1);
+  const dbKey = rows[0]?.secretValue.trim();
+  if (dbKey) return { name: "theoddsapi", apiKey: dbKey };
+  const apiKey = await loadProviderKey(ctx);
+  return { name: "sportsgameodds", apiKey };
+}
+
+async function fetchPremiumAndCache(ctx: Ctx, sport: Sport, provider: OddsProvider): Promise<z.infer<typeof premiumResponse>> {
   const fetchedAt = new Date();
-  const parsed = parsePremiumPayload(sport, result.payload, fetchedAt);
+  let parsed: z.infer<typeof premiumResponse>;
+  if (provider.name === "theoddsapi") {
+    // One request carries every game, market and bookmaker.
+    const result = await fetchOddsApiEvents({ apiKey: provider.apiKey });
+    if (!result.ok) throw providerError(result, "theoddsapi");
+    const mapped = parseOddsApiPayload(result.payload.data);
+    parsed = { sport, fetchedAt: fetchedAt.toISOString(), eventCount: mapped.eventCount, marketCount: mapped.marketCount, offerCount: mapped.offerCount, offers: mapped.offers, cacheStatus: "fresh", healthMessage: "Odds updated successfully (The Odds API)" };
+  } else {
+    let result = await fetchSportsGameOddsEvents({ apiKey: provider.apiKey });
+    if (!result.ok && result.reason === "provider_error") result = await fetchSportsGameOddsEvents({ apiKey: provider.apiKey });
+    if (!result.ok) throw providerError(result);
+    parsed = parsePremiumPayload(sport, result.payload, fetchedAt);
+  }
   const expiresAt = new Date(fetchedAt.getTime() + 30 * 60 * 1000);
   const db = ctx.db;
   await db.delete(schema.premiumOddsCache).where(eq(schema.premiumOddsCache.sport, sport));
@@ -294,8 +325,8 @@ async function loadPremium(ctx: Ctx, sport: Sport): Promise<z.infer<typeof premi
   const cached = cachedRows[0];
   if (cached && cached.expiresAt.getTime() > Date.now()) return premiumResponse.parse(JSON.parse(cached.payloadJson));
   try {
-    const apiKey = await loadProviderKey(ctx);
-    return await fetchPremiumAndCache(ctx, sport, apiKey);
+    const provider = await loadOddsProvider(ctx);
+    return await fetchPremiumAndCache(ctx, sport, provider);
   } catch (error) {
     if (!cached) throw error;
     const parsed = premiumResponse.parse(JSON.parse(cached.payloadJson));
@@ -305,13 +336,13 @@ async function loadPremium(ctx: Ctx, sport: Sport): Promise<z.infer<typeof premi
 
 async function refreshAllPremium(ctx: Ctx): Promise<z.infer<typeof premiumRefreshResponse>> {
   const refreshedAt = new Date();
-  let apiKey: string;
-  try { apiKey = await loadProviderKey(ctx); }
+  let provider: OddsProvider;
+  try { provider = await loadOddsProvider(ctx); }
   catch (error) { return { status: "failed", refreshedAt: refreshedAt.toISOString(), refreshedSports: 0, message: error instanceof Error ? error.message : "Sportsbook connection is not configured." }; }
   let refreshedSports = 0;
   const failures: string[] = [];
   for (const sport of sports) {
-    try { await fetchPremiumAndCache(ctx, sport, apiKey); refreshedSports += 1; }
+    try { await fetchPremiumAndCache(ctx, sport, provider); refreshedSports += 1; }
     catch (error) { failures.push(`${sport.toUpperCase()}: ${error instanceof Error ? error.message : "refresh failed"}`); }
   }
   return { status: refreshedSports === sports.length ? "success" : refreshedSports > 0 ? "partial" : "failed", refreshedAt: refreshedAt.toISOString(), refreshedSports, message: failures.length ? failures.join(" · ") : "All sportsbook boards updated." };
@@ -609,10 +640,30 @@ async function fetchHotStreaks(ctx: Ctx, force: boolean): Promise<z.infer<typeof
 const providerStatusResponse = z.object({ configured: z.boolean(), updatedAt: z.string().nullable() });
 const removedResponse = z.object({ configured: z.literal(false), updatedAt: z.null() });
 
-async function getProviderStatus(ctx: Ctx): Promise<z.infer<typeof providerStatusResponse>> {
-  const rows = await ctx.db.select({ updatedAt: schema.providerCredentials.updatedAt }).from(schema.providerCredentials).where(eq(schema.providerCredentials.provider, "sportsgameodds")).limit(1);
+async function getProviderStatus(ctx: Ctx, provider: string): Promise<z.infer<typeof providerStatusResponse>> {
+  const rows = await ctx.db.select({ updatedAt: schema.providerCredentials.updatedAt }).from(schema.providerCredentials).where(eq(schema.providerCredentials.provider, provider)).limit(1);
   const credential = rows[0];
   return { configured: credential !== undefined, updatedAt: credential?.updatedAt.toISOString() ?? null };
+}
+
+async function upsertProviderKey(ctx: Ctx, provider: string, apiKey: string): Promise<z.infer<typeof providerStatusResponse>> {
+  const db = ctx.db;
+  const existing = await db.select({ createdAt: schema.providerCredentials.createdAt }).from(schema.providerCredentials).where(eq(schema.providerCredentials.provider, provider)).limit(1);
+  const now = new Date();
+  if (existing[0]) {
+    await db.update(schema.providerCredentials).set({ secretValue: apiKey, updatedAt: now }).where(eq(schema.providerCredentials.provider, provider));
+  } else {
+    await db.insert(schema.providerCredentials).values({ provider, secretValue: apiKey, createdAt: now, updatedAt: now });
+  }
+  await db.delete(schema.premiumOddsCache);
+  return { configured: true, updatedAt: now.toISOString() };
+}
+
+async function removeProviderKey(ctx: Ctx, provider: string): Promise<z.infer<typeof removedResponse>> {
+  const db = ctx.db;
+  await db.delete(schema.providerCredentials).where(eq(schema.providerCredentials.provider, provider));
+  await db.delete(schema.premiumOddsCache);
+  return { configured: false, updatedAt: null };
 }
 
 export const Actions = {
@@ -625,7 +676,7 @@ export const Actions = {
   getNhlPlayerGameLog: defineAction({ request: z.object({ playerId: z.number().int().positive() }), response: gameLogResponse, async handler(_ctx, args) { return loadNhlPlayerGameLog(args.playerId); } }),
   getPremiumBoard: defineAction({ request: z.object({ sport: z.enum(sports) }), response: premiumResponse, async handler(ctx, args) { return loadPremium(ctx, args.sport); } }),
   refreshAllSportsbooks: defineAction({ request: z.object({}), response: premiumRefreshResponse, async handler(ctx) { return refreshAllPremium(ctx); } }),
-  getSportsGameOddsKeyStatus: defineAction({ request: z.object({}), response: providerStatusResponse, async handler(ctx) { return getProviderStatus(ctx); } }),
+  getSportsGameOddsKeyStatus: defineAction({ request: z.object({}), response: providerStatusResponse, async handler(ctx) { return getProviderStatus(ctx, "sportsgameodds"); } }),
   saveSportsGameOddsKey: defineAction({
     request: z.object({ key: z.string().trim().min(16).max(512) }),
     response: providerStatusResponse,
@@ -633,26 +684,32 @@ export const Actions = {
       const apiKey = args.key.trim();
       const validation = await validateSportsGameOddsKey({ apiKey });
       if (!validation.ok) throw providerError(validation);
-      const db = ctx.db;
-      const existing = await db.select({ createdAt: schema.providerCredentials.createdAt }).from(schema.providerCredentials).where(eq(schema.providerCredentials.provider, "sportsgameodds")).limit(1);
-      const now = new Date();
-      if (existing[0]) {
-        await db.update(schema.providerCredentials).set({ secretValue: apiKey, updatedAt: now }).where(eq(schema.providerCredentials.provider, "sportsgameodds"));
-      } else {
-        await db.insert(schema.providerCredentials).values({ provider: "sportsgameodds", secretValue: apiKey, createdAt: now, updatedAt: now });
-      }
-      await db.delete(schema.premiumOddsCache);
-          return { configured: true, updatedAt: now.toISOString() };
+      return upsertProviderKey(ctx, "sportsgameodds", apiKey);
     },
   }),
   removeSportsGameOddsKey: defineAction({
     request: z.object({}),
     response: removedResponse,
     async handler(ctx): Promise<z.infer<typeof removedResponse>> {
-      const db = ctx.db;
-      await db.delete(schema.providerCredentials).where(eq(schema.providerCredentials.provider, "sportsgameodds"));
-      await db.delete(schema.premiumOddsCache);
-          return { configured: false, updatedAt: null };
+      return removeProviderKey(ctx, "sportsgameodds");
+    },
+  }),
+  getOddsApiKeyStatus: defineAction({ request: z.object({}), response: providerStatusResponse, async handler(ctx) { return getProviderStatus(ctx, "theoddsapi"); } }),
+  saveOddsApiKey: defineAction({
+    request: z.object({ key: z.string().trim().min(16).max(512) }),
+    response: providerStatusResponse,
+    async handler(ctx, args): Promise<z.infer<typeof providerStatusResponse>> {
+      const apiKey = args.key.trim();
+      const validation = await validateOddsApiKey({ apiKey });
+      if (!validation.ok) throw providerError(validation, "theoddsapi");
+      return upsertProviderKey(ctx, "theoddsapi", apiKey);
+    },
+  }),
+  removeOddsApiKey: defineAction({
+    request: z.object({}),
+    response: removedResponse,
+    async handler(ctx): Promise<z.infer<typeof removedResponse>> {
+      return removeProviderKey(ctx, "theoddsapi");
     },
   }),
 };
