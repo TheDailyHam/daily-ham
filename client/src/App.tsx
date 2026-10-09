@@ -420,7 +420,7 @@ function ParlayView({ parlay, setParlay, sport, onGoBoard }: { parlay: ParlayPic
   </section>;
 }
 
-function ProView({ parlay, setParlay, home = false, sport }: { parlay: ParlayPick[]; setParlay: (next: ParlayPick[]) => void; home?: boolean; sport: Sport }) {
+function ProView({ parlay, setParlay, home = false, sport, onNavigate }: { parlay: ParlayPick[]; setParlay: (next: ParlayPick[]) => void; home?: boolean; sport: Sport; onNavigate?: (mode: Mode, streaksSide?: "hot" | "cold") => void }) {
   const board = useQuery({ queryKey: ["premium-board", sport], queryFn: () => api.getPremiumBoard({ sport }), retry: false });
   const overview = useQuery({ queryKey: ["nhl-overview"], queryFn: () => api.getNhlOverview({}), staleTime: 15 * 60 * 1000, retry: 1, enabled: sport === "nhl" });
   const [search, setSearch] = useState("");
@@ -441,7 +441,7 @@ function ProView({ parlay, setParlay, home = false, sport }: { parlay: ParlayPic
     setParlay(parlay.some((item) => item.id === pick.id) ? parlay.filter((item) => item.id !== pick.id) : [...parlay, pick]);
   };
   return <>
-    {home && <><WelcomeBanner sport={sport}/><InstallCard/><ScheduleStrip compact sport={sport}/></>}
+    {home && <><WelcomeBanner sport={sport}/><InstallCard/>{onNavigate && <FeatureSpotlight onNavigate={onNavigate}/>}<ScheduleStrip compact sport={sport}/></>}
     <ProviderStatus pending={board.isPending || board.isFetching} error={board.error instanceof Error ? board.error.message : null} onRetry={() => board.refetch()} />
     {board.data && <section className="pro-board">
       <div className="roster-title"><div><p className="kicker">{home ? "TODAY'S COMPLETE BOARD" : "LIVE SPORTSBOOK BOARD"}</p><h2>{groups.length.toLocaleString()} markets · {board.data.offerCount.toLocaleString()} book prices</h2><p className="roster-intro">Every market returned by the feed, paired across sides when both are offered.</p></div><span>{board.data.eventCount} events · {dateTime(board.data.fetchedAt)}</span></div>
@@ -508,8 +508,8 @@ function CuttingBoardView({ sport }: { sport: Sport }) {
   return <NhlCuttingBoard />;
 }
 
-function StreaksView({ sport }: { sport: Sport }) {
-  const [side, setSide] = useState<"hot" | "cold">("hot");
+function StreaksView({ sport, initialSide }: { sport: Sport; initialSide?: "hot" | "cold" }) {
+  const [side, setSide] = useState<"hot" | "cold">(initialSide ?? "hot");
   return <section className="streaks-wrap">
     <div className="streaks-toggle" role="tablist" aria-label="Streak direction">
       <button role="tab" aria-selected={side === "hot"} className={side === "hot" ? "active hot" : ""} onClick={() => setSide("hot")}>🔥 Hot streaks</button>
@@ -794,6 +794,22 @@ function InstallCard() {
       {showHelp && <small className="install-help">Android: tap ⋮ → “Install app” or “Add to Home screen”. iPhone: tap Share → “Add to Home Screen”.</small>}
     </div>
     <button onClick={install}>{deferred ? "Install" : "How"}</button>
+  </section>;
+}
+
+function FeatureSpotlight({ onNavigate }: { onNavigate: (mode: Mode, streaksSide?: "hot" | "cold") => void }) {
+  const features = [
+    { key: "hot", icon: "\U0001F525", title: "Hot streaks", hint: "Who's cooking", mode: "streaks" as Mode, side: "hot" as const, cls: "hot" },
+    { key: "cold", icon: "\U0001F9CA", title: "Cutting board", hint: "Who's gone cold", mode: "streaks" as Mode, side: "cold" as const, cls: "cold" },
+    { key: "parlay", icon: "\U0001F3AB", title: "Parlay builder", hint: "Build your slip", mode: "parlay" as Mode, side: undefined, cls: "" },
+    { key: "matchup", icon: "\U0001F4CA", title: "Matchup", hint: "Head-to-head model", mode: "matchup" as Mode, side: undefined, cls: "" },
+    { key: "watchlist", icon: "\u2B50", title: "Watchlist", hint: "Your starred picks", mode: "watchlist" as Mode, side: undefined, cls: "" },
+  ];
+  return <section className="feature-spotlight" aria-label="Featured sections">
+    {features.map((f) => <button key={f.key} className={"feature-card " + f.cls} onClick={() => onNavigate(f.mode, f.side)}>
+      <span className="feature-icon">{f.icon}</span>
+      <strong>{f.title}</strong><small>{f.hint}</small>
+    </button>)}
   </section>;
 }
 
@@ -1422,6 +1438,8 @@ function BottomNav({ mode, setMode, parlayCount }: { mode: Mode; setMode: (m: Mo
 
 export function App(){
   const [mode, setMode] = useState<Mode>("board");
+  const [streaksSide, setStreaksSide] = useState<"hot" | "cold">("hot");
+  const navigate = (m: Mode, side?: "hot" | "cold") => { if (side) setStreaksSide(side); setMode(m); };
   const [sport, setSport] = useState<Sport>(() => loadSport());
   const [parlay, setParlay] = useState<ParlayPick[]>([]);
   const [teamFocus, setTeamFocus] = useState<{ sport: League; team: string; nonce: number } | null>(null);
@@ -1441,5 +1459,5 @@ export function App(){
     setMode("rosters");
   }
   const boardLabel = sport === "nfl" ? "Gridiron" : "Ice board";
-  return <div className="app-shell"><SafeAreaTopScrim backgroundColor="var(--paper)"/><ToastHost/><InstallPrompt/><main><div className="topbar"><div className="sport-switch" role="group" aria-label="League"><button type="button" className={"sport-shape" + (sport === "nhl" ? " active" : "")} onClick={() => chooseSport("nhl")} aria-pressed={sport === "nhl"} aria-label="Hockey side"><span className="shape puck" aria-hidden="true" /><em>NHL</em></button><button type="button" className={"sport-shape" + (sport === "nfl" ? " active" : "")} onClick={() => chooseSport("nfl")} aria-pressed={sport === "nfl"} aria-label="Football side"><span className="shape ball" aria-hidden="true" /><em>NFL</em></button></div><nav className="mode-tabs" aria-label="Data view"><button className={mode==="board"?"active":""} onClick={()=>setMode("board")}>{boardLabel}</button><button className={mode==="parlay"?"active":""} onClick={()=>setMode("parlay")}>Parlay{parlay.length > 0 ? ` (${parlay.length})` : ""}</button><button className={mode==="matchup"?"active":""} onClick={()=>setMode("matchup")}>Matchup</button><button className={mode==="rosters"?"active":""} onClick={()=>setMode("rosters")}>Players</button><button className={mode==="streaks"?"active":""} onClick={()=>setMode("streaks")}>Streaks</button><button className={mode==="standings"?"active":""} onClick={()=>setMode("standings")}>League</button><button className={mode==="watchlist"?"active":""} onClick={()=>setMode("watchlist")}>Watchlist</button><button className={mode==="settings"?"active":""} onClick={()=>setMode("settings")}>Settings</button></nav><TeamThemePicker sport={sport}/></div>{mode==="board"&&<ProView parlay={parlay} setParlay={setParlay} home sport={sport}/>} {mode==="parlay"&&<ParlayView parlay={parlay} setParlay={setParlay} sport={sport} onGoBoard={()=>setMode("board")}/>} {mode==="matchup"&&<MatchupView sport={sport}/>} {mode==="rosters"&&<RosterView parlay={parlay} setParlay={setParlay} sport={sport} teamFocus={teamFocus}/>} {mode==="streaks"&&<StreaksView sport={sport}/>} {mode==="standings"&&<LeagueView sport={sport}/>} {mode==="watchlist"&&<WatchlistView onViewTeam={viewTeam}/>} {mode==="settings"&&<SiteSettings/>}</main><BottomNav mode={mode} setMode={setMode} parlayCount={parlay.length}/></div>;
+  return <div className="app-shell"><SafeAreaTopScrim backgroundColor="var(--paper)"/><ToastHost/><InstallPrompt/><main><div className="topbar"><div className="sport-switch" role="group" aria-label="League"><button type="button" className={"sport-shape" + (sport === "nhl" ? " active" : "")} onClick={() => chooseSport("nhl")} aria-pressed={sport === "nhl"} aria-label="Hockey side"><span className="shape puck" aria-hidden="true" /><em>NHL</em></button><button type="button" className={"sport-shape" + (sport === "nfl" ? " active" : "")} onClick={() => chooseSport("nfl")} aria-pressed={sport === "nfl"} aria-label="Football side"><span className="shape ball" aria-hidden="true" /><em>NFL</em></button></div><nav className="mode-tabs" aria-label="Data view"><button className={mode==="board"?"active":""} onClick={()=>setMode("board")}>{boardLabel}</button><button className={mode==="parlay"?"active":""} onClick={()=>setMode("parlay")}>Parlay{parlay.length > 0 ? ` (${parlay.length})` : ""}</button><button className={mode==="matchup"?"active":""} onClick={()=>setMode("matchup")}>Matchup</button><button className={mode==="rosters"?"active":""} onClick={()=>setMode("rosters")}>Players</button><button className={mode==="streaks"?"active":""} onClick={()=>setMode("streaks")}>Streaks</button><button className={mode==="standings"?"active":""} onClick={()=>setMode("standings")}>League</button><button className={mode==="watchlist"?"active":""} onClick={()=>setMode("watchlist")}>Watchlist</button><button className={mode==="settings"?"active":""} onClick={()=>setMode("settings")}>Settings</button></nav><TeamThemePicker sport={sport}/></div>{mode==="board"&&<ProView parlay={parlay} setParlay={setParlay} home sport={sport} onNavigate={navigate}/>} {mode==="parlay"&&<ParlayView parlay={parlay} setParlay={setParlay} sport={sport} onGoBoard={()=>setMode("board")}/>} {mode==="matchup"&&<MatchupView sport={sport}/>} {mode==="rosters"&&<RosterView parlay={parlay} setParlay={setParlay} sport={sport} teamFocus={teamFocus}/>} {mode==="streaks"&&<StreaksView key={streaksSide} sport={sport} initialSide={streaksSide}/>} {mode==="standings"&&<LeagueView sport={sport}/>} {mode==="watchlist"&&<WatchlistView onViewTeam={viewTeam}/>} {mode==="settings"&&<SiteSettings/>}</main><BottomNav mode={mode} setMode={setMode} parlayCount={parlay.length}/></div>;
 }
