@@ -799,11 +799,11 @@ function InstallCard() {
 
 function FeatureSpotlight({ onNavigate }: { onNavigate: (mode: Mode, streaksSide?: "hot" | "cold") => void }) {
   const features = [
-    { key: "hot", icon: "\U0001F525", title: "Hot streaks", hint: "Who's cooking", mode: "streaks" as Mode, side: "hot" as const, cls: "hot" },
-    { key: "cold", icon: "\U0001F9CA", title: "Cutting board", hint: "Who's gone cold", mode: "streaks" as Mode, side: "cold" as const, cls: "cold" },
-    { key: "parlay", icon: "\U0001F3AB", title: "Parlay builder", hint: "Build your slip", mode: "parlay" as Mode, side: undefined, cls: "" },
-    { key: "matchup", icon: "\U0001F4CA", title: "Matchup", hint: "Head-to-head model", mode: "matchup" as Mode, side: undefined, cls: "" },
-    { key: "watchlist", icon: "\u2B50", title: "Watchlist", hint: "Your starred picks", mode: "watchlist" as Mode, side: undefined, cls: "" },
+    { key: "hot", icon: "🔥", title: "Hot streaks", hint: "Who's cooking", mode: "streaks" as Mode, side: "hot" as const, cls: "hot" },
+    { key: "cold", icon: "🧊", title: "Cutting board", hint: "Who's gone cold", mode: "streaks" as Mode, side: "cold" as const, cls: "cold" },
+    { key: "parlay", icon: "🎫", title: "Parlay builder", hint: "Build your slip", mode: "parlay" as Mode, side: undefined, cls: "" },
+    { key: "matchup", icon: "📊", title: "Matchup", hint: "Head-to-head model", mode: "matchup" as Mode, side: undefined, cls: "" },
+    { key: "watchlist", icon: "⭐", title: "Watchlist", hint: "Your starred picks", mode: "watchlist" as Mode, side: undefined, cls: "" },
   ];
   return <section className="feature-spotlight" aria-label="Featured sections">
     {features.map((f) => <button key={f.key} className={"feature-card " + f.cls} onClick={() => onNavigate(f.mode, f.side)}>
