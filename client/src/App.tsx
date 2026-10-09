@@ -232,7 +232,7 @@ function PlayerStatsSheet({ player, team, onClose }: { player: NhlPlayer; team: 
     <section className="sheet player-sheet" role="dialog" aria-modal="true" aria-labelledby="player-stats-title">
       <button className="close" onClick={onClose} aria-label="Close player stats">×</button>
       <p className="kicker">{team} PLAYER FILE</p>
-      <div className="sheet-title-row"><h2 id="player-stats-title">{player.name}</h2><PlayerWatchStar sport="nhl" playerId={player.id} team={team} name={player.name} position={player.position} /></div>
+      <div className="sheet-title-row"><h2 id="player-stats-title">{player.name}</h2><PlayerWatchStar sport="nhl" playerId={player.id} team={team} name={player.name} position={player.position} /><PlayerPropsButton name={player.name} team={team} teamName={themeFor("nhl", team)?.name} /></div>
       <p className="matchup">#{player.number ?? "—"} · {player.position} · 2026–27 regular season</p>
       <div className="player-season-line">
         {goalie ? <><div><span>Starts / GP</span><strong>{player.games ?? "—"}</strong></div><div><span>Record</span><strong>{player.wins ?? "—"}–{player.losses ?? "—"}</strong></div><div><span>Save %</span><strong>{player.savePct === null ? "—" : player.savePct.toFixed(3)}</strong></div><div><span>GAA</span><strong>{player.gaa === null ? "—" : player.gaa.toFixed(2)}</strong></div></> : <><div><span>Games</span><strong>{player.games ?? "—"}</strong></div><div><span>Goals</span><strong>{player.goals ?? "—"}</strong></div><div><span>Assists</span><strong>{player.assists ?? "—"}</strong></div><div><span>Points</span><strong>{player.points ?? "—"}</strong></div><div><span>Shots</span><strong>{player.shots ?? "—"}</strong></div></>}
@@ -262,8 +262,8 @@ function PlayerStatsSheet({ player, team, onClose }: { player: NhlPlayer; team: 
   </div>;
 }
 
-function RosterView({ parlay, setParlay, sport, teamFocus, onViewProps }: { parlay: ParlayPick[]; setParlay: (next: ParlayPick[]) => void; sport: Sport; teamFocus: { sport: League; team: string; nonce: number } | null; onViewProps: (term: string) => void }) {
-  if (sport === "nfl") return <NflRosterView parlay={parlay} setParlay={setParlay} teamFocus={teamFocus} onViewProps={onViewProps} />;
+function RosterView({ parlay, setParlay, sport, teamFocus }: { parlay: ParlayPick[]; setParlay: (next: ParlayPick[]) => void; sport: Sport; teamFocus: { sport: League; team: string; nonce: number } | null }) {
+  if (sport === "nfl") return <NflRosterView parlay={parlay} setParlay={setParlay} teamFocus={teamFocus} />;
   const [team, setTeam] = useState<TeamCode>("WSH");
   useEffect(() => {
     if (teamFocus && teamFocus.sport === "nhl" && (teams as { code: string }[]).some((t) => t.code === teamFocus.team)) setTeam(teamFocus.team as TeamCode);
@@ -302,7 +302,7 @@ function RosterView({ parlay, setParlay, sport, teamFocus, onViewProps }: { parl
                 )}
               </button>
               <PlayerWatchStar sport="nhl" playerId={starredEntry.playerId} team={starredEntry.team} name={starredEntry.name} position={starredEntry.position} />
-              <PlayerPropsButton name={player.name} onViewProps={onViewProps} />
+              <PlayerPropsButton name={player.name} team={team} teamName={themeFor("nhl", team)?.name} />
               </div>;
             })}
           </div></div>
@@ -709,8 +709,11 @@ function PlayerWatchStar({ sport, playerId, team, name, position }: { sport: Lea
   return <button type="button" className={"watch-star" + (starred ? " active" : "")} onClick={() => toggleWatch({ kind: "player", sport, playerId, team, name, position })} aria-label={starred ? `Remove ${name} from watchlist` : `Watch ${name}`} aria-pressed={starred}>★</button>;
 }
 
-function PlayerPropsButton({ name, onViewProps }: { name: string; onViewProps: (term: string) => void }) {
-  return <button type="button" className="props-button" onClick={() => onViewProps(name)} aria-label={`View ${name} betting lines`}>$</button>;
+function PlayerPropsButton({ name, team, teamName }: { name: string; team: string; teamName?: string }) {
+  const viewProps = () => {
+    try { window.dispatchEvent(new CustomEvent("dh-view-props", { detail: teamName ?? team })); } catch { /* best-effort */ }
+  };
+  return <button type="button" className="props-button" onClick={viewProps} aria-label={`View ${name} team betting lines`}>$</button>;
 }
 
 function TeamWatchStar({ sport, team, name }: { sport: League; team: string; name: string }) {
@@ -939,7 +942,7 @@ function NflPlayerStatsSheet({ player, team, onClose }: { player: NflPlayer; tea
     <section className="sheet player-sheet" role="dialog" aria-modal="true" aria-labelledby="nfl-player-stats-title">
       <button className="close" onClick={onClose} aria-label="Close player stats">×</button>
       <p className="kicker">{team} PLAYER FILE · NFL</p>
-      <div className="sheet-title-row"><h2 id="nfl-player-stats-title">{player.name}</h2><PlayerWatchStar sport="nfl" playerId={player.id} team={team} name={player.name} position={player.position} /></div>
+      <div className="sheet-title-row"><h2 id="nfl-player-stats-title">{player.name}</h2><PlayerWatchStar sport="nfl" playerId={player.id} team={team} name={player.name} position={player.position} /><PlayerPropsButton name={player.name} team={team} teamName={themeFor("nfl", team)?.name} /></div>
       <p className="matchup">{player.jersey ? `#${player.jersey} · ` : ""}{player.position} · 2026 regular season</p>
       <div className="player-season-line">
         <div><span>Games</span><strong>{player.games ?? "—"}</strong></div>
@@ -972,7 +975,7 @@ function NflPlayerStatsSheet({ player, team, onClose }: { player: NflPlayer; tea
   </div>;
 }
 
-function NflRosterView({ parlay, setParlay, teamFocus, onViewProps }: { parlay: ParlayPick[]; setParlay: (next: ParlayPick[]) => void; teamFocus: { sport: League; team: string; nonce: number } | null; onViewProps: (term: string) => void }) {
+function NflRosterView({ parlay, setParlay, teamFocus }: { parlay: ParlayPick[]; setParlay: (next: ParlayPick[]) => void; teamFocus: { sport: League; team: string; nonce: number } | null }) {
   const [team, setTeam] = useState<NflTeamCode>("KC");
   useEffect(() => {
     if (teamFocus && teamFocus.sport === "nfl" && nflTeams.some((t) => t.code === teamFocus.team)) setTeam(teamFocus.team as NflTeamCode);
@@ -1014,7 +1017,7 @@ function NflRosterView({ parlay, setParlay, teamFocus, onViewProps }: { parlay: 
                   <span data-label="GP">{player.games ?? "—"}</span><span data-label="Pass yds">{player.passYards ?? "—"}</span><span data-label="Rush yds">{player.rushYards ?? "—"}</span><span data-label="Rec yds">{player.recYards ?? "—"}</span><span data-label="TD">{(player.passTds ?? 0) + (player.rushTds ?? 0) + (player.recTds ?? 0)}</span>
                 </button>
                 <PlayerWatchStar sport="nfl" playerId={starredEntry.playerId} team={starredEntry.team} name={starredEntry.name} position={starredEntry.position} />
-                <PlayerPropsButton name={player.name} onViewProps={onViewProps} />
+                <PlayerPropsButton name={player.name} team={team} teamName={themeFor("nfl", team)?.name} />
               </div>;
             })}
           </div></div>
@@ -1227,6 +1230,14 @@ export function App(){
     setPropsFocus({ term, nonce: Date.now() });
     setMode("board");
   }
+  useEffect(() => {
+    const onViewProps = (event: Event) => {
+      const team = (event as CustomEvent).detail;
+      if (typeof team === "string" && team) viewProps(team);
+    };
+    window.addEventListener("dh-view-props", onViewProps);
+    return () => window.removeEventListener("dh-view-props", onViewProps);
+  }, []);
   function viewTeam(targetSport: League, team: string) {
     setSport(targetSport);
     try { localStorage.setItem(SPORT_KEY, targetSport); } catch { /* private mode */ }
@@ -1234,5 +1245,5 @@ export function App(){
     setMode("rosters");
   }
   const boardLabel = sport === "nfl" ? "Gridiron" : "Ice board";
-  return <div className="app-shell"><SafeAreaTopScrim backgroundColor="var(--paper)"/><ToastHost/><main><div className="topbar"><div className="sport-switch" role="group" aria-label="League"><button type="button" className={"sport-shape" + (sport === "nhl" ? " active" : "")} onClick={() => chooseSport("nhl")} aria-pressed={sport === "nhl"} aria-label="Hockey side"><span className="shape puck" aria-hidden="true" /><em>NHL</em></button><button type="button" className={"sport-shape" + (sport === "nfl" ? " active" : "")} onClick={() => chooseSport("nfl")} aria-pressed={sport === "nfl"} aria-label="Football side"><span className="shape ball" aria-hidden="true" /><em>NFL</em></button></div><nav className="mode-tabs" aria-label="Data view"><button className={mode==="board"?"active":""} onClick={()=>setMode("board")}>{boardLabel}</button><button className={mode==="parlay"?"active":""} onClick={()=>setMode("parlay")}>Parlay{parlay.length > 0 ? ` (${parlay.length})` : ""}</button><button className={mode==="matchup"?"active":""} onClick={()=>setMode("matchup")}>Matchup</button><button className={mode==="rosters"?"active":""} onClick={()=>setMode("rosters")}>Players</button><button className={mode==="hot"?"active":""} onClick={()=>setMode("hot")}>Hot streaks</button><button className={mode==="standings"?"active":""} onClick={()=>setMode("standings")}>League</button><button className={mode==="watchlist"?"active":""} onClick={()=>setMode("watchlist")}>Watchlist</button><button className={mode==="settings"?"active":""} onClick={()=>setMode("settings")}>Settings</button></nav><TeamThemePicker sport={sport}/></div>{mode==="board"&&<ProView parlay={parlay} setParlay={setParlay} home sport={sport} searchFocus={propsFocus}/>} {mode==="parlay"&&<ParlayView parlay={parlay} setParlay={setParlay} sport={sport} onGoBoard={()=>setMode("board")}/>} {mode==="matchup"&&<MatchupView sport={sport}/>} {mode==="rosters"&&<RosterView parlay={parlay} setParlay={setParlay} sport={sport} teamFocus={teamFocus} onViewProps={viewProps}/>} {mode==="hot"&&<HotStreaksView sport={sport}/>} {mode==="standings"&&<LeagueView sport={sport}/>} {mode==="watchlist"&&<WatchlistView onViewTeam={viewTeam}/>} {mode==="settings"&&<SettingsView/>}</main></div>;
+  return <div className="app-shell"><SafeAreaTopScrim backgroundColor="var(--paper)"/><ToastHost/><main><div className="topbar"><div className="sport-switch" role="group" aria-label="League"><button type="button" className={"sport-shape" + (sport === "nhl" ? " active" : "")} onClick={() => chooseSport("nhl")} aria-pressed={sport === "nhl"} aria-label="Hockey side"><span className="shape puck" aria-hidden="true" /><em>NHL</em></button><button type="button" className={"sport-shape" + (sport === "nfl" ? " active" : "")} onClick={() => chooseSport("nfl")} aria-pressed={sport === "nfl"} aria-label="Football side"><span className="shape ball" aria-hidden="true" /><em>NFL</em></button></div><nav className="mode-tabs" aria-label="Data view"><button className={mode==="board"?"active":""} onClick={()=>setMode("board")}>{boardLabel}</button><button className={mode==="parlay"?"active":""} onClick={()=>setMode("parlay")}>Parlay{parlay.length > 0 ? ` (${parlay.length})` : ""}</button><button className={mode==="matchup"?"active":""} onClick={()=>setMode("matchup")}>Matchup</button><button className={mode==="rosters"?"active":""} onClick={()=>setMode("rosters")}>Players</button><button className={mode==="hot"?"active":""} onClick={()=>setMode("hot")}>Hot streaks</button><button className={mode==="standings"?"active":""} onClick={()=>setMode("standings")}>League</button><button className={mode==="watchlist"?"active":""} onClick={()=>setMode("watchlist")}>Watchlist</button><button className={mode==="settings"?"active":""} onClick={()=>setMode("settings")}>Settings</button></nav><TeamThemePicker sport={sport}/></div>{mode==="board"&&<ProView parlay={parlay} setParlay={setParlay} home sport={sport} searchFocus={propsFocus}/>} {mode==="parlay"&&<ParlayView parlay={parlay} setParlay={setParlay} sport={sport} onGoBoard={()=>setMode("board")}/>} {mode==="matchup"&&<MatchupView sport={sport}/>} {mode==="rosters"&&<RosterView parlay={parlay} setParlay={setParlay} sport={sport} teamFocus={teamFocus}/>} {mode==="hot"&&<HotStreaksView sport={sport}/>} {mode==="standings"&&<LeagueView sport={sport}/>} {mode==="watchlist"&&<WatchlistView onViewTeam={viewTeam}/>} {mode==="settings"&&<SettingsView/>}</main></div>;
 }
