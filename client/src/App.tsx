@@ -13,7 +13,7 @@ import { LEAGUE_THEMES, applyLeagueTheme, loadFavorites, saveFavorite, themeFor,
 import { isWatchedPlayer, isWatchedTeam, loadWatchlist, removeWatchedEntry, toggleWatch, type WatchedEntry, type WatchedPlayer, type WatchedTeam } from "./watchlist";
 
 type Sport = League;
-type Mode = "board" | "matchup" | "rosters" | "hot" | "standings" | "watchlist" | "settings";
+type Mode = "board" | "matchup" | "rosters" | "hot" | "standings" | "watchlist" | "parlay" | "settings";
 const SPORT_KEY = "dh-sport";
 function loadSport(): Sport {
   try {
@@ -383,6 +383,28 @@ function moneylinePicks(groups: MarketGroup[]): MarketGroup[] {
     });
     return ranked[0]?.group ? [ranked[0].group] : [];
   });
+}
+
+function ParlayView({ parlay, setParlay, sport, onGoBoard }: { parlay: ParlayPick[]; setParlay: (next: ParlayPick[]) => void; sport: Sport; onGoBoard: () => void }) {
+  const [stake, setStake] = useState("10");
+  const [priceMode, setPriceMode] = useState<PriceMode>("draftkings");
+  const combined = combinedAmerican(parlay, priceMode);
+  const decimal = decimalOdds(combined);
+  const stakeValue = Number(stake);
+  const payout = decimal !== null && Number.isFinite(stakeValue) ? stakeValue * decimal : 0;
+  return <section className="parlay-section">
+    <div className="roster-title"><div><p className="kicker">ODDS & PARLAY CALCULATOR</p><h2>Your slip</h2><p className="roster-intro">Add legs from the {sport === "nfl" ? "gridiron" : "ice"} board, then price the slip at DraftKings, Fanatics, or the best available number.</p></div><span>{parlay.length} legs</span></div>
+    {parlay.length === 0 ? <div className="history-empty"><strong>Your slip is empty.</strong><span>Head to the board and tap <b>Add</b> on any market — moneylines, spreads, totals — and they'll stack up here with live combined odds.</span><button className="refresh" onClick={onGoBoard}>Open the board →</button></div> :
+    <aside className="parlay-panel standalone" aria-label="Parlay builder">
+      <div><p className="kicker">PARLAY BUILDER</p><h3>{parlay.length} legs · {combined}</h3></div>
+      <label>Price at<select value={priceMode} onChange={(event)=>setPriceMode(event.target.value as PriceMode)} aria-label="Parlay sportsbook"><option value="draftkings">DraftKings</option><option value="fanatics">Fanatics</option><option value="best">Best price</option></select></label>
+      <label>Stake<input inputMode="decimal" value={stake} onChange={(event)=>setStake(event.target.value)} aria-label="Parlay stake"/></label>
+      <div><small>Estimated return</small><strong>${payout.toFixed(2)}</strong></div>
+      <button onClick={()=>setParlay([])}>Clear</button>
+      <ul>{parlay.map((item)=>{const priced=offerForMode(item.side,priceMode);return <li key={item.id}><span>{item.entity} · {titleCase(item.side.side)} {item.side.line??""}</span><b>{priced ? `${bookName(priced.book)} ${formatAmerican(priced.odds)}` : "Not offered"}</b><button type="button" className="watch-remove" onClick={() => setParlay(parlay.filter((p) => p.id !== item.id))} aria-label={`Remove ${item.entity} from slip`}>×</button></li>;})}</ul>
+      <p>Planning tool only. Every leg must be offered by the selected sportsbook; unavailable legs are never substituted.</p>
+    </aside>}
+  </section>;
 }
 
 function ProView({ parlay, setParlay, home = false, sport }: { parlay: ParlayPick[]; setParlay: (next: ParlayPick[]) => void; home?: boolean; sport: Sport }) {
@@ -1190,5 +1212,5 @@ export function App(){
     setMode("rosters");
   }
   const boardLabel = sport === "nfl" ? "Gridiron" : "Ice board";
-  return <div className="app-shell"><SafeAreaTopScrim backgroundColor="var(--paper)"/><ToastHost/><main><div className="topbar"><div className="sport-switch" role="group" aria-label="League"><button type="button" className={"sport-shape" + (sport === "nhl" ? " active" : "")} onClick={() => chooseSport("nhl")} aria-pressed={sport === "nhl"} aria-label="Hockey side"><span className="shape puck" aria-hidden="true" /><em>NHL</em></button><button type="button" className={"sport-shape" + (sport === "nfl" ? " active" : "")} onClick={() => chooseSport("nfl")} aria-pressed={sport === "nfl"} aria-label="Football side"><span className="shape ball" aria-hidden="true" /><em>NFL</em></button></div><nav className="mode-tabs" aria-label="Data view"><button className={mode==="board"?"active":""} onClick={()=>setMode("board")}>{boardLabel}</button><button className={mode==="matchup"?"active":""} onClick={()=>setMode("matchup")}>Matchup</button><button className={mode==="rosters"?"active":""} onClick={()=>setMode("rosters")}>Players</button><button className={mode==="hot"?"active":""} onClick={()=>setMode("hot")}>Hot streaks</button><button className={mode==="standings"?"active":""} onClick={()=>setMode("standings")}>League</button><button className={mode==="watchlist"?"active":""} onClick={()=>setMode("watchlist")}>Watchlist</button><button className={mode==="settings"?"active":""} onClick={()=>setMode("settings")}>Settings</button></nav><TeamThemePicker sport={sport}/></div>{mode==="board"&&<ProView parlay={parlay} setParlay={setParlay} home sport={sport}/>} {mode==="matchup"&&<MatchupView sport={sport}/>} {mode==="rosters"&&<RosterView parlay={parlay} setParlay={setParlay} sport={sport} teamFocus={teamFocus}/>} {mode==="hot"&&<HotStreaksView sport={sport}/>} {mode==="standings"&&<LeagueView sport={sport}/>} {mode==="watchlist"&&<WatchlistView onViewTeam={viewTeam}/>} {mode==="settings"&&<SettingsView/>}</main></div>;
+  return <div className="app-shell"><SafeAreaTopScrim backgroundColor="var(--paper)"/><ToastHost/><main><div className="topbar"><div className="sport-switch" role="group" aria-label="League"><button type="button" className={"sport-shape" + (sport === "nhl" ? " active" : "")} onClick={() => chooseSport("nhl")} aria-pressed={sport === "nhl"} aria-label="Hockey side"><span className="shape puck" aria-hidden="true" /><em>NHL</em></button><button type="button" className={"sport-shape" + (sport === "nfl" ? " active" : "")} onClick={() => chooseSport("nfl")} aria-pressed={sport === "nfl"} aria-label="Football side"><span className="shape ball" aria-hidden="true" /><em>NFL</em></button></div><nav className="mode-tabs" aria-label="Data view"><button className={mode==="board"?"active":""} onClick={()=>setMode("board")}>{boardLabel}</button><button className={mode==="parlay"?"active":""} onClick={()=>setMode("parlay")}>Parlay{parlay.length > 0 ? ` (${parlay.length})` : ""}</button><button className={mode==="matchup"?"active":""} onClick={()=>setMode("matchup")}>Matchup</button><button className={mode==="rosters"?"active":""} onClick={()=>setMode("rosters")}>Players</button><button className={mode==="hot"?"active":""} onClick={()=>setMode("hot")}>Hot streaks</button><button className={mode==="standings"?"active":""} onClick={()=>setMode("standings")}>League</button><button className={mode==="watchlist"?"active":""} onClick={()=>setMode("watchlist")}>Watchlist</button><button className={mode==="settings"?"active":""} onClick={()=>setMode("settings")}>Settings</button></nav><TeamThemePicker sport={sport}/></div>{mode==="board"&&<ProView parlay={parlay} setParlay={setParlay} home sport={sport}/>} {mode==="parlay"&&<ParlayView parlay={parlay} setParlay={setParlay} sport={sport} onGoBoard={()=>setMode("board")}/>} {mode==="matchup"&&<MatchupView sport={sport}/>} {mode==="rosters"&&<RosterView parlay={parlay} setParlay={setParlay} sport={sport} teamFocus={teamFocus}/>} {mode==="hot"&&<HotStreaksView sport={sport}/>} {mode==="standings"&&<LeagueView sport={sport}/>} {mode==="watchlist"&&<WatchlistView onViewTeam={viewTeam}/>} {mode==="settings"&&<SettingsView/>}</main></div>;
 }
