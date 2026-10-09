@@ -776,17 +776,23 @@ body[data-sport="nhl"] .mode-tabs button.active { background: var(--accent); col
 .toggle-switch.on { background: var(--green); }
 .toggle-switch.on i { left: 25px; }
 
-/* Puck / football shaped mode tabs */
+/* Puck / football shaped mode tabs — on ice / on turf */
 .mode-tabs.shapes { display: flex; gap: 10px; overflow-x: auto; padding: 6px 2px 10px; scrollbar-width: none; }
 .mode-tabs.shapes::-webkit-scrollbar { display: none; }
 .mode-shape { position: relative; flex: none; border: 0; background: transparent; display: flex; flex-direction: column; align-items: center; gap: 5px; cursor: pointer; padding: 2px 4px; }
-.mode-shape .shape { transition: transform .15s ease; }
-.mode-shape .puck { width: 44px; height: 44px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #545454, #161616 72%); box-shadow: 0 3px 7px rgba(0,0,0,.35), inset 0 -3px 5px rgba(0,0,0,.55), inset 0 2px 3px rgba(255,255,255,.18); }
-.mode-shape .ball { width: 58px; height: 38px; border-radius: 50%; background: radial-gradient(ellipse at 40% 32%, #a8703a, #5e3a17 78%); position: relative; box-shadow: 0 3px 7px rgba(0,0,0,.35), inset 0 -3px 6px rgba(0,0,0,.45), inset 0 2px 3px rgba(255,255,255,.22); }
+.mode-shape .rink { width: 68px; height: 58px; border-radius: 14px; display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; transition: transform .15s ease, box-shadow .15s ease; }
+.mode-shape .rink.ice { background: linear-gradient(135deg, #f4fafd 0%, #dcebf5 35%, #f2f8fc 55%, #cfdfee 100%); box-shadow: inset 0 2px 5px rgba(255,255,255,.95), inset 0 -3px 6px rgba(150,185,210,.45), 0 2px 5px rgba(0,0,0,.12); }
+.mode-shape .rink.ice::before { content: ""; position: absolute; inset: 0; background: repeating-linear-gradient(115deg, transparent 0 13px, rgba(165,195,215,.28) 13px 14px), repeating-linear-gradient(65deg, transparent 0 19px, rgba(165,195,215,.18) 19px 20px); pointer-events: none; }
+.mode-shape .rink.ice::after { content: ""; position: absolute; inset: 0; background: radial-gradient(ellipse at 30% 20%, rgba(255,255,255,.55), transparent 55%); pointer-events: none; }
+.mode-shape .rink.turf { background: repeating-linear-gradient(90deg, rgba(255,255,255,.06) 0 14px, transparent 14px 28px), linear-gradient(180deg, #55a047 0%, #3f7f36 55%, #356b2e 100%); box-shadow: inset 0 2px 5px rgba(255,255,255,.3), inset 0 -3px 6px rgba(0,0,0,.35), 0 2px 5px rgba(0,0,0,.12); }
+.mode-shape .rink.turf::after { content: ""; position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 0%, rgba(255,255,255,.18), transparent 60%); pointer-events: none; }
+.mode-shape .shape { position: relative; z-index: 1; transition: transform .15s ease; }
+/* Ice hockey puck: deep vulcanized-rubber black with knurled edge */
+.mode-shape .puck { width: 44px; height: 44px; border-radius: 50%; background: radial-gradient(circle at 36% 30%, #6e6e6e 0%, #2e2e2e 42%, #0b0b0b 78%); box-shadow: 0 4px 8px rgba(0,0,0,.4), inset 0 -4px 6px rgba(0,0,0,.6), inset 0 2px 3px rgba(255,255,255,.22); }
+.mode-shape .puck::after { content: ""; position: absolute; inset: 3px; border-radius: 50%; background: repeating-conic-gradient(rgba(255,255,255,.06) 0 4deg, transparent 4deg 8deg); -webkit-mask: radial-gradient(circle, transparent 62%, #000 63%); mask: radial-gradient(circle, transparent 62%, #000 63%); pointer-events: none; }
+.mode-shape .ball { width: 56px; height: 37px; border-radius: 50%; background: radial-gradient(ellipse at 40% 32%, #b3814a, #6b4423 70%, #4a2d15 100%); position: relative; box-shadow: 0 4px 8px rgba(0,0,0,.4), inset 0 -3px 6px rgba(0,0,0,.5), inset 0 2px 3px rgba(255,255,255,.25); }
 .mode-shape .ball::after { content: ""; position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); width: 26px; height: 10px; background: repeating-linear-gradient(90deg, #f7f2e7 0 2px, transparent 2px 6px), linear-gradient(#f7f2e7,#f7f2e7); background-size: 100% 5px, 100% 2px; background-position: center; background-repeat: no-repeat; }
 .mode-shape em { font-style: normal; font-size: 11px; font-weight: 800; color: var(--muted); white-space: nowrap; letter-spacing: .02em; }
 .mode-shape.active em { color: var(--accent); }
-.mode-shape.active .shape { transform: scale(1.08); }
-.mode-shape.active .puck { box-shadow: 0 0 0 2px var(--accent), 0 0 14px var(--accent), inset 0 -3px 5px rgba(0,0,0,.55), inset 0 2px 3px rgba(255,255,255,.18); }
-.mode-shape.active .ball { box-shadow: 0 0 0 2px var(--accent), 0 0 14px var(--accent), inset 0 -3px 6px rgba(0,0,0,.45), inset 0 2px 3px rgba(255,255,255,.22); }
+.mode-shape.active .rink { transform: scale(1.05); box-shadow: 0 0 0 2px var(--accent), 0 0 16px color-mix(in srgb, var(--accent) 65%, transparent); }
 
