@@ -470,6 +470,9 @@ h1, h2, h3 { font-family: Rockwell, Georgia, serif; margin: 0; }
 .hot-player small { color: var(--dim); margin-top: 3px; }
 .streak-badges { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: 5px; }
 .streak-badges b { padding: 4px 6px; background: color-mix(in srgb, var(--orange) 14%, var(--surface)); color: var(--orange); font-size: 9px; text-transform: uppercase; letter-spacing: .05em; }
+/* Cutting board: cold badges in icy blue */
+.streak-badges.cold b { background: rgba(96, 165, 250, .14); color: #60a5fa; border: 1px solid rgba(96, 165, 250, .35); }
+.cutting-board .hot-rank { color: #60a5fa; }
 .hot-totals { text-align: right; display: flex; flex-direction: column; }
 .hot-totals b { color: var(--green); }
 .hot-totals small { color: var(--dim); font-size: 9px; }

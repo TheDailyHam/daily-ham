@@ -414,6 +414,14 @@ const hotPlayerSchema = z.object({
 });
 const hotStreaksResponse = z.object({ fetchedAt: z.string(), sourceUrl: z.string(), windowStart: z.string(), windowEnd: z.string(), players: z.array(hotPlayerSchema) });
 
+const coldTeamSchema = z.object({ team: z.string(), name: z.string(), streak: z.string(), losses: z.number(), gamesPlayed: z.number() });
+const coldPlayerSchema = z.object({
+  playerId: z.number(), name: z.string(), team: z.enum(teamCodes), position: z.string(),
+  scorelessStreak: z.number(), goallessStreak: z.number(), lastFivePoints: z.number(), lastFiveGoals: z.number(),
+  lastFiveSavePct: z.number().nullable(), games: z.array(hotGameSchema), coldScore: z.number(),
+});
+const coldStreaksResponse = z.object({ fetchedAt: z.string(), sourceUrl: z.string(), windowStart: z.string(), windowEnd: z.string(), players: z.array(coldPlayerSchema), teams: z.array(coldTeamSchema) });
+
 type JsonRecord = Record<string, unknown>;
 function objectValue(value: unknown): JsonRecord | null { return value !== null && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : null; }
 function arrayValue(value: unknown): unknown[] { return Array.isArray(value) ? value : []; }
@@ -615,11 +623,10 @@ async function loadFirstGoalMatchup(ctx: Ctx, awayTeam: (typeof teamCodes)[numbe
   return response;
 }
 
-async function fetchHotStreaks(ctx: Ctx, force: boolean): Promise<z.infer<typeof hotStreaksResponse>> {
-  const db = ctx.db;
-  const cachedRows = await db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, "hot-streaks")).limit(1);
-  const cached = cachedRows[0];
-  if (!force && cached && cached.expiresAt.getTime() > Date.now()) return hotStreaksResponse.parse(JSON.parse(cached.payloadJson));
+type NhlRecentGame = z.infer<typeof hotGameSchema>;
+type NhlPlayerAcc = { playerId: number; name: string; team: (typeof teamCodes)[number]; position: string; games: NhlRecentGame[] };
+
+async function collectNhlRecentGames(): Promise<{ byPlayer: Map<number, NhlPlayerAcc>; dates: string[]; start: Date; now: Date }> {
   const now = new Date(); const start = new Date(now.getTime() - 21 * 86400000);
   const dates = [0, 7, 14, 21].map((days) => nyDate(new Date(now.getTime() - days * 86400000)));
   const schedulePayloads = await Promise.all(dates.map(async (date) => { const response = await fetch(`${NHL_API}/schedule/${date}`, { headers: { Accept: "application/json" } }); return response.ok ? await response.json() as unknown : {}; }));
@@ -635,8 +642,7 @@ async function fetchHotStreaks(ctx: Ctx, force: boolean): Promise<z.infer<typeof
     const rows = await Promise.all(batch.map(async ([id, game]) => { try { const response = await fetch(`${NHL_API}/gamecenter/${id}/boxscore`, { headers: { Accept: "application/json" } }); return response.ok ? { game, id, payload: await response.json() as unknown } : null; } catch { return null; } }));
     boxes.push(...rows.filter((row): row is { game: { date: string; away: string; home: string }; id: number; payload: unknown } => row !== null));
   }
-  type Acc = { playerId: number; name: string; team: (typeof teamCodes)[number]; position: string; games: z.infer<typeof hotGameSchema>[] };
-  const byPlayer = new Map<number, Acc>();
+  const byPlayer = new Map<number, NhlPlayerAcc>();
   for (const box of boxes) {
     const root = objectValue(box.payload); const stats = objectValue(root?.playerByGameStats);
     for (const side of ["awayTeam", "homeTeam"] as const) {
@@ -652,6 +658,15 @@ async function fetchHotStreaks(ctx: Ctx, force: boolean): Promise<z.infer<typeof
       }
     }
   }
+  return { byPlayer, dates, start, now };
+}
+
+async function fetchHotStreaks(ctx: Ctx, force: boolean): Promise<z.infer<typeof hotStreaksResponse>> {
+  const db = ctx.db;
+  const cachedRows = await db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, "hot-streaks")).limit(1);
+  const cached = cachedRows[0];
+  if (!force && cached && cached.expiresAt.getTime() > Date.now()) return hotStreaksResponse.parse(JSON.parse(cached.payloadJson));
+  const { byPlayer, dates, start, now } = await collectNhlRecentGames();
   const players = Array.from(byPlayer.values()).flatMap((player) => {
     const recent = player.games.sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5); if (recent.length < 2) return [];
     let pointStreak = 0; for (const game of recent) { if (game.points <= 0) break; pointStreak += 1; }
@@ -665,6 +680,44 @@ async function fetchHotStreaks(ctx: Ctx, force: boolean): Promise<z.infer<typeof
   const response: z.infer<typeof hotStreaksResponse> = { fetchedAt: new Date().toISOString(), sourceUrl: `${NHL_API}/schedule/${dates[0] ?? nyDate(now)}`, windowStart: nyDate(start), windowEnd: nyDate(now), players };
   await db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, "hot-streaks"));
   await db.insert(schema.nhlInsightCache).values({ key: "hot-streaks", payloadJson: JSON.stringify(response), fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) });
+  return response;
+}
+
+async function fetchColdStreaks(ctx: Ctx, force: boolean): Promise<z.infer<typeof coldStreaksResponse>> {
+  const db = ctx.db;
+  const cachedRows = await db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, "cold-streaks")).limit(1);
+  const cached = cachedRows[0];
+  if (!force && cached && cached.expiresAt.getTime() > Date.now()) return coldStreaksResponse.parse(JSON.parse(cached.payloadJson));
+  const { byPlayer, dates, start, now } = await collectNhlRecentGames();
+  const players = Array.from(byPlayer.values()).flatMap((player) => {
+    const recent = player.games.sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5); if (recent.length < 2) return [];
+    const isGoalie = player.position === "G";
+    let scorelessStreak = 0; for (const game of recent) { if (game.points > 0) break; scorelessStreak += 1; }
+    let goallessStreak = 0; for (const game of recent) { if (game.goals > 0) break; goallessStreak += 1; }
+    const lastFivePoints = recent.reduce((sum, game) => sum + game.points, 0);
+    const lastFiveGoals = recent.reduce((sum, game) => sum + game.goals, 0);
+    const goalieGames = recent.filter((game) => game.savePct !== null);
+    const lastFiveSavePct = goalieGames.length >= 2 ? goalieGames.reduce((sum, game) => sum + (game.savePct ?? 0), 0) / goalieGames.length : null;
+    const cold = isGoalie
+      ? (lastFiveSavePct !== null && lastFiveSavePct < .88)
+      : (scorelessStreak >= 3 || goallessStreak >= 4 || (recent.length >= 3 && lastFivePoints <= 1));
+    if (!cold) return [];
+    const coldScore = scorelessStreak * 3 + goallessStreak * 2 + Math.max(0, 5 - lastFivePoints) + (lastFiveSavePct === null ? 0 : Math.max(0, .9 - lastFiveSavePct) * 200);
+    return [{ ...player, games: recent, scorelessStreak, goallessStreak, lastFivePoints, lastFiveGoals, lastFiveSavePct, coldScore }];
+  }).sort((a, b) => b.coldScore - a.coldScore || a.lastFivePoints - b.lastFivePoints);
+  let teams: z.infer<typeof coldTeamSchema>[] = [];
+  try {
+    const overview = await loadNhlOverview();
+    teams = overview.standings.flatMap((row) => {
+      const match = /^L(\d+)$/.exec(row.streak ?? "");
+      const losses = match ? Number(match[1]) : 0;
+      if (losses < 3) return [];
+      return [{ team: row.team, name: row.name, streak: row.streak ?? `L${losses}`, losses, gamesPlayed: row.gamesPlayed }];
+    }).sort((a, b) => b.losses - a.losses);
+  } catch { /* team slumps are best-effort */ }
+  const response: z.infer<typeof coldStreaksResponse> = { fetchedAt: new Date().toISOString(), sourceUrl: `${NHL_API}/schedule/${dates[0] ?? nyDate(now)}`, windowStart: nyDate(start), windowEnd: nyDate(now), players, teams };
+  await db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, "cold-streaks"));
+  await db.insert(schema.nhlInsightCache).values({ key: "cold-streaks", payloadJson: JSON.stringify(response), fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) });
   return response;
 }
 
@@ -758,6 +811,15 @@ const nflHotPlayerSchema = z.object({
 const nflHotStreaksResponse = z.object({
   fetchedAt: z.string(), sourceUrl: z.string(), windowStart: z.string(), windowEnd: z.string(),
   players: z.array(nflHotPlayerSchema),
+});
+const nflColdPlayerSchema = z.object({
+  playerId: z.number(), name: z.string(), team: z.string(), position: z.string(),
+  tdDrought: z.number(), lastThreeTds: z.number(), lastThreeYards: z.number(),
+  games: z.array(nflHotGameSchema), coldScore: z.number(),
+});
+const nflColdStreaksResponse = z.object({
+  fetchedAt: z.string(), sourceUrl: z.string(), windowStart: z.string(), windowEnd: z.string(),
+  players: z.array(nflColdPlayerSchema), teams: z.array(coldTeamSchema),
 });
 
 const nflRosterPlayerSchema = z.object({
@@ -1054,12 +1116,10 @@ async function loadNflMatchup(ctx: Ctx, awayTeam: (typeof nflTeamCodes)[number],
   return response;
 }
 
-async function fetchNflHotStreaks(ctx: Ctx, force: boolean): Promise<z.infer<typeof nflHotStreaksResponse>> {
-  const db = ctx.db;
-  const cachedRows = await db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, "nfl-hot-streaks")).limit(1);
-  const cached = cachedRows[0];
-  if (!force && cached && cached.expiresAt.getTime() > Date.now()) return nflHotStreaksResponse.parse(JSON.parse(cached.payloadJson));
+type NflRecentGame = z.infer<typeof nflHotGameSchema>;
+type NflPlayerAcc = { playerId: number; name: string; team: string; games: NflRecentGame[] };
 
+async function collectNflRecentGames(): Promise<{ byPlayer: Map<number, NflPlayerAcc> }> {
   const current = await fetchNflScoreboard();
   const weeks = [current.week, current.week - 1, current.week - 2, current.week - 3].filter((w) => w >= 1);
   const gameIds = new Map<number, { week: number; date: string; away: string; home: string }>();
@@ -1070,8 +1130,7 @@ async function fetchNflHotStreaks(ctx: Ctx, force: boolean): Promise<z.infer<typ
       gameIds.set(g.id, { week: g.week, date: g.date.slice(0, 10), away: g.away.abbr, home: g.home.abbr });
     }
   }
-  type Acc = { playerId: number; name: string; team: string; games: z.infer<typeof nflHotGameSchema>[] };
-  const byPlayer = new Map<number, Acc>();
+  const byPlayer = new Map<number, NflPlayerAcc>();
   const ids = Array.from(gameIds.entries());
   for (let i = 0; i < ids.length; i += 8) {
     const batch = ids.slice(i, i + 8);
@@ -1103,6 +1162,15 @@ async function fetchNflHotStreaks(ctx: Ctx, force: boolean): Promise<z.infer<typ
       }
     }
   }
+  return { byPlayer };
+}
+
+async function fetchNflHotStreaks(ctx: Ctx, force: boolean): Promise<z.infer<typeof nflHotStreaksResponse>> {
+  const db = ctx.db;
+  const cachedRows = await db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, "nfl-hot-streaks")).limit(1);
+  const cached = cachedRows[0];
+  if (!force && cached && cached.expiresAt.getTime() > Date.now()) return nflHotStreaksResponse.parse(JSON.parse(cached.payloadJson));
+  const { byPlayer } = await collectNflRecentGames();
   const players = Array.from(byPlayer.values()).flatMap((player) => {
     const recent = player.games.sort((a, b) => b.date.localeCompare(a.date) || b.week - a.week).slice(0, 3);
     if (recent.length < 2) return [];
@@ -1126,9 +1194,46 @@ async function fetchNflHotStreaks(ctx: Ctx, force: boolean): Promise<z.infer<typ
   return response;
 }
 
+async function fetchNflColdStreaks(ctx: Ctx, force: boolean): Promise<z.infer<typeof nflColdStreaksResponse>> {
+  const db = ctx.db;
+  const cachedRows = await db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, "nfl-cold-streaks")).limit(1);
+  const cached = cachedRows[0];
+  if (!force && cached && cached.expiresAt.getTime() > Date.now()) return nflColdStreaksResponse.parse(JSON.parse(cached.payloadJson));
+  const { byPlayer } = await collectNflRecentGames();
+  const players = Array.from(byPlayer.values()).flatMap((player) => {
+    const recent = player.games.sort((a, b) => b.date.localeCompare(a.date) || b.week - a.week).slice(0, 3);
+    if (recent.length < 2) return [];
+    let tdDrought = 0;
+    for (const g of recent) { if (g.totalTds > 0) break; tdDrought += 1; }
+    const lastThreeTds = recent.reduce((sum, g) => sum + g.totalTds, 0);
+    const lastThreeYards = recent.reduce((sum, g) => sum + g.scrimmageYards + g.passYards, 0);
+    const cold = tdDrought >= 2 || (recent.length >= 3 && lastThreeTds === 0 && lastThreeYards < 150);
+    if (!cold) return [];
+    const coldScore = tdDrought * 8 + Math.max(0, 300 - lastThreeYards) / 25 + (lastThreeTds === 0 ? 6 : 0);
+    return [{ playerId: player.playerId, name: player.name, team: player.team, position: "—", tdDrought, lastThreeTds, lastThreeYards, games: recent, coldScore }];
+  }).sort((a, b) => b.coldScore - a.coldScore);
+  let teams: z.infer<typeof coldTeamSchema>[] = [];
+  try {
+    const { standings } = await fetchNflStandings();
+    teams = standings.flatMap((row) => {
+      const match = /^L(\d+)$/.exec(row.streak ?? "");
+      const losses = match ? Number(match[1]) : 0;
+      if (losses < 2) return [];
+      return [{ team: row.team, name: row.name, streak: row.streak ?? `L${losses}`, losses, gamesPlayed: row.wins + row.losses + row.ties }];
+    }).sort((a, b) => b.losses - a.losses);
+  } catch { /* team slumps are best-effort */ }
+  const response: z.infer<typeof nflColdStreaksResponse> = {
+    fetchedAt: new Date().toISOString(), sourceUrl: `${ESPN_SITE_NFL}/scoreboard`,
+    windowStart: `${NFL_SEASON}-09-01`, windowEnd: new Date().toISOString().slice(0, 10), players, teams,
+  };
+  await db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, "nfl-cold-streaks"));
+  await db.insert(schema.nhlInsightCache).values({ key: "nfl-cold-streaks", payloadJson: JSON.stringify(response), fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) });
+  return response;
+}
+
 export const Actions = {
   getDashboard: defineAction({ request: z.object({ sport: z.enum(sports).default("nhl") }), response: dashboardResponse, async handler(ctx, args) { return loadDashboard(ctx, args.sport); } }),
-  refreshDaily: defineAction({ request: z.object({}), response: z.object({ status: z.enum(["success", "partial", "failed"]), message: z.string(), rowCount: z.number(), snapshotDate: z.string() }), async handler(ctx) { const result = await refresh(ctx); try { await fetchHotStreaks(ctx, true); } catch { /* Keep odds refresh independent of free NHL insight refresh. */ } try { await fetchNflHotStreaks(ctx, true); } catch { /* Same for the NFL leg. */ } return result; } }),
+  refreshDaily: defineAction({ request: z.object({}), response: z.object({ status: z.enum(["success", "partial", "failed"]), message: z.string(), rowCount: z.number(), snapshotDate: z.string() }), async handler(ctx) { const result = await refresh(ctx); try { await fetchHotStreaks(ctx, true); } catch { /* Keep odds refresh independent of free NHL insight refresh. */ } try { await fetchNflHotStreaks(ctx, true); } catch { /* Same for the NFL leg. */ } try { await fetchColdStreaks(ctx, true); } catch { /* Cold streaks refresh with the same daily job. */ } try { await fetchNflColdStreaks(ctx, true); } catch { /* Same for the NFL leg. */ } return result; } }),
   getNhlOverview: defineAction({ request: z.object({}), response: nhlOverviewResponse, async handler() { return loadNhlOverview(); } }),
   getFirstGoalMatchup: defineAction({ request: z.object({ awayTeam: z.enum(teamCodes), homeTeam: z.enum(teamCodes), force: z.boolean().default(false) }).refine((value) => value.awayTeam !== value.homeTeam, { message: "Choose two different teams" }), response: firstGoalMatchupResponse, async handler(ctx, args) { return loadFirstGoalMatchup(ctx, args.awayTeam, args.homeTeam, args.force); } }),
   getHotStreaks: defineAction({ request: z.object({ force: z.boolean().default(false) }), response: hotStreaksResponse, async handler(ctx, args) { return fetchHotStreaks(ctx, args.force); } }),
@@ -1137,6 +1242,8 @@ export const Actions = {
   getNflOverview: defineAction({ request: z.object({ week: z.number().int().min(1).max(18).optional() }), response: nflOverviewResponse, async handler(_ctx, args) { return loadNflOverview(args.week); } }),
   getNflMatchup: defineAction({ request: z.object({ awayTeam: z.enum(nflTeamCodes), homeTeam: z.enum(nflTeamCodes), force: z.boolean().default(false) }).refine((value) => value.awayTeam !== value.homeTeam, { message: "Choose two different teams" }), response: nflMatchupResponse, async handler(ctx, args) { return loadNflMatchup(ctx, args.awayTeam, args.homeTeam, args.force); } }),
   getNflHotStreaks: defineAction({ request: z.object({ force: z.boolean().default(false) }), response: nflHotStreaksResponse, async handler(ctx, args) { return fetchNflHotStreaks(ctx, args.force); } }),
+  getColdStreaks: defineAction({ request: z.object({ force: z.boolean().default(false) }), response: coldStreaksResponse, async handler(ctx, args) { return fetchColdStreaks(ctx, args.force); } }),
+  getNflColdStreaks: defineAction({ request: z.object({ force: z.boolean().default(false) }), response: nflColdStreaksResponse, async handler(ctx, args) { return fetchNflColdStreaks(ctx, args.force); } }),
   getNflRoster: defineAction({ request: z.object({ team: z.enum(nflTeamCodes) }), response: nflRosterResponse, async handler(ctx, args) { return loadNflRoster(ctx, args.team); } }),
   getNflPlayerGameLog: defineAction({ request: z.object({ team: z.enum(nflTeamCodes), playerId: z.number().int().positive() }), response: nflGameLogResponse, async handler(ctx, args) { return loadNflPlayerGameLog(ctx, args.team, args.playerId); } }),
   getPremiumBoard: defineAction({ request: z.object({ sport: z.enum(sports) }), response: premiumResponse, async handler(ctx, args) { return loadPremium(ctx, args.sport); } }),
