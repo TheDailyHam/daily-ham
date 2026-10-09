@@ -46,10 +46,11 @@ type MarketSide = {
   offers: PremiumOffer[];
   best: PremiumOffer;
   draftKings: PremiumOffer | null;
-  fanatics: PremiumOffer | null;
+  fanDuel: PremiumOffer | null;
+  betMGM: PremiumOffer | null;
   evPercent: number | null;
 };
-type PriceMode = "draftkings" | "fanatics" | "best";
+type PriceMode = "draftkings" | "fanduel" | "betmgm" | "best";
 type MarketGroup = {
   id: string;
   eventId: string;
@@ -86,15 +87,18 @@ function average(values: Array<number | null>): number | null { const real = val
 function toiMinutes(value: string | null): number | null { if (!value) return null; const [minutes, seconds] = value.split(":").map(Number); return Number.isFinite(minutes) && Number.isFinite(seconds) ? (minutes ?? 0) + (seconds ?? 0) / 60 : null; }
 function normalizedBook(value: string): string { return value.toLowerCase().replace(/[^a-z0-9]/g, ""); }
 function isDraftKings(value: string): boolean { return normalizedBook(value) === "draftkings"; }
-function isFanatics(value: string): boolean { return normalizedBook(value).startsWith("fanatics"); }
+function isFanDuel(value: string): boolean { return normalizedBook(value).startsWith("fanduel"); }
+function isBetMGM(value: string): boolean { const book = normalizedBook(value); return book.startsWith("betmgm") || book.startsWith("mgm"); }
 function bookName(value: string): string {
   if (isDraftKings(value)) return "DraftKings";
-  if (isFanatics(value)) return "Fanatics Sportsbook";
+  if (isFanDuel(value)) return "FanDuel";
+  if (isBetMGM(value)) return "BetMGM";
   return titleCase(value);
 }
 function offerForMode(side: MarketSide, mode: PriceMode): PremiumOffer | null {
   if (mode === "draftkings") return side.draftKings;
-  if (mode === "fanatics") return side.fanatics;
+  if (mode === "fanduel") return side.fanDuel;
+  if (mode === "betmgm") return side.betMGM;
   return side.best;
 }
 function offerCategory(group: MarketGroup, sport: Sport = "nhl"): string {
@@ -144,11 +148,12 @@ function groupPremiumOffers(offers: PremiumOffer[]): MarketGroup[] {
       if (!firstSide) return [];
       const best = [...sideRows].sort((a, b) => (decimalOdds(b.odds) ?? 0) - (decimalOdds(a.odds) ?? 0))[0] ?? firstSide;
       const draftKings = sideRows.find((row) => isDraftKings(row.book)) ?? null;
-      const fanatics = sideRows.find((row) => isFanatics(row.book)) ?? null;
+      const fanDuel = sideRows.find((row) => isFanDuel(row.book)) ?? null;
+      const betMGM = sideRows.find((row) => isBetMGM(row.book)) ?? null;
       const fairProbability = impliedProbability(best.fairOdds);
       const bestDecimal = decimalOdds(best.odds);
       const evPercent = fairProbability !== null && bestDecimal !== null ? (fairProbability * bestDecimal - 1) * 100 : null;
-      return [{ id: `${id}|${side}`, side, line: firstSide.line, openingLine: firstSide.openingLine, offers: sideRows, best, draftKings, fanatics, evPercent }];
+      return [{ id: `${id}|${side}`, side, line: firstSide.line, openingLine: firstSide.openingLine, offers: sideRows, best, draftKings, fanDuel, betMGM, evPercent }];
     }).sort((a, b) => sideOrder(a.side) - sideOrder(b.side));
     return [{ id, eventId: first.eventId, matchup: first.matchup, startsAt: first.startsAt, marketName: first.marketName, stat: first.stat, entity: first.entity, entityType: first.entityType, period: first.period, betType: first.betType, sides }];
   });
@@ -257,8 +262,8 @@ function PlayerStatsSheet({ player, team, onClose }: { player: NhlPlayer; team: 
   </div>;
 }
 
-function RosterView({ parlay, setParlay, sport, teamFocus }: { parlay: ParlayPick[]; setParlay: (next: ParlayPick[]) => void; sport: Sport; teamFocus: { sport: League; team: string; nonce: number } | null }) {
-  if (sport === "nfl") return <NflRosterView parlay={parlay} setParlay={setParlay} teamFocus={teamFocus} />;
+function RosterView({ parlay, setParlay, sport, teamFocus, onViewProps }: { parlay: ParlayPick[]; setParlay: (next: ParlayPick[]) => void; sport: Sport; teamFocus: { sport: League; team: string; nonce: number } | null; onViewProps: (term: string) => void }) {
+  if (sport === "nfl") return <NflRosterView parlay={parlay} setParlay={setParlay} teamFocus={teamFocus} onViewProps={onViewProps} />;
   const [team, setTeam] = useState<TeamCode>("WSH");
   useEffect(() => {
     if (teamFocus && teamFocus.sport === "nhl" && (teams as { code: string }[]).some((t) => t.code === teamFocus.team)) setTeam(teamFocus.team as TeamCode);
@@ -275,7 +280,7 @@ function RosterView({ parlay, setParlay, sport, teamFocus }: { parlay: ParlayPic
       <div className="roster-title"><div><p className="kicker">OFFICIAL NHL ROSTERS</p><h2>Team stats & player trends</h2><p className="roster-intro">Tap any player to open graphs, last-five form and the complete game log.</p></div>{nhl.data && <span>Updated {dateTime(nhl.data.fetchedAt)}</span>}</div>
       <label className="select-label" htmlFor="team">Team</label>
       <select id="team" value={team} onChange={(e) => { setTeam(e.target.value as TeamCode); setSelectedPlayer(null); }}>{teams.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select>
-      {teamMoneylines.length > 0 && <section className="team-moneyline"><div className="section-heading"><div><p className="kicker">NEXT GAME</p><h3>Moneyline board</h3></div><span>Best · DraftKings · Fanatics</span></div><div className="moneyline-grid">{teamMoneylines.map((group) => { const side = strongestSide(group); if (!side) return null; const added = parlay.some((item) => item.id === side.id); const pick: ParlayPick = { id: side.id, groupId: group.id, matchup: group.matchup, entity: group.entity, marketName: group.marketName, side }; return <article className="moneyline-card" key={group.id}><div className="moneyline-open"><small>{group.matchup}</small><h4>{group.entity}</h4><div><span>Best <b>{bookName(side.best.book)} {formatAmerican(side.best.odds)}</b></span><span>DraftKings <b>{formatAmerican(side.draftKings?.odds ?? null)}</b></span><span>Fanatics <b>{formatAmerican(side.fanatics?.odds ?? null)}</b></span></div><p className={side.evPercent !== null && side.evPercent > 0 ? "signal positive" : "signal"}>{side.evPercent !== null && side.evPercent > 0 ? `+${side.evPercent.toFixed(1)}% fair-odds EV` : "Market favorite"}</p></div><button className={added ? "pick-button added" : "pick-button"} onClick={() => setParlay(added ? parlay.filter((item) => item.id !== side.id) : [...parlay, pick])}>{added ? "Remove" : "Add ML"}</button></article>;})}</div></section>}
+      {teamMoneylines.length > 0 && <section className="team-moneyline"><div className="section-heading"><div><p className="kicker">NEXT GAME</p><h3>Moneyline board</h3></div><span>Best · DraftKings · FanDuel · BetMGM</span></div><div className="moneyline-grid">{teamMoneylines.map((group) => { const side = strongestSide(group); if (!side) return null; const added = parlay.some((item) => item.id === side.id); const pick: ParlayPick = { id: side.id, groupId: group.id, matchup: group.matchup, entity: group.entity, marketName: group.marketName, side }; return <article className="moneyline-card" key={group.id}><div className="moneyline-open"><small>{group.matchup}</small><h4>{group.entity}</h4><div><span>Best <b>{bookName(side.best.book)} {formatAmerican(side.best.odds)}</b></span><span>DraftKings <b>{formatAmerican(side.draftKings?.odds ?? null)}</b></span><span>FanDuel <b>{formatAmerican(side.fanDuel?.odds ?? null)}</b></span><span>BetMGM <b>{formatAmerican(side.betMGM?.odds ?? null)}</b></span></div><p className={side.evPercent !== null && side.evPercent > 0 ? "signal positive" : "signal"}>{side.evPercent !== null && side.evPercent > 0 ? `+${side.evPercent.toFixed(1)}% fair-odds EV` : "Market favorite"}</p></div><button className={added ? "pick-button added" : "pick-button"} onClick={() => setParlay(added ? parlay.filter((item) => item.id !== side.id) : [...parlay, pick])}>{added ? "Remove" : "Add ML"}</button></article>;})}</div></section>}
       {nhl.isPending ? (
         <div className="loading"><span />Loading official roster…</div>
       ) : nhl.isError ? (
@@ -297,6 +302,7 @@ function RosterView({ parlay, setParlay, sport, teamFocus }: { parlay: ParlayPic
                 )}
               </button>
               <PlayerWatchStar sport="nhl" playerId={starredEntry.playerId} team={starredEntry.team} name={starredEntry.name} position={starredEntry.position} />
+              <PlayerPropsButton name={player.name} onViewProps={onViewProps} />
               </div>;
             })}
           </div></div>
@@ -338,12 +344,12 @@ function OddsDetailSheet({ market, onClose }: { market: MarketGroup; onClose: ()
         const priceDistribution = [{ name: "Best price", value: tiers.best }, { name: "Within 0.05 decimal", value: tiers.near }, { name: "Other prices", value: tiers.other }].filter((item) => item.value > 0);
         return <section className="odds-side-detail" key={side.id}>
           <div className="odds-side-title"><h3>{titleCase(side.side)} {side.line ?? ""}</h3>{side.evPercent !== null && side.evPercent > 0 ? <b className="value-flag">+{side.evPercent.toFixed(1)}% fair-odds EV</b> : <span>Market price</span>}</div>
-          <div className="line-callout sportsbook-callout"><div><span>Best price</span><strong>{bookName(side.best.book)} {formatAmerican(side.best.odds)}</strong></div><div><span>DraftKings</span><strong>{formatAmerican(side.draftKings?.odds ?? null)}</strong></div><div><span>Fanatics</span><strong>{formatAmerican(side.fanatics?.odds ?? null)}</strong></div><div><span>Books</span><strong>{side.offers.length}</strong></div></div>
+          <div className="line-callout sportsbook-callout"><div><span>Best price</span><strong>{bookName(side.best.book)} {formatAmerican(side.best.odds)}</strong></div><div><span>DraftKings</span><strong>{formatAmerican(side.draftKings?.odds ?? null)}</strong></div><div><span>FanDuel</span><strong>{formatAmerican(side.fanDuel?.odds ?? null)}</strong></div><div><span>BetMGM</span><strong>{formatAmerican(side.betMGM?.odds ?? null)}</strong></div><div><span>Books</span><strong>{side.offers.length}</strong></div></div>
           {steamPoints !== null && Math.abs(steamPoints) >= 2 && <div className="steam-alert"><span>LINE MOVE</span><strong>{steamPoints > 0 ? "+" : ""}{steamPoints.toFixed(1)} implied-probability points</strong><small>Best-book opening price to current price</small></div>}
           <div className="chart-caption"><strong>{lineMovement ? "Line movement" : "Price movement"}</strong><span>Opening → current</span></div>
           {movement.length === 2 ? <div className="history-chart"><ResponsiveContainer width="100%" height="100%"><LineChart data={movement} margin={{ top: 12, right: 12, left: -14, bottom: 0 }}><CartesianGrid stroke="var(--rule)" vertical={false}/><XAxis dataKey="point" axisLine={false} tickLine={false}/><YAxis domain={["auto","auto"]} axisLine={false} tickLine={false}/><Tooltip formatter={(value) => [value, lineMovement ? "Line" : "American odds"]}/><Line type="linear" dataKey="value" name={lineMovement ? "Line" : "American odds"} stroke="var(--orange)" strokeWidth={3} dot={{ r: 4 }}/></LineChart></ResponsiveContainer></div> : <div className="history-empty"><strong>No opening snapshot supplied.</strong><span>The current market is still available below.</span></div>}
           {priceDistribution.length > 0 && <div className="price-distribution"><div className="chart-caption"><strong>Book price distribution</strong><span>Current snapshot · {side.offers.length} books</span></div><div className="donut-chart" role="img" aria-label={`Current ${titleCase(side.side)} price distribution across ${side.offers.length} sportsbooks`}><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={priceDistribution} dataKey="value" nameKey="name" innerRadius={48} outerRadius={74} paddingAngle={2}>{["var(--green)","var(--accent)","var(--dim)"].map((color) => <Cell key={color} fill={color}/>)}</Pie><Tooltip formatter={(value) => [`${value} books`, "Count"]}/><Legend verticalAlign="bottom" height={34}/></PieChart></ResponsiveContainer></div></div>}
-          <div className="book-list">{[...side.offers].sort((a,b)=>(decimalOdds(b.odds)??0)-(decimalOdds(a.odds)??0)).map((offer)=><div className={offer === side.best ? "best-book" : ""} key={`${side.id}-${offer.book}-${offer.odds}`}><span>{bookName(offer.book)}{offer === side.best&&<em className="best-badge">BEST</em>}{isDraftKings(offer.book)&&<em>DK</em>}{isFanatics(offer.book)&&<em className="fanatics-badge">FANATICS</em>}</span><b>{titleCase(side.side)} {side.line ?? ""} {formatAmerican(offer.odds)}</b></div>)}</div>
+          <div className="book-list">{[...side.offers].sort((a,b)=>(decimalOdds(b.odds)??0)-(decimalOdds(a.odds)??0)).map((offer)=><div className={offer === side.best ? "best-book" : ""} key={`${side.id}-${offer.book}-${offer.odds}`}><span>{bookName(offer.book)}{offer === side.best&&<em className="best-badge">BEST</em>}{isDraftKings(offer.book)&&<em>DK</em>}{isFanDuel(offer.book)&&<em className="fanduel-badge">FANDUEL</em>}{isBetMGM(offer.book)&&<em className="betmgm-badge">BETMGM</em>}</span><b>{titleCase(side.side)} {side.line ?? ""} {formatAmerican(offer.odds)}</b></div>)}</div>
         </section>;
       })}
     </section>
@@ -394,7 +400,8 @@ function ParlayView({ parlay, setParlay, sport, onGoBoard }: { parlay: ParlayPic
   const payout = decimal !== null && Number.isFinite(stakeValue) ? stakeValue * decimal : 0;
   const priceOptions: { id: PriceMode; label: string }[] = [
     { id: "draftkings", label: "DraftKings" },
-    { id: "fanatics", label: "Fanatics" },
+    { id: "fanduel", label: "FanDuel" },
+    { id: "betmgm", label: "BetMGM" },
     { id: "best", label: "Best price" },
   ];
   return <section className="parlay-section">
@@ -411,10 +418,11 @@ function ParlayView({ parlay, setParlay, sport, onGoBoard }: { parlay: ParlayPic
   </section>;
 }
 
-function ProView({ parlay, setParlay, home = false, sport }: { parlay: ParlayPick[]; setParlay: (next: ParlayPick[]) => void; home?: boolean; sport: Sport }) {
+function ProView({ parlay, setParlay, home = false, sport, searchFocus }: { parlay: ParlayPick[]; setParlay: (next: ParlayPick[]) => void; home?: boolean; sport: Sport; searchFocus: { term: string; nonce: number } | null }) {
   const board = useQuery({ queryKey: ["premium-board", sport], queryFn: () => api.getPremiumBoard({ sport }), retry: false });
   const overview = useQuery({ queryKey: ["nhl-overview"], queryFn: () => api.getNhlOverview({}), staleTime: 15 * 60 * 1000, retry: 1, enabled: sport === "nhl" });
   const [search, setSearch] = useState("");
+  useEffect(() => { if (searchFocus) { setSearch(searchFocus.term); setCategory("All"); } }, [searchFocus]);
   const [category, setCategory] = useState("All");
   const [selectedMarket, setSelectedMarket] = useState<MarketGroup | null>(null);
   const [stake, setStake] = useState("10");
@@ -437,10 +445,10 @@ function ProView({ parlay, setParlay, home = false, sport }: { parlay: ParlayPic
     {board.data && <section className="pro-board">
       <div className="roster-title"><div><p className="kicker">{home ? "TODAY'S COMPLETE BOARD" : "LIVE SPORTSBOOK BOARD"}</p><h2>{groups.length.toLocaleString()} markets · {board.data.offerCount.toLocaleString()} book prices</h2><p className="roster-intro">Every market returned by the feed, paired across sides when both are offered.</p></div><span>{board.data.eventCount} events · {dateTime(board.data.fetchedAt)}</span></div>
       <div className={board.data.cacheStatus === "fresh" ? "refresh-health fresh" : "refresh-health stale"} role="status"><span className="health-dot"/><div><strong>{board.data.cacheStatus === "fresh" ? "Odds feed healthy" : "Showing last successful update"}</strong><small>{board.data.healthMessage} · Updated {dateTime(board.data.fetchedAt)}</small></div></div>
-      {moneylines.length > 0 && <section className="moneyline-rail" aria-labelledby="moneyline-title"><div className="section-heading"><div><p className="kicker">FIRST LOOK</p><h3 id="moneyline-title">Moneyline picks</h3></div><span>Best · DraftKings · Fanatics</span></div><div className="moneyline-grid">{moneylines.map((group) => { const side = strongestSide(group); if (!side) return null; const added = parlay.some((item) => item.id === side.id); const positiveEv = side.evPercent !== null && side.evPercent > 0; return <article className="moneyline-card" key={group.id}><button className="moneyline-open" onClick={() => setSelectedMarket(group)} aria-label={`Open moneyline prices for ${group.entity}`}><small>{group.matchup}</small><h4>{group.entity}</h4><div><span>Best <b>{bookName(side.best.book)} {formatAmerican(side.best.odds)}</b></span><span>DraftKings <b>{formatAmerican(side.draftKings?.odds ?? null)}</b></span><span>Fanatics <b>{formatAmerican(side.fanatics?.odds ?? null)}</b></span></div>{sport === "nhl" && <GameGoalieLine market={group} games={overview.data?.games ?? []}/>}<p className={positiveEv ? "signal positive" : "signal"}>{positiveEv ? `+${side.evPercent?.toFixed(1)}% fair-odds EV` : "Market favorite"}</p></button><button className={added ? "pick-button added" : "pick-button"} onClick={() => toggleParlay(group, side)}>{added ? "Remove" : "Add ML"}</button></article>;})}</div></section>}
-      {parlay.length>0&&<aside className="parlay-panel" aria-label="Parlay builder"><div><p className="kicker">PARLAY BUILDER</p><h3>{parlay.length} legs · {combined}</h3></div><label>Price at<select value={priceMode} onChange={(event)=>setPriceMode(event.target.value as PriceMode)} aria-label="Parlay sportsbook"><option value="draftkings">DraftKings</option><option value="fanatics">Fanatics</option><option value="best">Best price</option></select></label><label>Stake<input inputMode="decimal" value={stake} onChange={(event)=>setStake(event.target.value)} aria-label="Parlay stake"/></label><div><small>Estimated return</small><strong>${payout.toFixed(2)}</strong></div><button onClick={()=>setParlay([])}>Clear</button><ul>{parlay.map((item)=>{const priced=offerForMode(item.side,priceMode);return <li key={item.id}><span>{item.entity} · {titleCase(item.side.side)} {item.side.line??""}</span><b>{priced ? `${bookName(priced.book)} ${formatAmerican(priced.odds)}` : "Not offered"}</b></li>;})}</ul><p>Planning tool only. Every leg must be offered by the selected sportsbook; unavailable legs are never substituted.</p></aside>}
+      {moneylines.length > 0 && <section className="moneyline-rail" aria-labelledby="moneyline-title"><div className="section-heading"><div><p className="kicker">FIRST LOOK</p><h3 id="moneyline-title">Moneyline picks</h3></div><span>Best · DraftKings · FanDuel · BetMGM</span></div><div className="moneyline-grid">{moneylines.map((group) => { const side = strongestSide(group); if (!side) return null; const added = parlay.some((item) => item.id === side.id); const positiveEv = side.evPercent !== null && side.evPercent > 0; return <article className="moneyline-card" key={group.id}><button className="moneyline-open" onClick={() => setSelectedMarket(group)} aria-label={`Open moneyline prices for ${group.entity}`}><small>{group.matchup}</small><h4>{group.entity}</h4><div><span>Best <b>{bookName(side.best.book)} {formatAmerican(side.best.odds)}</b></span><span>DraftKings <b>{formatAmerican(side.draftKings?.odds ?? null)}</b></span><span>FanDuel <b>{formatAmerican(side.fanDuel?.odds ?? null)}</b></span><span>BetMGM <b>{formatAmerican(side.betMGM?.odds ?? null)}</b></span></div>{sport === "nhl" && <GameGoalieLine market={group} games={overview.data?.games ?? []}/>}<p className={positiveEv ? "signal positive" : "signal"}>{positiveEv ? `+${side.evPercent?.toFixed(1)}% fair-odds EV` : "Market favorite"}</p></button><button className={added ? "pick-button added" : "pick-button"} onClick={() => toggleParlay(group, side)}>{added ? "Remove" : "Add ML"}</button></article>;})}</div></section>}
+      {parlay.length>0&&<aside className="parlay-panel" aria-label="Parlay builder"><div><p className="kicker">PARLAY BUILDER</p><h3>{parlay.length} legs · {combined}</h3></div><label>Price at<select value={priceMode} onChange={(event)=>setPriceMode(event.target.value as PriceMode)} aria-label="Parlay sportsbook"><option value="draftkings">DraftKings</option><option value="fanduel">FanDuel</option><option value="betmgm">BetMGM</option><option value="best">Best price</option></select></label><label>Stake<input inputMode="decimal" value={stake} onChange={(event)=>setStake(event.target.value)} aria-label="Parlay stake"/></label><div><small>Estimated return</small><strong>${payout.toFixed(2)}</strong></div><button onClick={()=>setParlay([])}>Clear</button><ul>{parlay.map((item)=>{const priced=offerForMode(item.side,priceMode);return <li key={item.id}><span>{item.entity} · {titleCase(item.side.side)} {item.side.line??""}</span><b>{priced ? `${bookName(priced.book)} ${formatAmerican(priced.odds)}` : "Not offered"}</b></li>;})}</ul><p>Planning tool only. Every leg must be offered by the selected sportsbook; unavailable legs are never substituted.</p></aside>}
       <div className="pro-controls"><input className="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search player, team or market" aria-label="Search live odds"/><select value={category} onChange={(event) => setCategory(event.target.value)} aria-label="Filter market type">{categories.map((name) => <option key={name}>{name}</option>)}</select><button onClick={() => board.refetch()} disabled={board.isFetching}>{board.isFetching ? "Refreshing…" : "Refresh lines"}</button></div>
-      <div className="market-table complete-market-table">{visible.map((market) => { const matchupLine = market.matchup.includes(market.entity) ? `${market.matchup} · ${titleCase(market.period)}` : `${market.entity} · ${market.matchup} · ${titleCase(market.period)}`; return <article className="complete-market" key={market.id}><button className="market-open" onClick={()=>setSelectedMarket(market)} aria-label={`Open ${market.marketName} for ${market.entity}`}><b>{market.marketName}</b><small>{matchupLine}</small>{sport === "nhl" && <GameGoalieLine market={market} games={overview.data?.games ?? []}/>}</button><div className="side-quotes">{market.sides.map((side) => { const added = parlay.some((item) => item.id === side.id); const openingProbability=impliedProbability(side.best.openingOdds); const currentProbability=impliedProbability(side.best.odds); const move=openingProbability!==null&&currentProbability!==null?(currentProbability-openingProbability)*100:null; return <div className="side-quote" key={side.id}><div className="quote-main"><strong>{titleCase(side.side)} {side.line ?? ""}</strong><div className="quote-books"><span>Best <b>{bookName(side.best.book)} {formatAmerican(side.best.odds)}</b></span><span>DK <b>{formatAmerican(side.draftKings?.odds ?? null)}</b></span><span>Fanatics <b>{formatAmerican(side.fanatics?.odds ?? null)}</b></span></div><div className="quote-chips">{side.evPercent !== null && side.evPercent > 0 && <em>+{side.evPercent.toFixed(1)}% EV</em>}{move!==null&&Math.abs(move)>=2&&<em className="steam-chip">Move {move>0?"+":""}{move.toFixed(1)} pts</em>}</div></div><button className={added ? "pick-button added" : "pick-button"} onClick={() => toggleParlay(market, side)}>{added ? "Remove" : "Add"}</button></div>;})}</div></article>;})}</div>
+      <div className="market-table complete-market-table">{visible.map((market) => { const matchupLine = market.matchup.includes(market.entity) ? `${market.matchup} · ${titleCase(market.period)}` : `${market.entity} · ${market.matchup} · ${titleCase(market.period)}`; return <article className="complete-market" key={market.id}><button className="market-open" onClick={()=>setSelectedMarket(market)} aria-label={`Open ${market.marketName} for ${market.entity}`}><b>{market.marketName}</b><small>{matchupLine}</small>{sport === "nhl" && <GameGoalieLine market={market} games={overview.data?.games ?? []}/>}</button><div className="side-quotes">{market.sides.map((side) => { const added = parlay.some((item) => item.id === side.id); const openingProbability=impliedProbability(side.best.openingOdds); const currentProbability=impliedProbability(side.best.odds); const move=openingProbability!==null&&currentProbability!==null?(currentProbability-openingProbability)*100:null; return <div className="side-quote" key={side.id}><div className="quote-main"><strong>{titleCase(side.side)} {side.line ?? ""}</strong><div className="quote-books"><span>Best <b>{bookName(side.best.book)} {formatAmerican(side.best.odds)}</b></span><span>DK <b>{formatAmerican(side.draftKings?.odds ?? null)}</b></span><span>FD <b>{formatAmerican(side.fanDuel?.odds ?? null)}</b></span><span>MGM <b>{formatAmerican(side.betMGM?.odds ?? null)}</b></span></div><div className="quote-chips">{side.evPercent !== null && side.evPercent > 0 && <em>+{side.evPercent.toFixed(1)}% EV</em>}{move!==null&&Math.abs(move)>=2&&<em className="steam-chip">Move {move>0?"+":""}{move.toFixed(1)} pts</em>}</div></div><button className={added ? "pick-button added" : "pick-button"} onClick={() => toggleParlay(market, side)}>{added ? "Remove" : "Add"}</button></div>;})}</div></article>;})}</div>
       {visible.length===0&&<div className="history-empty"><strong>No matching markets.</strong><span>Clear the filters or refresh the provider board.</span></div>}
     </section>}
     {selectedMarket&&<OddsDetailSheet market={selectedMarket} onClose={()=>setSelectedMarket(null)}/>}</>;
@@ -699,6 +707,10 @@ function PlayerWatchStar({ sport, playerId, team, name, position }: { sport: Lea
   }, []);
   const starred = isWatchedPlayer(sport, playerId);
   return <button type="button" className={"watch-star" + (starred ? " active" : "")} onClick={() => toggleWatch({ kind: "player", sport, playerId, team, name, position })} aria-label={starred ? `Remove ${name} from watchlist` : `Watch ${name}`} aria-pressed={starred}>★</button>;
+}
+
+function PlayerPropsButton({ name, onViewProps }: { name: string; onViewProps: (term: string) => void }) {
+  return <button type="button" className="props-button" onClick={() => onViewProps(name)} aria-label={`View ${name} betting lines`}>$</button>;
 }
 
 function TeamWatchStar({ sport, team, name }: { sport: League; team: string; name: string }) {
@@ -960,7 +972,7 @@ function NflPlayerStatsSheet({ player, team, onClose }: { player: NflPlayer; tea
   </div>;
 }
 
-function NflRosterView({ parlay, setParlay, teamFocus }: { parlay: ParlayPick[]; setParlay: (next: ParlayPick[]) => void; teamFocus: { sport: League; team: string; nonce: number } | null }) {
+function NflRosterView({ parlay, setParlay, teamFocus, onViewProps }: { parlay: ParlayPick[]; setParlay: (next: ParlayPick[]) => void; teamFocus: { sport: League; team: string; nonce: number } | null; onViewProps: (term: string) => void }) {
   const [team, setTeam] = useState<NflTeamCode>("KC");
   useEffect(() => {
     if (teamFocus && teamFocus.sport === "nfl" && nflTeams.some((t) => t.code === teamFocus.team)) setTeam(teamFocus.team as NflTeamCode);
@@ -984,7 +996,7 @@ function NflRosterView({ parlay, setParlay, teamFocus }: { parlay: ParlayPick[];
       <div className="roster-title"><div><p className="kicker">OFFICIAL NFL ROSTERS</p><h2>Team stats & player trends</h2><p className="roster-intro">Tap any player to open graphs, last-five form and the complete game log. Star a player to add them to your Watchlist.</p></div>{nfl.data && <span>Updated {dateTime(nfl.data.fetchedAt)}</span>}</div>
       <label className="select-label" htmlFor="nfl-team">Team</label>
       <select id="nfl-team" value={team} onChange={(e) => { setTeam(e.target.value as NflTeamCode); setSelectedPlayer(null); }}>{nflTeams.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select>
-      {teamMoneylines.length > 0 && <section className="team-moneyline"><div className="section-heading"><div><p className="kicker">NEXT GAME</p><h3>Moneyline board</h3></div><span>Best · DraftKings · Fanatics</span></div><div className="moneyline-grid">{teamMoneylines.map((group) => { const side = strongestSide(group); if (!side) return null; const added = parlay.some((item) => item.id === side.id); const pick: ParlayPick = { id: side.id, groupId: group.id, matchup: group.matchup, entity: group.entity, marketName: group.marketName, side }; return <article className="moneyline-card" key={group.id}><div className="moneyline-open"><small>{group.matchup}</small><h4>{group.entity}</h4><div><span>Best <b>{bookName(side.best.book)} {formatAmerican(side.best.odds)}</b></span><span>DraftKings <b>{formatAmerican(side.draftKings?.odds ?? null)}</b></span><span>Fanatics <b>{formatAmerican(side.fanatics?.odds ?? null)}</b></span></div><p className={side.evPercent !== null && side.evPercent > 0 ? "signal positive" : "signal"}>{side.evPercent !== null && side.evPercent > 0 ? `+${side.evPercent.toFixed(1)}% fair-odds EV` : "Market favorite"}</p></div><button className={added ? "pick-button added" : "pick-button"} onClick={() => setParlay(added ? parlay.filter((item) => item.id !== side.id) : [...parlay, pick])}>{added ? "Remove" : "Add ML"}</button></article>;})}</div></section>}
+      {teamMoneylines.length > 0 && <section className="team-moneyline"><div className="section-heading"><div><p className="kicker">NEXT GAME</p><h3>Moneyline board</h3></div><span>Best · DraftKings · FanDuel · BetMGM</span></div><div className="moneyline-grid">{teamMoneylines.map((group) => { const side = strongestSide(group); if (!side) return null; const added = parlay.some((item) => item.id === side.id); const pick: ParlayPick = { id: side.id, groupId: group.id, matchup: group.matchup, entity: group.entity, marketName: group.marketName, side }; return <article className="moneyline-card" key={group.id}><div className="moneyline-open"><small>{group.matchup}</small><h4>{group.entity}</h4><div><span>Best <b>{bookName(side.best.book)} {formatAmerican(side.best.odds)}</b></span><span>DraftKings <b>{formatAmerican(side.draftKings?.odds ?? null)}</b></span><span>FanDuel <b>{formatAmerican(side.fanDuel?.odds ?? null)}</b></span><span>BetMGM <b>{formatAmerican(side.betMGM?.odds ?? null)}</b></span></div><p className={side.evPercent !== null && side.evPercent > 0 ? "signal positive" : "signal"}>{side.evPercent !== null && side.evPercent > 0 ? `+${side.evPercent.toFixed(1)}% fair-odds EV` : "Market favorite"}</p></div><button className={added ? "pick-button added" : "pick-button"} onClick={() => setParlay(added ? parlay.filter((item) => item.id !== side.id) : [...parlay, pick])}>{added ? "Remove" : "Add ML"}</button></article>;})}</div></section>}
       {nfl.isPending ? (
         <div className="loading"><span />Loading official roster…</div>
       ) : nfl.isError ? (
@@ -1002,6 +1014,7 @@ function NflRosterView({ parlay, setParlay, teamFocus }: { parlay: ParlayPick[];
                   <span data-label="GP">{player.games ?? "—"}</span><span data-label="Pass yds">{player.passYards ?? "—"}</span><span data-label="Rush yds">{player.rushYards ?? "—"}</span><span data-label="Rec yds">{player.recYards ?? "—"}</span><span data-label="TD">{(player.passTds ?? 0) + (player.rushTds ?? 0) + (player.recTds ?? 0)}</span>
                 </button>
                 <PlayerWatchStar sport="nfl" playerId={starredEntry.playerId} team={starredEntry.team} name={starredEntry.name} position={starredEntry.position} />
+                <PlayerPropsButton name={player.name} onViewProps={onViewProps} />
               </div>;
             })}
           </div></div>
@@ -1200,6 +1213,7 @@ export function App(){
   const [sport, setSport] = useState<Sport>(() => loadSport());
   const [parlay, setParlay] = useState<ParlayPick[]>([]);
   const [teamFocus, setTeamFocus] = useState<{ sport: League; team: string; nonce: number } | null>(null);
+  const [propsFocus, setPropsFocus] = useState<{ term: string; nonce: number } | null>(null);
   useEffect(() => {
     const favs = loadFavorites();
     applyLeagueTheme(sport, favs[sport]);
@@ -1209,6 +1223,10 @@ export function App(){
     setSport(next);
     try { localStorage.setItem(SPORT_KEY, next); } catch { /* private mode */ }
   }
+  function viewProps(term: string) {
+    setPropsFocus({ term, nonce: Date.now() });
+    setMode("board");
+  }
   function viewTeam(targetSport: League, team: string) {
     setSport(targetSport);
     try { localStorage.setItem(SPORT_KEY, targetSport); } catch { /* private mode */ }
@@ -1216,5 +1234,5 @@ export function App(){
     setMode("rosters");
   }
   const boardLabel = sport === "nfl" ? "Gridiron" : "Ice board";
-  return <div className="app-shell"><SafeAreaTopScrim backgroundColor="var(--paper)"/><ToastHost/><main><div className="topbar"><div className="sport-switch" role="group" aria-label="League"><button type="button" className={"sport-shape" + (sport === "nhl" ? " active" : "")} onClick={() => chooseSport("nhl")} aria-pressed={sport === "nhl"} aria-label="Hockey side"><span className="shape puck" aria-hidden="true" /><em>NHL</em></button><button type="button" className={"sport-shape" + (sport === "nfl" ? " active" : "")} onClick={() => chooseSport("nfl")} aria-pressed={sport === "nfl"} aria-label="Football side"><span className="shape ball" aria-hidden="true" /><em>NFL</em></button></div><nav className="mode-tabs" aria-label="Data view"><button className={mode==="board"?"active":""} onClick={()=>setMode("board")}>{boardLabel}</button><button className={mode==="parlay"?"active":""} onClick={()=>setMode("parlay")}>Parlay{parlay.length > 0 ? ` (${parlay.length})` : ""}</button><button className={mode==="matchup"?"active":""} onClick={()=>setMode("matchup")}>Matchup</button><button className={mode==="rosters"?"active":""} onClick={()=>setMode("rosters")}>Players</button><button className={mode==="hot"?"active":""} onClick={()=>setMode("hot")}>Hot streaks</button><button className={mode==="standings"?"active":""} onClick={()=>setMode("standings")}>League</button><button className={mode==="watchlist"?"active":""} onClick={()=>setMode("watchlist")}>Watchlist</button><button className={mode==="settings"?"active":""} onClick={()=>setMode("settings")}>Settings</button></nav><TeamThemePicker sport={sport}/></div>{mode==="board"&&<ProView parlay={parlay} setParlay={setParlay} home sport={sport}/>} {mode==="parlay"&&<ParlayView parlay={parlay} setParlay={setParlay} sport={sport} onGoBoard={()=>setMode("board")}/>} {mode==="matchup"&&<MatchupView sport={sport}/>} {mode==="rosters"&&<RosterView parlay={parlay} setParlay={setParlay} sport={sport} teamFocus={teamFocus}/>} {mode==="hot"&&<HotStreaksView sport={sport}/>} {mode==="standings"&&<LeagueView sport={sport}/>} {mode==="watchlist"&&<WatchlistView onViewTeam={viewTeam}/>} {mode==="settings"&&<SettingsView/>}</main></div>;
+  return <div className="app-shell"><SafeAreaTopScrim backgroundColor="var(--paper)"/><ToastHost/><main><div className="topbar"><div className="sport-switch" role="group" aria-label="League"><button type="button" className={"sport-shape" + (sport === "nhl" ? " active" : "")} onClick={() => chooseSport("nhl")} aria-pressed={sport === "nhl"} aria-label="Hockey side"><span className="shape puck" aria-hidden="true" /><em>NHL</em></button><button type="button" className={"sport-shape" + (sport === "nfl" ? " active" : "")} onClick={() => chooseSport("nfl")} aria-pressed={sport === "nfl"} aria-label="Football side"><span className="shape ball" aria-hidden="true" /><em>NFL</em></button></div><nav className="mode-tabs" aria-label="Data view"><button className={mode==="board"?"active":""} onClick={()=>setMode("board")}>{boardLabel}</button><button className={mode==="parlay"?"active":""} onClick={()=>setMode("parlay")}>Parlay{parlay.length > 0 ? ` (${parlay.length})` : ""}</button><button className={mode==="matchup"?"active":""} onClick={()=>setMode("matchup")}>Matchup</button><button className={mode==="rosters"?"active":""} onClick={()=>setMode("rosters")}>Players</button><button className={mode==="hot"?"active":""} onClick={()=>setMode("hot")}>Hot streaks</button><button className={mode==="standings"?"active":""} onClick={()=>setMode("standings")}>League</button><button className={mode==="watchlist"?"active":""} onClick={()=>setMode("watchlist")}>Watchlist</button><button className={mode==="settings"?"active":""} onClick={()=>setMode("settings")}>Settings</button></nav><TeamThemePicker sport={sport}/></div>{mode==="board"&&<ProView parlay={parlay} setParlay={setParlay} home sport={sport} searchFocus={propsFocus}/>} {mode==="parlay"&&<ParlayView parlay={parlay} setParlay={setParlay} sport={sport} onGoBoard={()=>setMode("board")}/>} {mode==="matchup"&&<MatchupView sport={sport}/>} {mode==="rosters"&&<RosterView parlay={parlay} setParlay={setParlay} sport={sport} teamFocus={teamFocus} onViewProps={viewProps}/>} {mode==="hot"&&<HotStreaksView sport={sport}/>} {mode==="standings"&&<LeagueView sport={sport}/>} {mode==="watchlist"&&<WatchlistView onViewTeam={viewTeam}/>} {mode==="settings"&&<SettingsView/>}</main></div>;
 }
