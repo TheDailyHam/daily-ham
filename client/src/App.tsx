@@ -227,7 +227,7 @@ function PlayerStatsSheet({ player, team, onClose }: { player: NhlPlayer; team: 
     <section className="sheet player-sheet" role="dialog" aria-modal="true" aria-labelledby="player-stats-title">
       <button className="close" onClick={onClose} aria-label="Close player stats">×</button>
       <p className="kicker">{team} PLAYER FILE</p>
-      <h2 id="player-stats-title">{player.name}</h2>
+      <div className="sheet-title-row"><h2 id="player-stats-title">{player.name}</h2><PlayerWatchStar sport="nhl" playerId={player.id} team={team} name={player.name} position={player.position} /></div>
       <p className="matchup">#{player.number ?? "—"} · {player.position} · 2026–27 regular season</p>
       <div className="player-season-line">
         {goalie ? <><div><span>Starts / GP</span><strong>{player.games ?? "—"}</strong></div><div><span>Record</span><strong>{player.wins ?? "—"}–{player.losses ?? "—"}</strong></div><div><span>Save %</span><strong>{player.savePct === null ? "—" : player.savePct.toFixed(3)}</strong></div><div><span>GAA</span><strong>{player.gaa === null ? "—" : player.gaa.toFixed(2)}</strong></div></> : <><div><span>Games</span><strong>{player.games ?? "—"}</strong></div><div><span>Goals</span><strong>{player.goals ?? "—"}</strong></div><div><span>Assists</span><strong>{player.assists ?? "—"}</strong></div><div><span>Points</span><strong>{player.points ?? "—"}</strong></div><div><span>Shots</span><strong>{player.shots ?? "—"}</strong></div></>}
@@ -434,7 +434,7 @@ function NhlScheduleStrip({ compact = false }: { compact?: boolean }) {
   if (overview.isPending) return <div className="slate-loading">Loading the official NHL slate…</div>;
   if (overview.isError || !overview.data) return <div className="inline-error slate-error"><strong>NHL schedule unavailable.</strong><button onClick={() => overview.refetch()}>Retry</button></div>;
   const games = compact ? overview.data.games.filter((game) => game.date === overview.data?.date) : overview.data.games;
-  return <section className="slate-section"><div className="section-heading"><div><p className="kicker">OFFICIAL NHL SCHEDULE</p><h3>{compact ? "Tonight on the ice" : "Scores & schedule"}</h3></div><span>Updated {dateTime(overview.data.fetchedAt)}</span></div>{games.length ? <div className="slate-grid">{games.map((game) => <article className="game-tile" key={game.id}><div className="game-time"><span>{gameDate(game.date)}</span><b>{game.state === "FINAL" || game.state === "OFF" ? "Final" : dateTime(game.startsAt)}</b></div><div className="score-team"><strong>{game.away.name}</strong><b>{game.away.score ?? "—"}</b></div><div className="score-team"><strong>{game.home.name}</strong><b>{game.home.score ?? "—"}</b></div><div className="goalie-grid"><GoalieIndicator label={game.away.abbrev} goalie={game.away.goalie}/><GoalieIndicator label={game.home.abbrev} goalie={game.home.goalie}/></div>{game.broadcasts.length > 0 && <small className="broadcasts">{game.broadcasts.join(" · ")}</small>}</article>)}</div> : <div className="history-empty"><strong>No games on today’s official slate.</strong><span>Future games will appear when the NHL schedule posts them.</span></div>}<div className="source-box"><span>Source</span><a href={overview.data.scheduleSourceUrl} target="_blank" rel="noreferrer">NHL official schedule ↗</a><small>Starter labels appear only when official game data supports them.</small></div></section>;
+  return <section className="slate-section"><div className="section-heading"><div><p className="kicker">OFFICIAL NHL SCHEDULE</p><h3>{compact ? "Tonight on the ice" : "Scores & schedule"}</h3></div><span>Updated {dateTime(overview.data.fetchedAt)}</span></div>{games.length ? <div className="slate-grid">{games.map((game) => <article className="game-tile" key={game.id}><div className="game-time"><span>{gameDate(game.date)}</span><b>{game.state === "FINAL" || game.state === "OFF" ? "Final" : dateTime(game.startsAt)}</b></div><div className="score-team"><strong>{game.away.name}</strong><TeamWatchStar sport="nhl" team={game.away.abbrev} name={game.away.name} /><b>{game.away.score ?? "—"}</b></div><div className="score-team"><strong>{game.home.name}</strong><TeamWatchStar sport="nhl" team={game.home.abbrev} name={game.home.name} /><b>{game.home.score ?? "—"}</b></div><div className="goalie-grid"><GoalieIndicator label={game.away.abbrev} goalie={game.away.goalie}/><GoalieIndicator label={game.home.abbrev} goalie={game.home.goalie}/></div>{game.broadcasts.length > 0 && <small className="broadcasts">{game.broadcasts.join(" · ")}</small>}</article>)}</div> : <div className="history-empty"><strong>No games on today’s official slate.</strong><span>Future games will appear when the NHL schedule posts them.</span></div>}<div className="source-box"><span>Source</span><a href={overview.data.scheduleSourceUrl} target="_blank" rel="noreferrer">NHL official schedule ↗</a><small>Starter labels appear only when official game data supports them.</small></div></section>;
 }
 
 function LeagueView({ sport }: { sport: Sport }) {
@@ -769,8 +769,8 @@ function NflScheduleStrip({ compact = false }: { compact?: boolean }) {
     {!compact && <div className="metric-tabs week-tabs" aria-label="Select week">{data.weeks.map((w) => <button key={w} className={(week ?? data.week) === w ? "active" : ""} onClick={() => setWeek(w)}>{w}</button>)}</div>}
     {games.length ? <div className="slate-grid">{games.map((game) => <article className="game-tile" key={game.id}>
       <div className="game-time"><span>Week {game.week} · {nflGameDate(game.date)}</span><b>{stateLabel(game)}</b></div>
-      <div className="score-team"><strong>{game.away.name}</strong><b>{game.away.score ?? "—"}</b></div>
-      <div className="score-team"><strong>{game.home.name}</strong><b>{game.home.score ?? "—"}</b></div>
+      <div className="score-team"><strong>{game.away.name}</strong><TeamWatchStar sport="nfl" team={game.away.abbrev} name={game.away.name} /><b>{game.away.score ?? "—"}</b></div>
+      <div className="score-team"><strong>{game.home.name}</strong><TeamWatchStar sport="nfl" team={game.home.abbrev} name={game.home.name} /><b>{game.home.score ?? "—"}</b></div>
     </article>)}</div> : <div className="history-empty"><strong>No games posted for this week yet.</strong><span>Check another week.</span></div>}
     <div className="source-box"><span>Source</span><a href={data.scheduleSourceUrl} target="_blank" rel="noreferrer">ESPN NFL scoreboard ↗</a><small>2026 regular season · keyless feed</small></div>
   </section>;
@@ -901,7 +901,7 @@ function NflPlayerStatsSheet({ player, team, onClose }: { player: NflPlayer; tea
     <section className="sheet player-sheet" role="dialog" aria-modal="true" aria-labelledby="nfl-player-stats-title">
       <button className="close" onClick={onClose} aria-label="Close player stats">×</button>
       <p className="kicker">{team} PLAYER FILE · NFL</p>
-      <h2 id="nfl-player-stats-title">{player.name}</h2>
+      <div className="sheet-title-row"><h2 id="nfl-player-stats-title">{player.name}</h2><PlayerWatchStar sport="nfl" playerId={player.id} team={team} name={player.name} position={player.position} /></div>
       <p className="matchup">{player.jersey ? `#${player.jersey} · ` : ""}{player.position} · 2026 regular season</p>
       <div className="player-season-line">
         <div><span>Games</span><strong>{player.games ?? "—"}</strong></div>
@@ -1137,11 +1137,11 @@ function TeamDetailSheet({ sport, team, onClose, onViewRoster }: { sport: League
           {groups.map((group) => <details className="depth-group" key={group.title} open={groups.length <= 4}>
             <summary>{group.title} <span>{group.players.length}</span></summary>
             <div className="depth-players">
-              {group.players.map((player) => <button key={player.id} className="depth-player" onClick={() => sport === "nfl" ? setSelectedNfl(player as NflPlayer) : setSelectedNhl(player as NhlPlayer)}>
+              {group.players.map((player) => <div className="depth-player-wrap" key={player.id}><button className="depth-player" onClick={() => sport === "nfl" ? setSelectedNfl(player as NflPlayer) : setSelectedNhl(player as NhlPlayer)}>
                 <b>{(player as { jersey?: string | null }).jersey ? `#${(player as { jersey?: string | null }).jersey} ` : ""}{(player as { number?: number | null }).number ? `#${(player as { number?: number | null }).number} ` : ""}{player.name}</b>
                 <small>{player.position}{sport === "nhl" && (player as NhlPlayer).points !== undefined && (player as NhlPlayer).position !== "G" ? ` · ${(player as NhlPlayer).points} PTS` : ""}</small>
                 <span className="depth-tap">›</span>
-              </button>)}
+              </button><PlayerWatchStar sport={sport} playerId={player.id} team={team} name={player.name} position={player.position} /></div>)}
             </div>
           </details>)}
         </div>)}
