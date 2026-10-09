@@ -636,6 +636,14 @@ body[data-sport="nhl"] .mode-tabs button.active { background: var(--accent); col
 .watch-star.active { color: #ffc94d; opacity: 1; text-shadow: 0 0 10px rgba(255,201,77,.55); }
 .dh-toast { position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%) translateY(20px); z-index: 60; background: var(--ink); color: var(--paper); font-weight: 800; font-size: 14px; padding: 12px 18px; border-radius: 999px; opacity: 0; pointer-events: none; transition: opacity .25s, transform .25s; box-shadow: 0 8px 28px rgba(0,0,0,.35); max-width: calc(100vw - 48px); text-align: center; }
 .dh-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+/* PWA install banner */
+.install-banner { position: fixed; left: 12px; right: 12px; bottom: 12px; z-index: 55; display: flex; align-items: center; gap: 12px; background: var(--ink); color: var(--paper); border-radius: 14px; padding: 14px 14px 14px 16px; box-shadow: 0 10px 32px rgba(0,0,0,.4); }
+.install-banner > div { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.install-banner strong { font-size: 15px; }
+.install-banner small { color: var(--paper); opacity: .7; font-size: 12px; }
+.install-banner button { border: 0; background: var(--green); color: #fff; font-weight: 900; font-size: 14px; padding: 12px 20px; border-radius: 10px; cursor: pointer; flex: none; }
+.install-dismiss { background: transparent !important; color: var(--paper) !important; opacity: .6; font-size: 22px !important; padding: 8px 10px !important; }
+
 /* Standalone parlay tab — mobile-first slip card */
 .parlay-section { display: grid; gap: 14px; }
 .slip-card { background: var(--surface); border: 1px solid var(--border); border-top: 3px solid var(--green); border-radius: 14px; padding: 16px; display: grid; gap: 14px; }

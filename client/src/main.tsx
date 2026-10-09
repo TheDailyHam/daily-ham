@@ -20,3 +20,12 @@ createRoot(rootEl).render(
     </QueryClientProvider>
   </StrictMode>,
 );
+
+// Register the service worker for installability and offline shell.
+if ("serviceWorker" in navigator && import.meta.env.PROD) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {
+      /* offline support is best-effort */
+    });
+  });
+}

@@ -719,8 +719,35 @@ function TeamWatchStar({ sport, team, name }: { sport: League; team: string; nam
   return <button type="button" className={"watch-star" + (starred ? " active" : "")} onClick={() => toggleWatch({ kind: "team", sport, team, name })} aria-label={starred ? `Remove ${name} from watchlist` : `Watch ${name}`} aria-pressed={starred}>★</button>;
 }
 
-function ToastHost() {
-  const [message, setMessage] = useState<string | null>(null);
+function InstallPrompt() {
+  const [deferred, setDeferred] = useState<Event | null>(null);
+  const [dismissed, setDismissed] = useState(false);
+  useEffect(() => {
+    try {
+      if (window.matchMedia("(display-mode: standalone)").matches) return;
+    } catch { /* best-effort */ }
+    const onPrompt = (event: Event) => {
+      event.preventDefault();
+      setDeferred(event);
+    };
+    window.addEventListener("beforeinstallprompt", onPrompt);
+    return () => window.removeEventListener("beforeinstallprompt", onPrompt);
+  }, []);
+  if (!deferred || dismissed) return null;
+  const install = async () => {
+    try {
+      await (deferred as unknown as { prompt: () => Promise<void> }).prompt();
+    } catch { /* best-effort */ }
+    setDeferred(null);
+  };
+  return <div className="install-banner" role="dialog" aria-label="Install the Daily Ham app">
+    <div><strong>Get the Daily Ham app</strong><small>Install it on your home screen for fullscreen, offline-ready access.</small></div>
+    <button onClick={install}>Install</button>
+    <button type="button" className="install-dismiss" onClick={() => setDismissed(true)} aria-label="Dismiss install prompt">×</button>
+  </div>;
+}
+
+function ToastHost() {  const [message, setMessage] = useState<string | null>(null);
   const timer = useRef<number | null>(null);
   useEffect(() => {
     const onToast = (event: Event) => {
@@ -1224,5 +1251,5 @@ export function App(){
     setMode("rosters");
   }
   const boardLabel = sport === "nfl" ? "Gridiron" : "Ice board";
-  return <div className="app-shell"><SafeAreaTopScrim backgroundColor="var(--paper)"/><ToastHost/><main><div className="topbar"><div className="sport-switch" role="group" aria-label="League"><button type="button" className={"sport-shape" + (sport === "nhl" ? " active" : "")} onClick={() => chooseSport("nhl")} aria-pressed={sport === "nhl"} aria-label="Hockey side"><span className="shape puck" aria-hidden="true" /><em>NHL</em></button><button type="button" className={"sport-shape" + (sport === "nfl" ? " active" : "")} onClick={() => chooseSport("nfl")} aria-pressed={sport === "nfl"} aria-label="Football side"><span className="shape ball" aria-hidden="true" /><em>NFL</em></button></div><nav className="mode-tabs" aria-label="Data view"><button className={mode==="board"?"active":""} onClick={()=>setMode("board")}>{boardLabel}</button><button className={mode==="parlay"?"active":""} onClick={()=>setMode("parlay")}>Parlay{parlay.length > 0 ? ` (${parlay.length})` : ""}</button><button className={mode==="matchup"?"active":""} onClick={()=>setMode("matchup")}>Matchup</button><button className={mode==="rosters"?"active":""} onClick={()=>setMode("rosters")}>Players</button><button className={mode==="hot"?"active":""} onClick={()=>setMode("hot")}>Hot streaks</button><button className={mode==="standings"?"active":""} onClick={()=>setMode("standings")}>League</button><button className={mode==="watchlist"?"active":""} onClick={()=>setMode("watchlist")}>Watchlist</button><button className={mode==="settings"?"active":""} onClick={()=>setMode("settings")}>Settings</button></nav><TeamThemePicker sport={sport}/></div>{mode==="board"&&<ProView parlay={parlay} setParlay={setParlay} home sport={sport}/>} {mode==="parlay"&&<ParlayView parlay={parlay} setParlay={setParlay} sport={sport} onGoBoard={()=>setMode("board")}/>} {mode==="matchup"&&<MatchupView sport={sport}/>} {mode==="rosters"&&<RosterView parlay={parlay} setParlay={setParlay} sport={sport} teamFocus={teamFocus}/>} {mode==="hot"&&<HotStreaksView sport={sport}/>} {mode==="standings"&&<LeagueView sport={sport}/>} {mode==="watchlist"&&<WatchlistView onViewTeam={viewTeam}/>} {mode==="settings"&&<SettingsView/>}</main></div>;
+  return <div className="app-shell"><SafeAreaTopScrim backgroundColor="var(--paper)"/><ToastHost/><InstallPrompt/><main><div className="topbar"><div className="sport-switch" role="group" aria-label="League"><button type="button" className={"sport-shape" + (sport === "nhl" ? " active" : "")} onClick={() => chooseSport("nhl")} aria-pressed={sport === "nhl"} aria-label="Hockey side"><span className="shape puck" aria-hidden="true" /><em>NHL</em></button><button type="button" className={"sport-shape" + (sport === "nfl" ? " active" : "")} onClick={() => chooseSport("nfl")} aria-pressed={sport === "nfl"} aria-label="Football side"><span className="shape ball" aria-hidden="true" /><em>NFL</em></button></div><nav className="mode-tabs" aria-label="Data view"><button className={mode==="board"?"active":""} onClick={()=>setMode("board")}>{boardLabel}</button><button className={mode==="parlay"?"active":""} onClick={()=>setMode("parlay")}>Parlay{parlay.length > 0 ? ` (${parlay.length})` : ""}</button><button className={mode==="matchup"?"active":""} onClick={()=>setMode("matchup")}>Matchup</button><button className={mode==="rosters"?"active":""} onClick={()=>setMode("rosters")}>Players</button><button className={mode==="hot"?"active":""} onClick={()=>setMode("hot")}>Hot streaks</button><button className={mode==="standings"?"active":""} onClick={()=>setMode("standings")}>League</button><button className={mode==="watchlist"?"active":""} onClick={()=>setMode("watchlist")}>Watchlist</button><button className={mode==="settings"?"active":""} onClick={()=>setMode("settings")}>Settings</button></nav><TeamThemePicker sport={sport}/></div>{mode==="board"&&<ProView parlay={parlay} setParlay={setParlay} home sport={sport}/>} {mode==="parlay"&&<ParlayView parlay={parlay} setParlay={setParlay} sport={sport} onGoBoard={()=>setMode("board")}/>} {mode==="matchup"&&<MatchupView sport={sport}/>} {mode==="rosters"&&<RosterView parlay={parlay} setParlay={setParlay} sport={sport} teamFocus={teamFocus}/>} {mode==="hot"&&<HotStreaksView sport={sport}/>} {mode==="standings"&&<LeagueView sport={sport}/>} {mode==="watchlist"&&<WatchlistView onViewTeam={viewTeam}/>} {mode==="settings"&&<SettingsView/>}</main></div>;
 }
