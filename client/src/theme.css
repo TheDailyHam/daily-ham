@@ -625,8 +625,7 @@ body[data-sport="nhl"] .mode-tabs button.active { background: var(--accent); col
 
 /* Watchlist */
 .roster-row-wrap { position: relative; }
-.roster-row-wrap .roster-row { width: 100%; text-align: left; padding-right: 92px; }
-.props-button { position: absolute; right: 48px; top: 50%; transform: translateY(-50%); width: 44px; height: 44px; border: 0; background: transparent; color: var(--green); font-size: 22px; font-weight: 900; cursor: pointer; opacity: .9; display: flex; align-items: center; justify-content: center; -webkit-tap-highlight-color: transparent; }
+.roster-row-wrap .roster-row { width: 100%; text-align: left; padding-right: 44px; }
 .hot-row-wrap { position: relative; }
 .hot-row-wrap .hot-row { padding-right: 44px; }
 .hot-row-wrap .watch-star { width: 44px; height: 44px; font-size: 24px; }
@@ -677,7 +676,6 @@ body[data-sport="nhl"] .mode-tabs button.active { background: var(--accent); col
 .sheet-title-row { display: flex; align-items: center; gap: 8px; }
 .sheet-title-row h2 { margin: 0; flex: 1; min-width: 0; }
 .sheet-title-row .watch-star { position: static; transform: none; width: 44px; height: 44px; font-size: 26px; flex: none; }
-.sheet-title-row .props-button { position: static; transform: none; width: 44px; height: 44px; font-size: 24px; flex: none; }
 .depth-player-wrap { position: relative; border-bottom: 1px solid var(--border); }
 .depth-player-wrap:last-child { border-bottom: 0; }
 .depth-player-wrap .depth-player { border-bottom: 0; padding-right: 48px; width: 100%; }
