@@ -44,11 +44,27 @@ const NHL_TEAM_CODES: Record<string, string> = {
   "st louis blues": "STL", "tampa bay lightning": "TBL", "toronto maple leafs": "TOR", "utah mammoth": "UTA",
   "vancouver canucks": "VAN", "vegas golden knights": "VGK", "washington capitals": "WSH", "winnipeg jets": "WPG",
 };
-export function oddsApiTeamCode(name: string): string | null {
-  return NHL_TEAM_CODES[normalizeTeamName(name)] ?? null;
+const NFL_TEAM_CODES: Record<string, string> = {
+  "arizona cardinals": "ARI", "atlanta falcons": "ATL", "baltimore ravens": "BAL", "buffalo bills": "BUF",
+  "carolina panthers": "CAR", "chicago bears": "CHI", "cincinnati bengals": "CIN", "cleveland browns": "CLE",
+  "dallas cowboys": "DAL", "denver broncos": "DEN", "detroit lions": "DET", "green bay packers": "GB",
+  "houston texans": "HOU", "indianapolis colts": "IND", "jacksonville jaguars": "JAX", "kansas city chiefs": "KC",
+  "los angeles chargers": "LAC", "los angeles rams": "LAR", "las vegas raiders": "LV", "miami dolphins": "MIA",
+  "minnesota vikings": "MIN", "new england patriots": "NE", "new orleans saints": "NO", "new york giants": "NYG",
+  "new york jets": "NYJ", "philadelphia eagles": "PHI", "pittsburgh steelers": "PIT", "seattle seahawks": "SEA",
+  "san francisco 49ers": "SF", "tampa bay buccaneers": "TB", "tennessee titans": "TEN", "washington commanders": "WSH",
+};
+export function oddsApiTeamCode(name: string, sport: "nhl" | "nfl" = "nhl"): string | null {
+  const map = sport === "nfl" ? NFL_TEAM_CODES : NHL_TEAM_CODES;
+  return map[normalizeTeamName(name)] ?? null;
 }
 
-const MARKET_NAMES: Record<string, string> = { h2h: "Moneyline", spreads: "Puck Line", totals: "Total Goals" };
+function marketNames(sport: "nhl" | "nfl"): Record<string, string> {
+  return sport === "nfl"
+    ? { h2h: "Moneyline", spreads: "Spread", totals: "Total Points" }
+    : { h2h: "Moneyline", spreads: "Puck Line", totals: "Total Goals" };
+}
+const SPORT_KEYS = { nhl: "icehockey_nhl", nfl: "americanfootball_nfl" } as const;
 
 export async function validateOddsApiKey(args: { apiKey: string }) {
   // One cheap request: a single market keeps validation inside the free budget.
@@ -65,7 +81,10 @@ export async function validateOddsApiKey(args: { apiKey: string }) {
 const WINDOW_DAYS_BEFORE = 1;
 const WINDOW_DAYS_AFTER = 3;
 
-export async function fetchOddsApiEvents(args: { apiKey: string }) {
+export async function fetchOddsApiEvents(args: { apiKey: string; sport?: "nhl" | "nfl" }) {
+  const sport = args.sport ?? "nhl";
+  const sportKey = SPORT_KEYS[sport];
+  const names = marketNames(sport);
   const now = new Date();
   // The Odds API requires commence times as YYYY-MM-DDTHH:MM:SSZ — no
   // milliseconds. Date.toISOString() emits ".000Z", which the API rejects
@@ -77,11 +96,11 @@ export async function fetchOddsApiEvents(args: { apiKey: string }) {
     apiKey: args.apiKey, regions: "us", markets: "h2h,spreads,totals",
     oddsFormat: "american", dateFormat: "iso", commenceTimeFrom, commenceTimeTo,
   });
-  const response = await fetch(`https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds/?${params.toString()}`, { headers: { Accept: "application/json" } });
+  const response = await fetch(`https://api.the-odds-api.com/v4/sports/${sportKey}/odds/?${params.toString()}`, { headers: { Accept: "application/json" } });
   if (!response.ok) return failure(response.status, await errorDetail(response));
   const payload = (await response.json()) as unknown;
   const events = Array.isArray(payload) ? payload : [];
-  return { ok: true as const, status: 200 as const, payload: { data: events } };
+  return { ok: true as const, status: 200 as const, payload: { data: events, sport, marketNames: names } };
 }
 
 export type OddsApiOffer = {
@@ -92,7 +111,9 @@ export type OddsApiOffer = {
   openingOdds: string | null; openingLine: string | null;
 };
 
-export function parseOddsApiPayload(raw: unknown): { eventCount: number; marketCount: number; offerCount: number; offers: OddsApiOffer[] } {
+export function parseOddsApiPayload(raw: unknown, opts?: { sport?: "nhl" | "nfl"; marketNames?: Record<string, string> }): { eventCount: number; marketCount: number; offerCount: number; offers: OddsApiOffer[] } {
+  const sport = opts?.sport ?? "nhl";
+  const names = opts?.marketNames ?? marketNames(sport);
   const events = Array.isArray(raw) ? raw : [];
   const offers: OddsApiOffer[] = [];
   let marketCount = 0;
@@ -104,8 +125,8 @@ export function parseOddsApiPayload(raw: unknown): { eventCount: number; marketC
     const homeTeam = text(event.home_team) ?? "";
     // Validate names against the team map; unknown names are skipped
     // warning-free and never crash — the feed's names are used as-is.
-    oddsApiTeamCode(awayTeam);
-    oddsApiTeamCode(homeTeam);
+    oddsApiTeamCode(awayTeam, sport);
+    oddsApiTeamCode(homeTeam, sport);
     const matchup = awayTeam && homeTeam ? `${awayTeam} @ ${homeTeam}` : eventId;
     const startsAt = text(event.commence_time);
     const bookmakers = Array.isArray(event.bookmakers) ? event.bookmakers : [];
@@ -118,7 +139,7 @@ export function parseOddsApiPayload(raw: unknown): { eventCount: number; marketC
         const market = record(marketValue);
         if (!market) continue;
         const marketKey = text(market.key) ?? "market";
-        const marketName = MARKET_NAMES[marketKey] ?? marketKey;
+        const marketName = names[marketKey] ?? marketKey;
         marketCount += 1;
         const outcomes = Array.isArray(market.outcomes) ? market.outcomes : [];
         for (const outcomeValue of outcomes) {

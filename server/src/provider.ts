@@ -38,7 +38,8 @@ const FETCH_WINDOW_DAYS_BEFORE = 1;
 const FETCH_WINDOW_DAYS_AFTER = 3;
 const MAX_EVENTS = 300;
 
-export async function fetchSportsGameOddsEvents(args: { apiKey: string }) {
+export async function fetchSportsGameOddsEvents(args: { apiKey: string; league?: "NHL" | "NFL" }) {
+  const league = args.league ?? "NHL";
   const now = new Date();
   const startsAfter = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - FETCH_WINDOW_DAYS_BEFORE)).toISOString();
   const startsBefore = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + FETCH_WINDOW_DAYS_AFTER + 1)).toISOString();
@@ -47,7 +48,7 @@ export async function fetchSportsGameOddsEvents(args: { apiKey: string }) {
   let cursor: string | null = null;
   let status = 200;
   do {
-    const params = new URLSearchParams({ oddsAvailable: "true", leagueID: "NHL", limit: "25", includeOpposingOdds: "true", includeAltLines: "true", includeOpenCloseOdds: "true", startsAfter, startsBefore });
+    const params = new URLSearchParams({ oddsAvailable: "true", leagueID: league, limit: "25", includeOpposingOdds: "true", includeAltLines: "true", includeOpenCloseOdds: "true", startsAfter, startsBefore });
     if (cursor) params.set("cursor", cursor);
     const response = await fetch(`https://api.sportsgameodds.com/v2/events?${params.toString()}`, { headers: { Accept: "application/json", "x-api-key": args.apiKey } });
     status = response.status;

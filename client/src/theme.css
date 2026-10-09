@@ -588,3 +588,40 @@ h1, h2, h3 { font-family: Rockwell, Georgia, serif; margin: 0; }
 .welcome-sign.team::after { content: ""; position: absolute; inset: 0; background: linear-gradient(115deg, transparent 55%, color-mix(in srgb, var(--team-color) 26%, transparent)); pointer-events: none; }
 .welcome-team-badge { padding: 3px 10px; border: 2px solid var(--team-color); border-radius: 999px; color: var(--text); font-size: 11px; font-weight: 900; letter-spacing: .08em; background: color-mix(in srgb, var(--team-color) 14%, transparent); white-space: nowrap; }
 .welcome-sign .welcome-kicker { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* NHL/NFL sport switch */
+.sport-switch { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--border); background: var(--surface); border-radius: 8px; padding: 3px; margin-bottom: 10px; }
+.sport-switch button { min-height: 40px; border: 0; background: transparent; color: var(--dim); font-weight: 900; font-size: 15px; letter-spacing: .12em; border-radius: 5px; cursor: pointer; }
+.sport-switch button.active { background: var(--accent); color: var(--paper); }
+@media (min-width: 760px) {
+  .sport-switch { margin-bottom: 0; width: 180px; flex: none; }
+  .mode-tabs { grid-template-columns: repeat(7, 1fr); }
+}
+
+/* League labels inside the team picker */
+.team-league-label { font-size: 11px; font-weight: 900; letter-spacing: .18em; color: var(--dim); margin: 14px 0 8px; }
+.team-league-label:first-of-type { margin-top: 4px; }
+
+/* Watchlist */
+.roster-row-wrap { position: relative; }
+.roster-row-wrap .roster-row { width: 100%; text-align: left; padding-right: 44px; }
+.watch-star { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 36px; height: 36px; border: 0; background: transparent; color: var(--dim); font-size: 20px; cursor: pointer; opacity: .45; }
+.watch-star.active { color: var(--accent); opacity: 1; }
+.watchlist-section { display: grid; gap: 14px; }
+.watchlist-grid { display: grid; gap: 10px; }
+.watch-card { position: relative; display: flex; align-items: stretch; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.watch-open { flex: 1; display: flex; align-items: center; gap: 12px; border: 0; background: transparent; color: var(--text); padding: 12px 14px 12px 0; cursor: pointer; text-align: left; min-width: 0; }
+.watch-team-bar { width: 6px; align-self: stretch; background: var(--team-color, var(--accent)); flex: none; }
+.watch-player { display: flex; flex-direction: column; min-width: 0; }
+.watch-player strong { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.watch-player small { color: var(--dim); font-size: 11px; margin-top: 2px; }
+.watch-league { margin-left: auto; font-size: 10px; font-weight: 900; letter-spacing: .14em; color: var(--dim); border: 1px solid var(--border); border-radius: 999px; padding: 3px 9px; flex: none; }
+.watch-remove { border: 0; background: transparent; color: var(--dim); font-size: 22px; padding: 0 12px; cursor: pointer; flex: none; }
+
+/* NFL roster table gets an extra column */
+.nfl-roster-table .roster-header, .nfl-roster-table .roster-row { grid-template-columns: minmax(150px,1fr) repeat(5, 52px); }
+@media (min-width: 760px) {
+  .nfl-roster-table .roster-header, .nfl-roster-table .roster-row { grid-template-columns: minmax(260px,1fr) repeat(5,70px); }
+}
+.week-tabs { flex-wrap: wrap; }
+.week-tabs button { min-width: 34px; }

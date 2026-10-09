@@ -41,19 +41,72 @@ export const TEAM_THEMES: TeamTheme[] = [
 
 export const FAVORITE_TEAM_KEY = "dh-favorite-team";
 
-export function loadFavoriteTeam(): string | null {
+// 32 NFL clubs, same shape. Codes that collide with NHL clubs (BUF, DAL,
+// PIT) are disambiguated by league wherever they are used.
+export const NFL_TEAM_THEMES: TeamTheme[] = [
+  { code: "ARI", name: "Arizona Cardinals", color: "#a40227", secondary: "#ffffff" },
+  { code: "ATL", name: "Atlanta Falcons", color: "#a71930", secondary: "#000000" },
+  { code: "BAL", name: "Baltimore Ravens", color: "#29126f", secondary: "#000000" },
+  { code: "BUF", name: "Buffalo Bills", color: "#00338d", secondary: "#d50a0a" },
+  { code: "CAR", name: "Carolina Panthers", color: "#0085ca", secondary: "#000000" },
+  { code: "CHI", name: "Chicago Bears", color: "#0b1c3a", secondary: "#e64100" },
+  { code: "CIN", name: "Cincinnati Bengals", color: "#fb4f14", secondary: "#000000" },
+  { code: "CLE", name: "Cleveland Browns", color: "#472a08", secondary: "#ff3c00" },
+  { code: "DAL", name: "Dallas Cowboys", color: "#002a5c", secondary: "#b0b7bc" },
+  { code: "DEN", name: "Denver Broncos", color: "#0a2343", secondary: "#fc4c02" },
+  { code: "DET", name: "Detroit Lions", color: "#0076b6", secondary: "#bbbbbb" },
+  { code: "GB", name: "Green Bay Packers", color: "#204e32", secondary: "#ffb612" },
+  { code: "HOU", name: "Houston Texans", color: "#021018", secondary: "#eb0028" },
+  { code: "IND", name: "Indianapolis Colts", color: "#003b75", secondary: "#ffffff" },
+  { code: "JAX", name: "Jacksonville Jaguars", color: "#007487", secondary: "#d7a22a" },
+  { code: "KC", name: "Kansas City Chiefs", color: "#e31837", secondary: "#ffb612" },
+  { code: "LAC", name: "Los Angeles Chargers", color: "#0080c6", secondary: "#ffc20e" },
+  { code: "LAR", name: "Los Angeles Rams", color: "#003594", secondary: "#ffd100" },
+  { code: "LV", name: "Las Vegas Raiders", color: "#000000", secondary: "#a5acaf" },
+  { code: "MIA", name: "Miami Dolphins", color: "#008e97", secondary: "#fc4c02" },
+  { code: "MIN", name: "Minnesota Vikings", color: "#4f2683", secondary: "#ffc62f" },
+  { code: "NE", name: "New England Patriots", color: "#002a5c", secondary: "#c60c30" },
+  { code: "NO", name: "New Orleans Saints", color: "#d3bc8d", secondary: "#000000" },
+  { code: "NYG", name: "New York Giants", color: "#003c7f", secondary: "#c9243f" },
+  { code: "NYJ", name: "New York Jets", color: "#115740", secondary: "#ffffff" },
+  { code: "PHI", name: "Philadelphia Eagles", color: "#06424d", secondary: "#000000" },
+  { code: "PIT", name: "Pittsburgh Steelers", color: "#000000", secondary: "#ffb612" },
+  { code: "SEA", name: "Seattle Seahawks", color: "#002a5c", secondary: "#69be28" },
+  { code: "SF", name: "San Francisco 49ers", color: "#aa0000", secondary: "#b3995d" },
+  { code: "TB", name: "Tampa Bay Buccaneers", color: "#bd1c36", secondary: "#3e3a35" },
+  { code: "TEN", name: "Tennessee Titans", color: "#4495d2", secondary: "#001532" },
+  { code: "WSH", name: "Washington Commanders", color: "#5a1414", secondary: "#ffb612" },
+];
+
+export type League = "nhl" | "nfl";
+export const LEAGUE_THEMES: Record<League, TeamTheme[]> = { nhl: TEAM_THEMES, nfl: NFL_TEAM_THEMES };
+
+export function themeFor(league: League, code: string): TeamTheme | null {
+  return LEAGUE_THEMES[league].find((t) => t.code === code) ?? null;
+}
+
+// Favorite team is stored as "league:CODE" (e.g. "nfl:KC"). A legacy
+// plain-code value from the NHL-only era is read as an NHL team.
+export type FavoriteTeam = { league: League; code: string } | null;
+
+export function loadFavoriteTeam(): FavoriteTeam {
   try {
-    const code = localStorage.getItem(FAVORITE_TEAM_KEY);
-    return code && TEAM_THEMES.some((t) => t.code === code) ? code : null;
+    const raw = localStorage.getItem(FAVORITE_TEAM_KEY);
+    if (!raw) return null;
+    const [league, code] = raw.includes(":") ? raw.split(":") : ["nhl", raw];
+    if ((league === "nhl" || league === "nfl") && code && themeFor(league as League, code)) {
+      return { league: league as League, code };
+    }
+    return null;
   } catch {
     return null;
   }
 }
 
-export function applyTeamTheme(code: string | null): void {
+export function applyTeamTheme(fav: FavoriteTeam): void {
   try {
     const root = document.documentElement;
-    const team = TEAM_THEMES.find((t) => t.code === code);
+    const team = fav ? themeFor(fav.league, fav.code) : null;
     if (team) {
       root.style.setProperty("--accent", team.color);
       // Dark team colors need a lightened variant for text sitting on
@@ -64,7 +117,7 @@ export function applyTeamTheme(code: string | null): void {
       } else {
         root.style.removeProperty("--accent-ink");
       }
-      root.setAttribute("data-fav-team", team.code);
+      root.setAttribute("data-fav-team", `${fav!.league}:${team.code}`);
     } else {
       root.style.removeProperty("--accent");
       root.style.removeProperty("--accent-ink");
@@ -93,16 +146,16 @@ function lighten(hex: string, amount: number): string {
   return `#${m(r)}${m(g)}${m(b)}`;
 }
 
-export function saveFavoriteTeam(code: string | null): void {
+export function saveFavoriteTeam(fav: FavoriteTeam): void {
   try {
-    if (code) localStorage.setItem(FAVORITE_TEAM_KEY, code);
+    if (fav) localStorage.setItem(FAVORITE_TEAM_KEY, `${fav.league}:${fav.code}`);
     else localStorage.removeItem(FAVORITE_TEAM_KEY);
   } catch {
     /* storage unavailable; theme still applies for the session */
   }
-  applyTeamTheme(code);
+  applyTeamTheme(fav);
   try {
-    window.dispatchEvent(new CustomEvent("dh-team-change", { detail: code }));
+    window.dispatchEvent(new CustomEvent("dh-team-change", { detail: fav }));
   } catch {
     /* event dispatch is best-effort */
   }
