@@ -705,9 +705,9 @@ function InstallCard() {
     }
   };
   return <section className="install-card" aria-label="Install the Daily Ham app">
-    <img src="/icons/icon-192.png" alt="Daily Ham app icon" />
+    <img src="/icons/icon-192.png" alt="The Daily Ham app icon" />
     <div>
-      <strong>Get the Daily Ham app</strong>
+      <strong>Get The Daily Ham app</strong>
       <span>Install it on your phone for fullscreen, home-screen access — free, no app store needed.</span>
       {showHelp && <small className="install-help">Android: tap ⋮ → “Install app” or “Add to Home screen”. iPhone: tap Share → “Add to Home Screen”.</small>}
     </div>
@@ -725,7 +725,7 @@ function WelcomeBanner({ sport }: { sport: Sport }) {
   const code = favs[sport];
   const team = code ? themeFor(sport, code) : null;
   return <section className={"welcome-sign" + (team ? " team" : "")} style={team ? ({ "--team-color": team.color, "--team-secondary": team.secondary } as CSSProperties) : undefined}>
-    <img src={logo} alt="Daily Ham ham chef logo" />
+    <img src={logo} alt="The Daily Ham ham chef logo" />
     <div>
       <p className="welcome-kicker">{team ? <>Welcome, {team.name} fan <b className="welcome-team-badge">{team.code}</b></> : "Welcome to the Daily Ham"}</p>
       <strong>Fresh Cuts Daily</strong>
@@ -778,7 +778,7 @@ function InstallPrompt() {
     setDeferred(null);
   };
   return <div className="install-banner" role="dialog" aria-label="Install the Daily Ham app">
-    <div><strong>Get the Daily Ham app</strong><small>Install it on your home screen for fullscreen, offline-ready access.</small></div>
+    <div><strong>Get The Daily Ham app</strong><small>Install it on your home screen for fullscreen, offline-ready access.</small></div>
     <button onClick={install}>Install</button>
     <button type="button" className="install-dismiss" onClick={() => setDismissed(true)} aria-label="Dismiss install prompt">×</button>
   </div>;
@@ -838,7 +838,7 @@ function TeamThemePicker({ sport }: { sport: Sport }) {
             </button>)}
           </div>
         </div>)}
-        {(favs.nhl || favs.nfl) && <button type="button" className="team-clear" onClick={() => { saveFavorite("nhl", null); saveFavorite("nfl", null); setFavs(loadFavorites()); }}>Reset to Daily Ham colors</button>}
+        {(favs.nhl || favs.nfl) && <button type="button" className="team-clear" onClick={() => { saveFavorite("nhl", null); saveFavorite("nfl", null); setFavs(loadFavorites()); }}>Reset to The Daily Ham colors</button>}
       </div>
     </div>}
   </>;
