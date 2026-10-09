@@ -825,3 +825,26 @@ main > section { animation: view-in .22s ease; }
   .roster-card, .mode-shape .rink, .mode-shape .shape { transition: none; }
 }
 
+
+/* Player sheet tabs — everything pops, no scrolling to find stats */
+.sheet-tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 14px 0 4px; position: sticky; top: -1px; z-index: 2; background: var(--paper); padding: 6px 0; }
+.sheet-tabs button { border: 1px solid var(--rule); background: transparent; color: var(--text); font: inherit; font-size: 13px; font-weight: 700; padding: 9px 4px; border-radius: 10px; cursor: pointer; transition: transform .12s ease, background .12s ease; }
+.sheet-tabs button:active { transform: scale(.96); }
+.sheet-tabs button.active { background: var(--accent, var(--green)); border-color: transparent; color: #fff; }
+@media (prefers-reduced-motion: reduce) { .sheet-tabs button { transition: none; } .sheet-tabs button:active { transform: none; } }
+
+/* Mobile-first player sheet polish */
+@media (max-width: 640px) {
+  .sheet-backdrop { align-items: stretch; }
+  .sheet.player-sheet { max-height: 100vh; max-height: 100dvh; border-radius: 0; width: 100%; padding: 18px 14px calc(20px + env(safe-area-inset-bottom)); -webkit-overflow-scrolling: touch; }
+  .sheet.player-sheet h2 { font-size: 28px; }
+  .sheet-tabs { position: sticky; top: -18px; margin: 10px -14px 2px; padding: 10px 14px 8px; }
+  .sheet-tabs button { font-size: 14px; padding: 11px 4px; min-height: 44px; }
+  .model-panel { margin: 8px 0 0; border-radius: 14px; border-bottom-width: 0; box-shadow: inset 0 -4px 0 var(--accent); }
+  .model-panel > strong { font-size: 38px; }
+  .trend-section, .last-five-section { margin-top: 14px; }
+  .player-trend-chart { height: 220px; }
+  .last-five-bars { height: 170px; }
+  .game-card-list { display: grid; gap: 10px; }
+  .full-log .game-card-list.compact { max-height: none; }
+}
