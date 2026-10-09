@@ -625,3 +625,11 @@ h1, h2, h3 { font-family: Rockwell, Georgia, serif; margin: 0; }
 }
 .week-tabs { flex-wrap: wrap; }
 .week-tabs button { min-width: 34px; }
+
+/* Swipeable stat tables — no stat column is ever clipped on narrow screens */
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: thin; }
+.table-scroll .roster-table { min-width: 560px; }
+.table-scroll .nfl-roster-table { min-width: 640px; }
+@media (min-width: 760px) {
+  .table-scroll .roster-table, .table-scroll .nfl-roster-table { min-width: 0; }
+}

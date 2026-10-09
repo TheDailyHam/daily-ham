@@ -280,7 +280,7 @@ function RosterView({ parlay, setParlay, sport }: { parlay: ParlayPick[]; setPar
       ) : nhl.data ? (
         <>
           <div className="roster-summary"><div><b>{nhl.data.players.length}</b><span>active players</span></div><div><b>{nhl.data.groups.forwards}</b><span>forwards</span></div><div><b>{nhl.data.groups.defensemen}</b><span>defense</span></div><div><b>{nhl.data.groups.goalies}</b><span>goalies</span></div></div>
-          <div className="roster-table" role="table">
+          <div className="table-scroll"><div className="roster-table" role="table">
             <div className="roster-header" role="row"><span>Player</span><span>GP</span><span>G</span><span>A</span><span>PTS</span><span>SOG</span></div>
             {nhl.data.players.map((player) => {
               const starred = isWatched("nhl", player.id);
@@ -296,7 +296,7 @@ function RosterView({ parlay, setParlay, sport }: { parlay: ParlayPick[]; setPar
               <button type="button" className={"watch-star" + (starred ? " active" : "")} onClick={() => toggleWatch({ sport: "nhl", playerId: player.id, team, name: player.name, position: player.position })} aria-label={starred ? `Remove ${player.name} from watchlist` : `Watch ${player.name}`} aria-pressed={starred}>★</button>
               </div>;
             })}
-          </div>
+          </div></div>
           <div className="source-box"><span>Source</span><a href={nhl.data.sourceUrl} target="_blank" rel="noreferrer">NHL official data ↗</a><small>2026–27 regular season · TOI available per player</small></div>
         </>
       ) : null}
@@ -918,7 +918,7 @@ function NflRosterView({ parlay, setParlay }: { parlay: ParlayPick[]; setParlay:
       ) : nfl.data ? (
         <>
           <div className="roster-summary"><div><b>{nfl.data.players.length}</b><span>skill players</span></div><div><b>{nfl.data.groups.offense ?? 0}</b><span>offense</span></div><div><b>{nfl.data.groups.specialTeam ?? 0}</b><span>special teams</span></div></div>
-          <div className="roster-table nfl-roster-table" role="table">
+          <div className="table-scroll"><div className="roster-table nfl-roster-table" role="table">
             <div className="roster-header" role="row"><span>Player</span><span>GP</span><span>Pass yds</span><span>Rush yds</span><span>Rec yds</span><span>TD</span></div>
             {nfl.data.players.map((player) => {
               const starred = isWatched("nfl", player.id);
@@ -930,7 +930,7 @@ function NflRosterView({ parlay, setParlay }: { parlay: ParlayPick[]; setParlay:
                 <button type="button" className={"watch-star" + (starred ? " active" : "")} onClick={() => toggleWatch({ sport: "nfl", playerId: player.id, team, name: player.name, position: player.position })} aria-label={starred ? `Remove ${player.name} from watchlist` : `Watch ${player.name}`} aria-pressed={starred}>★</button>
               </div>;
             })}
-          </div>
+          </div></div>
           <div className="source-box"><span>Source</span><a href={nfl.data.sourceUrl} target="_blank" rel="noreferrer">ESPN NFL data ↗</a><small>2026 regular season · aggregated from official game logs</small></div>
         </>
       ) : null}
