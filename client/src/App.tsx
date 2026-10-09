@@ -439,7 +439,7 @@ function ProView({ parlay, setParlay, home = false, sport }: { parlay: ParlayPic
     setParlay(parlay.some((item) => item.id === pick.id) ? parlay.filter((item) => item.id !== pick.id) : [...parlay, pick]);
   };
   return <>
-    {home && <><WelcomeBanner sport={sport}/><ScheduleStrip compact sport={sport}/></>}
+    {home && <><WelcomeBanner sport={sport}/><InstallCard/><ScheduleStrip compact sport={sport}/></>}
     <ProviderStatus pending={board.isPending || board.isFetching} error={board.error instanceof Error ? board.error.message : null} onRetry={() => board.refetch()} />
     {board.data && <section className="pro-board">
       <div className="roster-title"><div><p className="kicker">{home ? "TODAY'S COMPLETE BOARD" : "LIVE SPORTSBOOK BOARD"}</p><h2>{groups.length.toLocaleString()} markets · {board.data.offerCount.toLocaleString()} book prices</h2><p className="roster-intro">Every market returned by the feed, paired across sides when both are offered.</p></div><span>{board.data.eventCount} events · {dateTime(board.data.fetchedAt)}</span></div>
@@ -675,6 +675,43 @@ function SettingsView() {
     {gateConfigured && adminToken && <div className="credential-card"><div className="credential-status"><span className="status-dot configured" /><div><small>ADMIN</small><strong>Unlocked</strong><span>Key management is enabled for this session.</span></div></div><button className="remove-key" onClick={lock}>Lock settings</button></div>}
     <ProviderCard storageKey="sportsgameodds" providerLabel="SportsGameOdds" statusQueryKey="sports-game-odds-key-status" getStatus={() => api.getSportsGameOddsKeyStatus({})} saveKey={(args) => api.saveSportsGameOddsKey(args)} removeKey={(args) => api.removeSportsGameOddsKey(args)} helpText="The field is cleared immediately after submission. The saved value is never displayed." adminToken={adminToken} />
     <ProviderCard storageKey="theoddsapi" providerLabel="The Odds API" statusQueryKey="odds-api-key-status" getStatus={() => api.getOddsApiKeyStatus({})} saveKey={(args) => api.saveOddsApiKey(args)} removeKey={(args) => api.removeOddsApiKey(args)} helpText="Free tier: 500 requests/month, no credit card — one board refresh costs a single request. Get a key at the-odds-api.com. The field is cleared immediately after submission." adminToken={adminToken} />
+  </section>;
+}
+
+function InstallCard() {
+  const [deferred, setDeferred] = useState<Event | null>(null);
+  const [installed, setInstalled] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
+  useEffect(() => {
+    const check = () => {
+      try { setInstalled(window.matchMedia("(display-mode: standalone)").matches); } catch { /* best-effort */ }
+    };
+    check();
+    const onPrompt = (event: Event) => { event.preventDefault(); setDeferred(event); };
+    window.addEventListener("beforeinstallprompt", onPrompt);
+    window.addEventListener("appinstalled", check);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", onPrompt);
+      window.removeEventListener("appinstalled", check);
+    };
+  }, []);
+  if (installed) return null;
+  const install = async () => {
+    if (deferred) {
+      try { await (deferred as unknown as { prompt: () => Promise<void> }).prompt(); } catch { /* best-effort */ }
+      setDeferred(null);
+    } else {
+      setShowHelp((v) => !v);
+    }
+  };
+  return <section className="install-card" aria-label="Install the Daily Ham app">
+    <img src="/icons/icon-192.png" alt="Daily Ham app icon" />
+    <div>
+      <strong>Get the Daily Ham app</strong>
+      <span>Install it on your phone for fullscreen, home-screen access — free, no app store needed.</span>
+      {showHelp && <small className="install-help">Android: tap ⋮ → “Install app” or “Add to Home screen”. iPhone: tap Share → “Add to Home Screen”.</small>}
+    </div>
+    <button onClick={install}>{deferred ? "Install" : "How"}</button>
   </section>;
 }
 
