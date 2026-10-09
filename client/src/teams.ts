@@ -85,28 +85,58 @@ export function themeFor(league: League, code: string): TeamTheme | null {
   return LEAGUE_THEMES[league].find((t) => t.code === code) ?? null;
 }
 
-// Favorite team is stored as "league:CODE" (e.g. "nfl:KC"). A legacy
-// plain-code value from the NHL-only era is read as an NHL team.
-export type FavoriteTeam = { league: League; code: string } | null;
+// Per-league favorites: one NHL team and one NFL team. The color scheme
+// follows whichever league is active. Legacy single-favorite values
+// ("league:CODE" or plain "CODE" from the NHL-only era) migrate into the
+// matching league slot on first read.
+export type LeagueFavorites = { nhl: string | null; nfl: string | null };
+const FAV_NHL_KEY = "dh-favorite-nhl";
+const FAV_NFL_KEY = "dh-favorite-nfl";
 
-export function loadFavoriteTeam(): FavoriteTeam {
+export function loadFavorites(): LeagueFavorites {
   try {
-    const raw = localStorage.getItem(FAVORITE_TEAM_KEY);
-    if (!raw) return null;
-    const [league, code] = raw.includes(":") ? raw.split(":") : ["nhl", raw];
-    if ((league === "nhl" || league === "nfl") && code && themeFor(league as League, code)) {
-      return { league: league as League, code };
+    let nhl = localStorage.getItem(FAV_NHL_KEY);
+    let nfl = localStorage.getItem(FAV_NFL_KEY);
+    const legacy = localStorage.getItem(FAVORITE_TEAM_KEY);
+    if (legacy && !nhl && !nfl) {
+      const [league, code] = legacy.includes(":") ? legacy.split(":") : ["nhl", legacy];
+      if (league === "nfl" && code && themeFor("nfl", code)) nfl = code;
+      else if (code && themeFor("nhl", code)) nhl = code;
+      try {
+        localStorage.removeItem(FAVORITE_TEAM_KEY);
+        if (nhl) localStorage.setItem(FAV_NHL_KEY, nhl);
+        if (nfl) localStorage.setItem(FAV_NFL_KEY, nfl);
+      } catch { /* migration is best-effort */ }
     }
-    return null;
+    return {
+      nhl: nhl && themeFor("nhl", nhl) ? nhl : null,
+      nfl: nfl && themeFor("nfl", nfl) ? nfl : null,
+    };
   } catch {
-    return null;
+    return { nhl: null, nfl: null };
   }
 }
 
-export function applyTeamTheme(fav: FavoriteTeam): void {
+export function saveFavorite(league: League, code: string | null): void {
+  try {
+    const key = league === "nhl" ? FAV_NHL_KEY : FAV_NFL_KEY;
+    if (code) localStorage.setItem(key, code);
+    else localStorage.removeItem(key);
+  } catch {
+    /* storage unavailable; theme still applies for the session */
+  }
+  applyLeagueTheme(league, code);
+  try {
+    window.dispatchEvent(new CustomEvent("dh-team-change", { detail: { league, code } }));
+  } catch {
+    /* event dispatch is best-effort */
+  }
+}
+
+export function applyLeagueTheme(league: League, code: string | null): void {
   try {
     const root = document.documentElement;
-    const team = fav ? themeFor(fav.league, fav.code) : null;
+    const team = code ? themeFor(league, code) : null;
     if (team) {
       root.style.setProperty("--accent", team.color);
       // Dark team colors need a lightened variant for text sitting on
@@ -117,7 +147,7 @@ export function applyTeamTheme(fav: FavoriteTeam): void {
       } else {
         root.style.removeProperty("--accent-ink");
       }
-      root.setAttribute("data-fav-team", `${fav!.league}:${team.code}`);
+      root.setAttribute("data-fav-team", `${league}:${team.code}`);
     } else {
       root.style.removeProperty("--accent");
       root.style.removeProperty("--accent-ink");
@@ -126,6 +156,16 @@ export function applyTeamTheme(fav: FavoriteTeam): void {
   } catch {
     /* theming is decorative; never break the app */
   }
+}
+
+// Legacy single-favorite API, kept for any external callers.
+export type FavoriteTeam = { league: League; code: string } | null;
+
+export function loadFavoriteTeam(): FavoriteTeam {
+  const favs = loadFavorites();
+  if (favs.nhl) return { league: "nhl", code: favs.nhl };
+  if (favs.nfl) return { league: "nfl", code: favs.nfl };
+  return null;
 }
 
 function luminance(hex: string): number {
@@ -144,19 +184,4 @@ function lighten(hex: string, amount: number): string {
   const b = parseInt(n.slice(4, 6), 16);
   const m = (c: number) => Math.round(c + (255 - c) * amount).toString(16).padStart(2, "0");
   return `#${m(r)}${m(g)}${m(b)}`;
-}
-
-export function saveFavoriteTeam(fav: FavoriteTeam): void {
-  try {
-    if (fav) localStorage.setItem(FAVORITE_TEAM_KEY, `${fav.league}:${fav.code}`);
-    else localStorage.removeItem(FAVORITE_TEAM_KEY);
-  } catch {
-    /* storage unavailable; theme still applies for the session */
-  }
-  applyTeamTheme(fav);
-  try {
-    window.dispatchEvent(new CustomEvent("dh-team-change", { detail: fav }));
-  } catch {
-    /* event dispatch is best-effort */
-  }
 }
