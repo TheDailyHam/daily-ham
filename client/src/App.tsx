@@ -294,17 +294,15 @@ function RosterView({ parlay, setParlay, sport, teamFocus }: { parlay: ParlayPic
             <div className="roster-header" role="row"><span>Player</span><span>GP</span><span>G</span><span>A</span><span>PTS</span><span>SOG</span></div>
             {nhl.data.players.map((player) => {
               const starredEntry = { playerId: player.id, team, name: player.name, position: player.position };
-              return <div className="roster-row-wrap" key={player.id}>
-              <button className="roster-row" role="row" onClick={() => setSelectedPlayer(player)} aria-label={`Open ${player.name} game log and charts`}>
-                <span><b>{player.number !== null ? `#${player.number} ` : ""}{player.name}</b><small>{player.position} · {player.shoots ?? "—"} shot · {player.height ?? "—"} in · {player.weight ?? "—"} lb · tap for game log</small></span>
-                {player.position === "G" ? (
-                  <><span data-label="GP">{player.games ?? "—"}</span><span data-label="Wins">{player.wins ?? "—"}</span><span data-label="Losses">{player.losses ?? "—"}</span><span data-label="SV%">{player.savePct === null ? "—" : player.savePct.toFixed(3)}</span><span data-label="GAA">{player.gaa === null ? "—" : player.gaa.toFixed(2)}</span></>
-                ) : (
-                  <><span data-label="GP">{player.games ?? "—"}</span><span data-label="G">{player.goals ?? "—"}</span><span data-label="A">{player.assists ?? "—"}</span><span data-label="PTS">{player.points ?? "—"}</span><span data-label="SOG">{player.shots ?? "—"}</span></>
-                )}
-              </button>
-              <PlayerWatchStar sport="nhl" playerId={starredEntry.playerId} team={starredEntry.team} name={starredEntry.name} position={starredEntry.position} />
-              
+              const goalieStats: [string, string][] = player.position === "G"
+                ? [["GP", `${player.games ?? "—"}`], ["W", `${player.wins ?? "—"}`], ["L", `${player.losses ?? "—"}`], ["SV%", player.savePct === null ? "—" : player.savePct.toFixed(3)], ["GAA", player.gaa === null ? "—" : player.gaa.toFixed(2)]]
+                : [["GP", `${player.games ?? "—"}`], ["G", `${player.goals ?? "—"}`], ["A", `${player.assists ?? "—"}`], ["PTS", `${player.points ?? "—"}`], ["SOG", `${player.shots ?? "—"}`]];
+              return <div className="roster-card" key={player.id}>
+                <button className="roster-card-main" onClick={() => setSelectedPlayer(player)} aria-label={`Open ${player.name} game log and charts`}>
+                  <span className="roster-card-head"><b>{player.number !== null ? `#${player.number} ` : ""}{player.name}</b><small>{player.position}{player.shoots ? ` · ${player.shoots} shot` : ""}{player.height ? ` · ${player.height} in` : ""}{player.weight ? ` · ${player.weight} lb` : ""}</small></span>
+                  <span className="roster-stat-grid">{goalieStats.map(([label, value]) => <span key={label} className="roster-stat"><small>{label}</small><b>{value}</b></span>)}</span>
+                </button>
+                <PlayerWatchStar sport="nhl" playerId={starredEntry.playerId} team={starredEntry.team} name={starredEntry.name} position={starredEntry.position} />
               </div>;
             })}
           </div></div>
@@ -1149,13 +1147,13 @@ function NflRosterView({ parlay, setParlay, teamFocus }: { parlay: ParlayPick[];
             <div className="roster-header" role="row"><span>Player</span><span>GP</span><span>Pass yds</span><span>Rush yds</span><span>Rec yds</span><span>TD</span></div>
             {nfl.data.players.map((player) => {
               const starredEntry = { playerId: player.id, team, name: player.name, position: player.position };
-              return <div className="roster-row-wrap" key={player.id}>
-                <button className="roster-row" role="row" onClick={() => setSelectedPlayer(player)} aria-label={`Open ${player.name} game log and charts`}>
-                  <span><b>{player.jersey ? `#${player.jersey} ` : ""}{player.name}</b><small>{player.position} · tap for game log</small></span>
-                  <span data-label="GP">{player.games ?? "—"}</span><span data-label="Pass yds">{player.passYards ?? "—"}</span><span data-label="Rush yds">{player.rushYards ?? "—"}</span><span data-label="Rec yds">{player.recYards ?? "—"}</span><span data-label="TD">{(player.passTds ?? 0) + (player.rushTds ?? 0) + (player.recTds ?? 0)}</span>
+              const nflStats: [string, string][] = [["GP", `${player.games ?? "—"}`], ["Pass yds", `${player.passYards ?? "—"}`], ["Rush yds", `${player.rushYards ?? "—"}`], ["Rec yds", `${player.recYards ?? "—"}`], ["TD", `${(player.passTds ?? 0) + (player.rushTds ?? 0) + (player.recTds ?? 0)}`]];
+              return <div className="roster-card" key={player.id}>
+                <button className="roster-card-main" onClick={() => setSelectedPlayer(player)} aria-label={`Open ${player.name} game log and charts`}>
+                  <span className="roster-card-head"><b>{player.jersey ? `#${player.jersey} ` : ""}{player.name}</b><small>{player.position}</small></span>
+                  <span className="roster-stat-grid">{nflStats.map(([label, value]) => <span key={label} className="roster-stat"><small>{label}</small><b>{value}</b></span>)}</span>
                 </button>
                 <PlayerWatchStar sport="nfl" playerId={starredEntry.playerId} team={starredEntry.team} name={starredEntry.name} position={starredEntry.position} />
-                
               </div>;
             })}
           </div></div>
