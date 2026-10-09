@@ -358,13 +358,15 @@ h1, h2, h3 { font-family: Rockwell, Georgia, serif; margin: 0; }
 .complete-market-table { border-top: 2px solid var(--text); }
 .complete-market { padding: 13px 12px; border-bottom: 1px solid var(--border); }
 .complete-market .market-open { width: 100%; padding-bottom: 10px; }
-.side-quotes { display: grid; gap: 7px; }
-.side-quote { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 10px; align-items: center; padding: 9px 10px; background: var(--toast); }
-.side-quote > div { min-width: 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; align-items: baseline; }
-.side-quote > div > strong { grid-row: 1 / span 2; font: 800 16px/1.15 Rockwell, Georgia, serif; }
-.side-quote span { color: var(--dim); font-size: 11px; }
-.side-quote span b { color: var(--text); }
-.side-quote em { grid-column: 2; color: var(--green); font-size: 10px; font-style: normal; font-weight: 900; }
+.side-quotes { display: grid; gap: 8px; }
+.side-quote { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 12px; align-items: center; padding: 12px; background: var(--toast); border-radius: 8px; }
+.quote-main { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.quote-main > strong { font: 800 17px/1.15 Rockwell, Georgia, serif; overflow: hidden; text-overflow: ellipsis; }
+.quote-books { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.quote-books span { color: var(--dim); font-size: 12px; white-space: nowrap; }
+.quote-books span b { color: var(--text); }
+.quote-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.quote-chips em { color: var(--green); font-size: 10px; font-style: normal; font-weight: 900; }
 .odds-side-detail { margin-top: 26px; border-top: 3px solid var(--text); }
 .odds-side-title { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; align-items: center; }
 .odds-side-title h3 { margin-top: 14px; }
@@ -395,7 +397,6 @@ h1, h2, h3 { font-family: Rockwell, Georgia, serif; margin: 0; }
 .book-list > div.best-book { background: color-mix(in srgb, var(--green) 9%, transparent); padding-inline: 8px; }
 .book-list em.best-badge { background: var(--green); }
 .book-list em.fanatics-badge { background: #e31b23; color: #fff; }
-.side-quote > div { grid-template-columns: minmax(90px,auto) 1fr; }
 .side-quote .steam-chip { color: var(--orange); }
 .parlay-panel select { min-width: 120px; height: 40px; border: 1px solid var(--border); background: var(--paper); color: var(--text); border-radius: 5px; padding: 0 8px; font-weight: 800; }
 
