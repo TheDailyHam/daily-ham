@@ -696,11 +696,14 @@ async function fetchColdStreaks(ctx: Ctx, force: boolean): Promise<z.infer<typeo
     let goallessStreak = 0; for (const game of recent) { if (game.goals > 0) break; goallessStreak += 1; }
     const lastFivePoints = recent.reduce((sum, game) => sum + game.points, 0);
     const lastFiveGoals = recent.reduce((sum, game) => sum + game.goals, 0);
+    const lastFiveShots = recent.reduce((sum, game) => sum + game.shots, 0);
     const goalieGames = recent.filter((game) => game.savePct !== null);
     const lastFiveSavePct = goalieGames.length >= 2 ? goalieGames.reduce((sum, game) => sum + (game.savePct ?? 0), 0) / goalieGames.length : null;
-    const cold = isGoalie
+    // Skaters need real shot volume: getting chances but not converting, not healthy scratches.
+    const involved = isGoalie || lastFiveShots >= 6;
+    const cold = involved && (isGoalie
       ? (lastFiveSavePct !== null && lastFiveSavePct < .88)
-      : (scorelessStreak >= 3 || goallessStreak >= 4 || (recent.length >= 3 && lastFivePoints <= 1));
+      : (scorelessStreak >= 3 || goallessStreak >= 4 || (recent.length >= 3 && lastFivePoints <= 1)));
     if (!cold) return [];
     const coldScore = scorelessStreak * 3 + goallessStreak * 2 + Math.max(0, 5 - lastFivePoints) + (lastFiveSavePct === null ? 0 : Math.max(0, .9 - lastFiveSavePct) * 200);
     return [{ ...player, games: recent, scorelessStreak, goallessStreak, lastFivePoints, lastFiveGoals, lastFiveSavePct, coldScore }];
@@ -1207,7 +1210,10 @@ async function fetchNflColdStreaks(ctx: Ctx, force: boolean): Promise<z.infer<ty
     for (const g of recent) { if (g.totalTds > 0) break; tdDrought += 1; }
     const lastThreeTds = recent.reduce((sum, g) => sum + g.totalTds, 0);
     const lastThreeYards = recent.reduce((sum, g) => sum + g.scrimmageYards + g.passYards, 0);
-    const cold = tdDrought >= 2 || (recent.length >= 3 && lastThreeTds === 0 && lastThreeYards < 150);
+    const lastThreePassYards = recent.reduce((sum, g) => sum + g.passYards, 0);
+    // Only real contributors: need meaningful recent workload, not benchwarmers.
+    const involved = lastThreeYards >= 120 || lastThreePassYards >= 400;
+    const cold = involved && (tdDrought >= 2 || (recent.length >= 3 && lastThreeTds === 0 && lastThreeYards < 200));
     if (!cold) return [];
     const coldScore = tdDrought * 8 + Math.max(0, 300 - lastThreeYards) / 25 + (lastThreeTds === 0 ? 6 : 0);
     return [{ playerId: player.playerId, name: player.name, team: player.team, position: "—", tdDrought, lastThreeTds, lastThreeYards, games: recent, coldScore }];
