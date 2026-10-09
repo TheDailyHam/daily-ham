@@ -676,6 +676,48 @@ function ProviderCard({ storageKey, providerLabel, statusQueryKey, getStatus, sa
 
 const ADMIN_SESSION_KEY = "dh-admin-token";
 
+const BRIGHTNESS_KEY = "dh-brightness";
+const SMOOTH_SCROLL_KEY = "dh-smooth-scroll";
+
+function loadBrightness(): number {
+  try { const v = Number(localStorage.getItem(BRIGHTNESS_KEY)); return Number.isFinite(v) && v >= 40 && v <= 100 ? v : 100; } catch { return 100; }
+}
+function applyBrightness(value: number) {
+  try {
+    document.documentElement.style.setProperty("--app-brightness", String(value / 100));
+    localStorage.setItem(BRIGHTNESS_KEY, String(value));
+  } catch { /* best-effort */ }
+}
+function loadSmoothScroll(): boolean {
+  try { return localStorage.getItem(SMOOTH_SCROLL_KEY) !== "off"; } catch { return true; }
+}
+function applySmoothScroll(on: boolean) {
+  try {
+    document.documentElement.style.scrollBehavior = on ? "smooth" : "auto";
+    localStorage.setItem(SMOOTH_SCROLL_KEY, on ? "on" : "off");
+  } catch { /* best-effort */ }
+}
+
+function DisplaySettings() {
+  const [brightness, setBrightness] = useState(loadBrightness);
+  const [smooth, setSmooth] = useState(loadSmoothScroll);
+  useEffect(() => { applyBrightness(brightness); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { applySmoothScroll(smooth); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const onBrightness = (value: number) => { setBrightness(value); applyBrightness(value); };
+  const onSmooth = (on: boolean) => { setSmooth(on); applySmoothScroll(on); };
+  return <section className="settings-panel">
+    <div className="settings-heading"><p className="kicker">DISPLAY</p><h1>Screen preferences</h1><p>Saved on this device only.</p></div>
+    <div className="credential-card">
+      <div className="display-row"><div><strong>Brightness</strong><small>Dim the whole app for night use.</small></div><span className="display-value">{brightness}%</span></div>
+      <input type="range" min={40} max={100} step={5} value={brightness} onChange={(e) => onBrightness(Number(e.target.value))} className="display-slider" aria-label="App brightness" />
+    </div>
+    <div className="credential-card">
+      <div className="display-row"><div><strong>Smooth scrolling</strong><small>Animate jumps between sections. Your phone controls swipe speed.</small></div>
+      <button type="button" role="switch" aria-checked={smooth} className={"toggle-switch" + (smooth ? " on" : "")} onClick={() => onSmooth(!smooth)}><i /></button></div>
+    </div>
+  </section>;
+}
+
 function SettingsView() {
   const adminStatus = useQuery({ queryKey: ["admin-status"], queryFn: () => api.getAdminStatus({}), retry: false });
   const [adminToken, setAdminToken] = useState<string | null>(() => {
@@ -707,9 +749,15 @@ function SettingsView() {
       <small>Provider settings are locked for visitors. Unlock with the site's admin token to add, replace, or remove keys.</small>
     </form>}
     {gateConfigured && adminToken && <div className="credential-card"><div className="credential-status"><span className="status-dot configured" /><div><small>ADMIN</small><strong>Unlocked</strong><span>Key management is enabled for this session.</span></div></div><button className="remove-key" onClick={lock}>Lock settings</button></div>}
-    <ProviderCard storageKey="sportsgameodds" providerLabel="SportsGameOdds" statusQueryKey="sports-game-odds-key-status" getStatus={() => api.getSportsGameOddsKeyStatus({})} saveKey={(args) => api.saveSportsGameOddsKey(args)} removeKey={(args) => api.removeSportsGameOddsKey(args)} helpText="The field is cleared immediately after submission. The saved value is never displayed." adminToken={adminToken} />
-    <ProviderCard storageKey="theoddsapi" providerLabel="The Odds API" statusQueryKey="odds-api-key-status" getStatus={() => api.getOddsApiKeyStatus({})} saveKey={(args) => api.saveOddsApiKey(args)} removeKey={(args) => api.removeOddsApiKey(args)} helpText="Free tier: 500 requests/month, no credit card — one board refresh costs a single request. Get a key at the-odds-api.com. The field is cleared immediately after submission." adminToken={adminToken} />
+    {gateConfigured && adminToken && <>
+      <ProviderCard storageKey="sportsgameodds" providerLabel="SportsGameOdds" statusQueryKey="sports-game-odds-key-status" getStatus={() => api.getSportsGameOddsKeyStatus({})} saveKey={(args) => api.saveSportsGameOddsKey(args)} removeKey={(args) => api.removeSportsGameOddsKey(args)} helpText="The field is cleared immediately after submission. The saved value is never displayed." adminToken={adminToken} />
+      <ProviderCard storageKey="theoddsapi" providerLabel="The Odds API" statusQueryKey="odds-api-key-status" getStatus={() => api.getOddsApiKeyStatus({})} saveKey={(args) => api.saveOddsApiKey(args)} removeKey={(args) => api.removeOddsApiKey(args)} helpText="Free tier: 500 requests/month, no credit card — one board refresh costs a single request. Get a key at the-odds-api.com. The field is cleared immediately after submission." adminToken={adminToken} />
+    </>}
   </section>;
+}
+
+function SiteSettings() {
+  return <><DisplaySettings /><SettingsView /></>;
 }
 
 function InstallCard() {
@@ -1393,5 +1441,5 @@ export function App(){
     setMode("rosters");
   }
   const boardLabel = sport === "nfl" ? "Gridiron" : "Ice board";
-  return <div className="app-shell"><SafeAreaTopScrim backgroundColor="var(--paper)"/><ToastHost/><InstallPrompt/><main><div className="topbar"><div className="sport-switch" role="group" aria-label="League"><button type="button" className={"sport-shape" + (sport === "nhl" ? " active" : "")} onClick={() => chooseSport("nhl")} aria-pressed={sport === "nhl"} aria-label="Hockey side"><span className="shape puck" aria-hidden="true" /><em>NHL</em></button><button type="button" className={"sport-shape" + (sport === "nfl" ? " active" : "")} onClick={() => chooseSport("nfl")} aria-pressed={sport === "nfl"} aria-label="Football side"><span className="shape ball" aria-hidden="true" /><em>NFL</em></button></div><nav className="mode-tabs" aria-label="Data view"><button className={mode==="board"?"active":""} onClick={()=>setMode("board")}>{boardLabel}</button><button className={mode==="parlay"?"active":""} onClick={()=>setMode("parlay")}>Parlay{parlay.length > 0 ? ` (${parlay.length})` : ""}</button><button className={mode==="matchup"?"active":""} onClick={()=>setMode("matchup")}>Matchup</button><button className={mode==="rosters"?"active":""} onClick={()=>setMode("rosters")}>Players</button><button className={mode==="streaks"?"active":""} onClick={()=>setMode("streaks")}>Streaks</button><button className={mode==="standings"?"active":""} onClick={()=>setMode("standings")}>League</button><button className={mode==="watchlist"?"active":""} onClick={()=>setMode("watchlist")}>Watchlist</button><button className={mode==="settings"?"active":""} onClick={()=>setMode("settings")}>Settings</button></nav><TeamThemePicker sport={sport}/></div>{mode==="board"&&<ProView parlay={parlay} setParlay={setParlay} home sport={sport}/>} {mode==="parlay"&&<ParlayView parlay={parlay} setParlay={setParlay} sport={sport} onGoBoard={()=>setMode("board")}/>} {mode==="matchup"&&<MatchupView sport={sport}/>} {mode==="rosters"&&<RosterView parlay={parlay} setParlay={setParlay} sport={sport} teamFocus={teamFocus}/>} {mode==="streaks"&&<StreaksView sport={sport}/>} {mode==="standings"&&<LeagueView sport={sport}/>} {mode==="watchlist"&&<WatchlistView onViewTeam={viewTeam}/>} {mode==="settings"&&<SettingsView/>}</main><BottomNav mode={mode} setMode={setMode} parlayCount={parlay.length}/></div>;
+  return <div className="app-shell"><SafeAreaTopScrim backgroundColor="var(--paper)"/><ToastHost/><InstallPrompt/><main><div className="topbar"><div className="sport-switch" role="group" aria-label="League"><button type="button" className={"sport-shape" + (sport === "nhl" ? " active" : "")} onClick={() => chooseSport("nhl")} aria-pressed={sport === "nhl"} aria-label="Hockey side"><span className="shape puck" aria-hidden="true" /><em>NHL</em></button><button type="button" className={"sport-shape" + (sport === "nfl" ? " active" : "")} onClick={() => chooseSport("nfl")} aria-pressed={sport === "nfl"} aria-label="Football side"><span className="shape ball" aria-hidden="true" /><em>NFL</em></button></div><nav className="mode-tabs" aria-label="Data view"><button className={mode==="board"?"active":""} onClick={()=>setMode("board")}>{boardLabel}</button><button className={mode==="parlay"?"active":""} onClick={()=>setMode("parlay")}>Parlay{parlay.length > 0 ? ` (${parlay.length})` : ""}</button><button className={mode==="matchup"?"active":""} onClick={()=>setMode("matchup")}>Matchup</button><button className={mode==="rosters"?"active":""} onClick={()=>setMode("rosters")}>Players</button><button className={mode==="streaks"?"active":""} onClick={()=>setMode("streaks")}>Streaks</button><button className={mode==="standings"?"active":""} onClick={()=>setMode("standings")}>League</button><button className={mode==="watchlist"?"active":""} onClick={()=>setMode("watchlist")}>Watchlist</button><button className={mode==="settings"?"active":""} onClick={()=>setMode("settings")}>Settings</button></nav><TeamThemePicker sport={sport}/></div>{mode==="board"&&<ProView parlay={parlay} setParlay={setParlay} home sport={sport}/>} {mode==="parlay"&&<ParlayView parlay={parlay} setParlay={setParlay} sport={sport} onGoBoard={()=>setMode("board")}/>} {mode==="matchup"&&<MatchupView sport={sport}/>} {mode==="rosters"&&<RosterView parlay={parlay} setParlay={setParlay} sport={sport} teamFocus={teamFocus}/>} {mode==="streaks"&&<StreaksView sport={sport}/>} {mode==="standings"&&<LeagueView sport={sport}/>} {mode==="watchlist"&&<WatchlistView onViewTeam={viewTeam}/>} {mode==="settings"&&<SiteSettings/>}</main><BottomNav mode={mode} setMode={setMode} parlayCount={parlay.length}/></div>;
 }

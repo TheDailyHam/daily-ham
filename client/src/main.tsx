@@ -21,6 +21,17 @@ createRoot(rootEl).render(
   </StrictMode>,
 );
 
+// Apply saved display preferences before first paint.
+try {
+  const brightness = Number(localStorage.getItem("dh-brightness"));
+  if (Number.isFinite(brightness) && brightness >= 40 && brightness <= 100) {
+    document.documentElement.style.setProperty("--app-brightness", String(brightness / 100));
+  }
+  if (localStorage.getItem("dh-smooth-scroll") === "off") {
+    document.documentElement.style.scrollBehavior = "auto";
+  }
+} catch { /* best-effort */ }
+
 // Register the service worker for installability and offline shell.
 if ("serviceWorker" in navigator && import.meta.env.PROD) {
   window.addEventListener("load", () => {

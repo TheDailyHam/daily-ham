@@ -782,3 +782,17 @@ body[data-sport="nhl"] .mode-tabs button.active { background: var(--accent); col
   .more-sheet button.active strong { color: var(--accent); }
 }
 
+/* Display preferences */
+:root { --app-brightness: 1; }
+.app-root { filter: brightness(var(--app-brightness)); }
+.display-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.display-row > div { display: grid; gap: 2px; }
+.display-row strong { font-size: 15px; }
+.display-row small { color: var(--muted); font-size: 12px; }
+.display-value { font-weight: 900; font-size: 15px; color: var(--accent); flex: none; }
+.display-slider { width: 100%; accent-color: var(--accent); height: 32px; cursor: pointer; }
+.toggle-switch { width: 52px; height: 30px; border-radius: 15px; border: 0; background: var(--rule); cursor: pointer; position: relative; flex: none; transition: background .2s; }
+.toggle-switch i { position: absolute; top: 3px; left: 3px; width: 24px; height: 24px; border-radius: 50%; background: #fff; transition: left .2s; font-style: normal; }
+.toggle-switch.on { background: var(--green); }
+.toggle-switch.on i { left: 25px; }
+
