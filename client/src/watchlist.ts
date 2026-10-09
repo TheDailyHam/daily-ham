@@ -75,6 +75,14 @@ function persist(list: WatchedEntry[]): void {
   }
 }
 
+function toast(message: string): void {
+  try {
+    window.dispatchEvent(new CustomEvent("dh-toast", { detail: message }));
+  } catch {
+    /* best-effort */
+  }
+}
+
 function entryKey(entry: WatchedEntry): string {
   return entry.kind === "player"
     ? `player:${entry.sport}:${entry.playerId}`
@@ -96,13 +104,16 @@ export function toggleWatch(entry: WatchedEntry): boolean {
   const list = loadWatchlist();
   const key = entryKey(entry);
   const index = list.findIndex((p) => entryKey(p) === key);
+  const label = entry.kind === "player" ? entry.name : entry.name;
   if (index >= 0) {
     list.splice(index, 1);
     persist(list);
+    toast(`Removed ${label} from your watchlist`);
     return false;
   }
   list.push(entry);
   persist(list);
+  toast(`★ ${label} added to your watchlist`);
   return true;
 }
 

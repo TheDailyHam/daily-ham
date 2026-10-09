@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 // Local replacement for the platform's SafeAreaTopScrim: a slim bar that
 // occupies the device's top safe-area inset (notch / status bar) so content
@@ -686,6 +686,26 @@ function TeamWatchStar({ sport, team, name }: { sport: League; team: string; nam
   return <button type="button" className={"watch-star" + (starred ? " active" : "")} onClick={() => toggleWatch({ kind: "team", sport, team, name })} aria-label={starred ? `Remove ${name} from watchlist` : `Watch ${name}`} aria-pressed={starred}>★</button>;
 }
 
+function ToastHost() {
+  const [message, setMessage] = useState<string | null>(null);
+  const timer = useRef<number | null>(null);
+  useEffect(() => {
+    const onToast = (event: Event) => {
+      const detail = (event as CustomEvent).detail;
+      if (typeof detail !== "string" || !detail) return;
+      setMessage(detail);
+      if (timer.current) window.clearTimeout(timer.current);
+      timer.current = window.setTimeout(() => setMessage(null), 2200);
+    };
+    window.addEventListener("dh-toast", onToast);
+    return () => {
+      window.removeEventListener("dh-toast", onToast);
+      if (timer.current) window.clearTimeout(timer.current);
+    };
+  }, []);
+  return <div className={"dh-toast" + (message ? " show" : "")} role="status" aria-live="polite">{message ?? ""}</div>;
+}
+
 function TeamThemePicker({ sport }: { sport: Sport }) {
   const [open, setOpen] = useState(false);
   const [favs, setFavs] = useState<LeagueFavorites>(() => loadFavorites());
@@ -991,6 +1011,7 @@ function NflHotStreaksView() {
 function WatchlistView({ onViewTeam }: { onViewTeam: (sport: League, team: string) => void }) {
   const [list, setList] = useState<WatchedEntry[]>(() => loadWatchlist());
   const [selected, setSelected] = useState<{ sport: League; player: { id: number; name: string; position: string; team: string } } | null>(null);
+  const [teamSheet, setTeamSheet] = useState<{ sport: League; team: string } | null>(null);
   useEffect(() => {
     const onChange = () => setList(loadWatchlist());
     window.addEventListener("dh-watchlist-change", onChange);
@@ -1020,10 +1041,10 @@ function WatchlistView({ onViewTeam }: { onViewTeam: (sport: League, team: strin
     <div className="watchlist-grid">{list.map((entry) => {
       const theme = themeOf(entry);
       const key = entry.kind === "player" ? `player-${entry.sport}-${entry.playerId}` : `team-${entry.sport}-${entry.team}`;
-      const sub = entry.kind === "player" ? `${entry.team} · ${entry.position} · ${entry.sport.toUpperCase()}` : `${entry.sport.toUpperCase()} · tap for roster`;
+      const sub = entry.kind === "player" ? `${entry.team} · ${entry.position} · ${entry.sport.toUpperCase()}` : `${entry.sport.toUpperCase()} · tap for depth chart & stats`;
       const label = entry.kind === "player" ? entry.name : teamName(entry);
       return <article className="watch-card" key={key} style={theme ? ({ "--team-color": theme.color } as CSSProperties) : undefined}>
-        <button className="watch-open" onClick={() => entry.kind === "player" ? openPlayer(entry) : onViewTeam(entry.sport, entry.team)} aria-label={entry.kind === "player" ? `Open ${entry.name} stat file` : `Open ${label} roster`}>
+        <button className="watch-open" onClick={() => entry.kind === "player" ? openPlayer(entry) : setTeamSheet({ sport: entry.sport, team: entry.team })} aria-label={entry.kind === "player" ? `Open ${entry.name} stat file` : `Open ${label} team file`}>
           <span className="watch-team-bar" aria-hidden="true" />
           <span className="watch-player"><strong>{label}</strong><small>{sub}</small></span>
           <span className="watch-league">{entry.kind === "team" ? "TEAM" : entry.sport === "nfl" ? "NFL" : "NHL"}</span>
@@ -1036,7 +1057,116 @@ function WatchlistView({ onViewTeam }: { onViewTeam: (sport: League, team: strin
       const found = nhlRoster.data.players.find((p) => p.id === selected.player.id);
       return found ? <PlayerStatsSheet player={found} team={nhlPlayer?.team as TeamCode} onClose={() => { setSelected(null); setNhlPlayer(null); }} /> : null;
     })()}
+    {teamSheet && <TeamDetailSheet sport={teamSheet.sport} team={teamSheet.team} onClose={() => setTeamSheet(null)} onViewRoster={onViewTeam} />}
   </section>;
+}
+
+const NFL_DEPTH_GROUPS: { title: string; positions: string[] }[] = [
+  { title: "Quarterbacks", positions: ["QB"] },
+  { title: "Running Backs", positions: ["RB", "FB"] },
+  { title: "Wide Receivers", positions: ["WR"] },
+  { title: "Tight Ends", positions: ["TE"] },
+  { title: "Offensive Line", positions: ["C", "G", "T", "OT", "OG", "OL"] },
+  { title: "Defensive Line", positions: ["DE", "DT", "NT", "DL", "EDGE"] },
+  { title: "Linebackers", positions: ["LB", "ILB", "OLB", "MLB"] },
+  { title: "Secondary", positions: ["CB", "S", "FS", "SS", "DB", "NB"] },
+  { title: "Special Teams", positions: ["K", "P", "LS", "KR", "PR"] },
+];
+
+function TeamDetailSheet({ sport, team, onClose, onViewRoster }: { sport: League; team: string; onClose: () => void; onViewRoster: (sport: League, team: string) => void }) {
+  const [tab, setTab] = useState<"depth" | "stats">("depth");
+  const [selectedNfl, setSelectedNfl] = useState<NflPlayer | null>(null);
+  const [selectedNhl, setSelectedNhl] = useState<NhlPlayer | null>(null);
+  const theme = themeFor(sport, team);
+  const teamName = theme?.name ?? team;
+
+  const nflRoster = useQuery({ queryKey: ["nfl-roster", team], queryFn: () => api.getNflRoster({ team: team as NflTeamCode }), enabled: sport === "nfl", retry: 1 });
+  const nhlRoster = useQuery({ queryKey: ["nhl-roster", team], queryFn: () => api.getNhlRoster({ team: team as TeamCode }), enabled: sport === "nhl", retry: 1 });
+  const nflOverview = useQuery({ queryKey: ["nfl-overview"], queryFn: () => api.getNflOverview({}), enabled: sport === "nfl", staleTime: 15 * 60 * 1000, retry: 1 });
+  const nhlOverview = useQuery({ queryKey: ["nhl-overview"], queryFn: () => api.getNhlOverview({}), enabled: sport === "nhl", staleTime: 15 * 60 * 1000, retry: 1 });
+
+  const nflStanding = nflOverview.data?.standings.find((row) => row.team === team);
+  const nhlStanding = nhlOverview.data?.standings.find((row) => row.team === team);
+
+  const nflGroups = useMemo(() => {
+    const players = nflRoster.data?.players ?? [];
+    return NFL_DEPTH_GROUPS.map((group) => ({
+      title: group.title,
+      players: players.filter((p) => group.positions.includes(p.position)).sort((a, b) => a.position.localeCompare(b.position) || a.name.localeCompare(b.name)),
+    })).filter((group) => group.players.length > 0);
+  }, [nflRoster.data]);
+
+  const nhlGroups = useMemo(() => {
+    const players = nhlRoster.data?.players ?? [];
+    const forwards = players.filter((p) => ["C", "LW", "RW"].includes(p.position)).sort((a, b) => (b.points ?? 0) - (a.points ?? 0));
+    const defense = players.filter((p) => p.position === "D").sort((a, b) => (b.points ?? 0) - (a.points ?? 0));
+    const goalies = players.filter((p) => p.position === "G").sort((a, b) => (b.games ?? 0) - (a.games ?? 0));
+    return [
+      { title: "Forwards", players: forwards },
+      { title: "Defensemen", players: defense },
+      { title: "Goalies", players: goalies },
+    ].filter((group) => group.players.length > 0);
+  }, [nhlRoster.data]);
+
+  const loading = sport === "nfl" ? nflRoster.isPending : nhlRoster.isPending;
+  const groups = sport === "nfl" ? nflGroups : nhlGroups;
+
+  const recordLine = sport === "nfl"
+    ? nflStanding ? `${nflStanding.wins}–${nflStanding.losses}${nflStanding.ties ? `–${nflStanding.ties}` : ""}` : "—"
+    : nhlStanding ? `${nhlStanding.wins}–${nhlStanding.losses}–${nhlStanding.otLosses}` : "—";
+  const division = (sport === "nfl" ? nflStanding?.division : nhlStanding?.division) ?? "";
+
+  return <div className="sheet-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <section className="sheet team-sheet" role="dialog" aria-modal="true" aria-labelledby="team-detail-title" style={theme ? ({ "--team-color": theme.color } as CSSProperties) : undefined}>
+      <button className="close" onClick={onClose} aria-label="Close team detail">×</button>
+      <span className="watch-team-bar sheet-team-bar" aria-hidden="true" />
+      <p className="kicker">{sport.toUpperCase()} TEAM FILE</p>
+      <div className="team-sheet-head">
+        <h2 id="team-detail-title">{teamName}</h2>
+        <TeamWatchStar sport={sport} team={team} name={teamName} />
+      </div>
+      <p className="matchup">{recordLine}{division ? ` · ${division}` : ""}</p>
+      <button className="refresh" onClick={() => { onViewRoster(sport, team); onClose(); }}>Open full roster →</button>
+      <div className="metric-tabs" role="tablist" aria-label="Team detail">
+        <button className={tab === "depth" ? "active" : ""} onClick={() => setTab("depth")}>Depth chart</button>
+        <button className={tab === "stats" ? "active" : ""} onClick={() => setTab("stats")}>Team stats</button>
+      </div>
+      {tab === "depth" && (loading ? <div className="loading"><span />Loading roster…</div> :
+        <div className="depth-chart">
+          <p className="depth-note">Roster organized by position from official {sport === "nfl" ? "ESPN" : "NHL"} data. Tap a player for the full stat file.</p>
+          {groups.map((group) => <details className="depth-group" key={group.title} open={groups.length <= 4}>
+            <summary>{group.title} <span>{group.players.length}</span></summary>
+            <div className="depth-players">
+              {group.players.map((player) => <button key={player.id} className="depth-player" onClick={() => sport === "nfl" ? setSelectedNfl(player as NflPlayer) : setSelectedNhl(player as NhlPlayer)}>
+                <b>{(player as { jersey?: string | null }).jersey ? `#${(player as { jersey?: string | null }).jersey} ` : ""}{(player as { number?: number | null }).number ? `#${(player as { number?: number | null }).number} ` : ""}{player.name}</b>
+                <small>{player.position}{sport === "nhl" && (player as NhlPlayer).points !== undefined && (player as NhlPlayer).position !== "G" ? ` · ${(player as NhlPlayer).points} PTS` : ""}</small>
+                <span className="depth-tap">›</span>
+              </button>)}
+            </div>
+          </details>)}
+        </div>)}
+      {tab === "stats" && <div className="team-stats-grid">
+        {sport === "nfl" && nflStanding ? <>
+          <div><span>Record</span><strong>{nflStanding.wins}–{nflStanding.losses}{nflStanding.ties ? `–${nflStanding.ties}` : ""}</strong></div>
+          <div><span>Points for</span><strong>{nflStanding.pointsFor}</strong></div>
+          <div><span>Points against</span><strong>{nflStanding.pointsAgainst}</strong></div>
+          <div><span>Differential</span><strong className={nflStanding.pointsFor - nflStanding.pointsAgainst > 0 ? "positive" : ""}>{nflStanding.pointsFor - nflStanding.pointsAgainst > 0 ? "+" : ""}{nflStanding.pointsFor - nflStanding.pointsAgainst}</strong></div>
+          <div><span>Division</span><strong>{nflStanding.division || "—"}</strong></div>
+          <div><span>Conference</span><strong>{nflStanding.conference || "—"}</strong></div>
+        </> : sport === "nhl" && nhlStanding ? <>
+          <div><span>Record</span><strong>{nhlStanding.wins}–{nhlStanding.losses}–{nhlStanding.otLosses}</strong></div>
+          <div><span>Points</span><strong>{nhlStanding.points}</strong></div>
+          <div><span>Goals for</span><strong>{nhlStanding.goalsFor}</strong></div>
+          <div><span>Goals against</span><strong>{nhlStanding.goalsAgainst}</strong></div>
+          <div><span>Differential</span><strong className={nhlStanding.goalsFor - nhlStanding.goalsAgainst > 0 ? "positive" : ""}>{nhlStanding.goalsFor - nhlStanding.goalsAgainst > 0 ? "+" : ""}{nhlStanding.goalsFor - nhlStanding.goalsAgainst}</strong></div>
+          <div><span>Streak</span><strong>{nhlStanding.streak || "—"}</strong></div>
+        </> : <div className="history-empty"><strong>Team stats unavailable.</strong><span>The league feed did not answer.</span></div>}
+        <div className="source-box"><span>Source</span><span>{sport === "nfl" ? "ESPN NFL data" : "NHL official data"}</span></div>
+      </div>}
+    </section>
+    {selectedNfl && <NflPlayerStatsSheet player={{ id: selectedNfl.id, name: selectedNfl.name, jersey: selectedNfl.jersey, position: selectedNfl.position, group: selectedNfl.group, games: null, passYards: null, passTds: null, interceptions: null, rushYards: null, rushTds: null, receptions: null, recYards: null, recTds: null }} team={team as NflTeamCode} onClose={() => setSelectedNfl(null)} />}
+    {selectedNhl && <PlayerStatsSheet player={selectedNhl} team={team as TeamCode} onClose={() => setSelectedNhl(null)} />}
+  </div>;
 }
 
 export function App(){
@@ -1060,5 +1190,5 @@ export function App(){
     setMode("rosters");
   }
   const boardLabel = sport === "nfl" ? "Gridiron" : "Ice board";
-  return <div className="app-shell"><SafeAreaTopScrim backgroundColor="var(--paper)"/><main><div className="topbar"><div className="sport-switch" role="group" aria-label="League"><button type="button" className={"sport-shape" + (sport === "nhl" ? " active" : "")} onClick={() => chooseSport("nhl")} aria-pressed={sport === "nhl"} aria-label="Hockey side"><span className="shape puck" aria-hidden="true" /><em>NHL</em></button><button type="button" className={"sport-shape" + (sport === "nfl" ? " active" : "")} onClick={() => chooseSport("nfl")} aria-pressed={sport === "nfl"} aria-label="Football side"><span className="shape ball" aria-hidden="true" /><em>NFL</em></button></div><nav className="mode-tabs" aria-label="Data view"><button className={mode==="board"?"active":""} onClick={()=>setMode("board")}>{boardLabel}</button><button className={mode==="matchup"?"active":""} onClick={()=>setMode("matchup")}>Matchup</button><button className={mode==="rosters"?"active":""} onClick={()=>setMode("rosters")}>Players</button><button className={mode==="hot"?"active":""} onClick={()=>setMode("hot")}>Hot streaks</button><button className={mode==="standings"?"active":""} onClick={()=>setMode("standings")}>League</button><button className={mode==="watchlist"?"active":""} onClick={()=>setMode("watchlist")}>Watchlist</button><button className={mode==="settings"?"active":""} onClick={()=>setMode("settings")}>Settings</button></nav><TeamThemePicker sport={sport}/></div>{mode==="board"&&<ProView parlay={parlay} setParlay={setParlay} home sport={sport}/>} {mode==="matchup"&&<MatchupView sport={sport}/>} {mode==="rosters"&&<RosterView parlay={parlay} setParlay={setParlay} sport={sport} teamFocus={teamFocus}/>} {mode==="hot"&&<HotStreaksView sport={sport}/>} {mode==="standings"&&<LeagueView sport={sport}/>} {mode==="watchlist"&&<WatchlistView onViewTeam={viewTeam}/>} {mode==="settings"&&<SettingsView/>}</main></div>;
+  return <div className="app-shell"><SafeAreaTopScrim backgroundColor="var(--paper)"/><ToastHost/><main><div className="topbar"><div className="sport-switch" role="group" aria-label="League"><button type="button" className={"sport-shape" + (sport === "nhl" ? " active" : "")} onClick={() => chooseSport("nhl")} aria-pressed={sport === "nhl"} aria-label="Hockey side"><span className="shape puck" aria-hidden="true" /><em>NHL</em></button><button type="button" className={"sport-shape" + (sport === "nfl" ? " active" : "")} onClick={() => chooseSport("nfl")} aria-pressed={sport === "nfl"} aria-label="Football side"><span className="shape ball" aria-hidden="true" /><em>NFL</em></button></div><nav className="mode-tabs" aria-label="Data view"><button className={mode==="board"?"active":""} onClick={()=>setMode("board")}>{boardLabel}</button><button className={mode==="matchup"?"active":""} onClick={()=>setMode("matchup")}>Matchup</button><button className={mode==="rosters"?"active":""} onClick={()=>setMode("rosters")}>Players</button><button className={mode==="hot"?"active":""} onClick={()=>setMode("hot")}>Hot streaks</button><button className={mode==="standings"?"active":""} onClick={()=>setMode("standings")}>League</button><button className={mode==="watchlist"?"active":""} onClick={()=>setMode("watchlist")}>Watchlist</button><button className={mode==="settings"?"active":""} onClick={()=>setMode("settings")}>Settings</button></nav><TeamThemePicker sport={sport}/></div>{mode==="board"&&<ProView parlay={parlay} setParlay={setParlay} home sport={sport}/>} {mode==="matchup"&&<MatchupView sport={sport}/>} {mode==="rosters"&&<RosterView parlay={parlay} setParlay={setParlay} sport={sport} teamFocus={teamFocus}/>} {mode==="hot"&&<HotStreaksView sport={sport}/>} {mode==="standings"&&<LeagueView sport={sport}/>} {mode==="watchlist"&&<WatchlistView onViewTeam={viewTeam}/>} {mode==="settings"&&<SettingsView/>}</main></div>;
 }
