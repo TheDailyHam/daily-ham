@@ -590,12 +590,31 @@ h1, h2, h3 { font-family: Rockwell, Georgia, serif; margin: 0; }
 .welcome-sign .welcome-kicker { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
 /* NHL/NFL sport switch */
-.sport-switch { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--border); background: var(--surface); border-radius: 8px; padding: 3px; margin-bottom: 10px; }
-.sport-switch button { min-height: 40px; border: 0; background: transparent; color: var(--dim); font-weight: 900; font-size: 15px; letter-spacing: .12em; border-radius: 5px; cursor: pointer; }
-.sport-switch button.active { background: var(--accent); color: var(--paper); }
+/* League shapes: a puck for hockey, a football for football. Solid objects,
+   no half-filled boxes. */
+.sport-switch { display: flex; gap: 16px; background: none; border: none; padding: 0; margin-bottom: 14px; }
+.sport-shape { display: flex; flex-direction: column; align-items: center; gap: 6px; background: none; border: none; padding: 4px 6px; cursor: pointer; }
+.sport-shape .shape { display: block; transition: transform .15s ease, box-shadow .15s ease; }
+.sport-shape em { font-style: normal; font-size: 11px; font-weight: 900; letter-spacing: .22em; color: var(--dim); }
+.sport-shape .puck { width: 50px; height: 50px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #545454, #161616 72%); box-shadow: 0 4px 8px rgba(0,0,0,.35), inset 0 -4px 6px rgba(0,0,0,.55), inset 0 2px 3px rgba(255,255,255,.18); }
+.sport-shape .ball { width: 70px; height: 46px; border-radius: 50%; background: radial-gradient(ellipse at 40% 32%, #a8703a, #5e3a17 78%); position: relative; box-shadow: 0 4px 8px rgba(0,0,0,.35), inset 0 -4px 7px rgba(0,0,0,.45), inset 0 2px 3px rgba(255,255,255,.22); }
+.sport-shape .ball::after { content: ""; position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); width: 32px; height: 12px; background: repeating-linear-gradient(90deg, #f7f2e7 0 2px, transparent 2px 7px), linear-gradient(#f7f2e7,#f7f2e7); background-size: 100% 6px, 100% 2px; background-position: center; background-repeat: no-repeat; }
+.sport-shape.active em { color: var(--accent); }
+.sport-shape.active .shape { transform: scale(1.08); box-shadow: 0 0 0 3px var(--accent), 0 4px 10px rgba(0,0,0,.4); }
 @media (min-width: 760px) {
-  .sport-switch { margin-bottom: 0; width: 180px; flex: none; }
-  .mode-tabs { grid-template-columns: repeat(7, 1fr); }
+  .sport-switch { margin-bottom: 0; flex: none; }
+}
+
+/* Mode tabs: solid shapes per sport, no container box.
+   Football side -> elliptical buttons. Hockey side -> vulcanized puck buttons. */
+.mode-tabs { display: flex; flex-wrap: wrap; gap: 8px; background: none; border: none; padding: 0; }
+.mode-tabs button { min-height: 44px; padding: 0 18px; font-weight: 800; font-size: 13px; cursor: pointer; }
+body[data-sport="nfl"] .mode-tabs button { border-radius: 50%; padding: 0 22px; border: 1px solid var(--border); background: var(--surface); color: var(--text); }
+body[data-sport="nfl"] .mode-tabs button.active { background: var(--accent); border-color: var(--accent); color: var(--paper); }
+body[data-sport="nhl"] .mode-tabs button { border-radius: 14px; border: none; border-bottom: 3px solid #000; background: linear-gradient(#3a3a3a, #171717); color: #f4f4f4; box-shadow: inset 0 1px 0 rgba(255,255,255,.16), 0 3px 6px rgba(0,0,0,.25); }
+body[data-sport="nhl"] .mode-tabs button.active { background: var(--accent); color: var(--paper); border-bottom-color: rgba(0,0,0,.4); }
+@media (min-width: 760px) {
+  .topbar { align-items: center; }
 }
 
 /* League labels inside the team picker */
