@@ -625,6 +625,12 @@ body[data-sport="nhl"] .mode-tabs button.active { background: var(--accent); col
 /* Watchlist */
 .roster-row-wrap { position: relative; }
 .roster-row-wrap .roster-row { width: 100%; text-align: left; padding-right: 44px; }
+.hot-row-wrap { position: relative; }
+.hot-row-wrap .hot-row { padding-right: 44px; }
+.hot-row-wrap .watch-star { position: static; transform: none; width: 30px; height: 30px; font-size: 17px; flex: none; }
+.standings-row > span:first-child { grid-template-columns: 22px minmax(0,1fr) auto; }
+.standings-star { grid-column: 3; grid-row: 1 / span 2; display: flex; align-items: center; }
+.standings-star .watch-star { position: static; transform: none; width: 28px; height: 28px; font-size: 16px; }
 .watch-star { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 36px; height: 36px; border: 0; background: transparent; color: var(--dim); font-size: 20px; cursor: pointer; opacity: .45; }
 .watch-star.active { color: var(--accent); opacity: 1; }
 .watchlist-section { display: grid; gap: 14px; }

@@ -10,7 +10,7 @@ import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieCh
 import { api, type ApiRequest, type ApiResponse } from "./api";
 import logo from "./assets/daily-ham-logo.jpg";
 import { LEAGUE_THEMES, applyLeagueTheme, loadFavorites, saveFavorite, themeFor, type League, type LeagueFavorites } from "./teams";
-import { isWatched, loadWatchlist, removeWatched, toggleWatch, type WatchedPlayer } from "./watchlist";
+import { isWatchedPlayer, isWatchedTeam, loadWatchlist, removeWatchedEntry, toggleWatch, type WatchedEntry, type WatchedPlayer, type WatchedTeam } from "./watchlist";
 
 type Sport = League;
 type Mode = "board" | "matchup" | "rosters" | "hot" | "standings" | "watchlist" | "settings";
@@ -257,9 +257,12 @@ function PlayerStatsSheet({ player, team, onClose }: { player: NhlPlayer; team: 
   </div>;
 }
 
-function RosterView({ parlay, setParlay, sport }: { parlay: ParlayPick[]; setParlay: (next: ParlayPick[]) => void; sport: Sport }) {
-  if (sport === "nfl") return <NflRosterView parlay={parlay} setParlay={setParlay} />;
+function RosterView({ parlay, setParlay, sport, teamFocus }: { parlay: ParlayPick[]; setParlay: (next: ParlayPick[]) => void; sport: Sport; teamFocus: { sport: League; team: string; nonce: number } | null }) {
+  if (sport === "nfl") return <NflRosterView parlay={parlay} setParlay={setParlay} teamFocus={teamFocus} />;
   const [team, setTeam] = useState<TeamCode>("WSH");
+  useEffect(() => {
+    if (teamFocus && teamFocus.sport === "nhl" && (teams as { code: string }[]).some((t) => t.code === teamFocus.team)) setTeam(teamFocus.team as TeamCode);
+  }, [teamFocus]);
   const [selectedPlayer, setSelectedPlayer] = useState<NhlPlayer | null>(null);
   const nhl = useQuery({ queryKey: ["nhl-roster", team], queryFn: () => api.getNhlRoster({ team }) });
   const teamBoard = useQuery({ queryKey: ["premium-board", "nhl"], queryFn: () => api.getPremiumBoard({ sport: "nhl" }), retry: false });
@@ -283,7 +286,7 @@ function RosterView({ parlay, setParlay, sport }: { parlay: ParlayPick[]; setPar
           <div className="table-scroll"><div className="roster-table" role="table">
             <div className="roster-header" role="row"><span>Player</span><span>GP</span><span>G</span><span>A</span><span>PTS</span><span>SOG</span></div>
             {nhl.data.players.map((player) => {
-              const starred = isWatched("nhl", player.id);
+              const starredEntry = { playerId: player.id, team, name: player.name, position: player.position };
               return <div className="roster-row-wrap" key={player.id}>
               <button className="roster-row" role="row" onClick={() => setSelectedPlayer(player)} aria-label={`Open ${player.name} game log and charts`}>
                 <span><b>{player.number !== null ? `#${player.number} ` : ""}{player.name}</b><small>{player.position} · {player.shoots ?? "—"} shot · {player.height ?? "—"} in · {player.weight ?? "—"} lb · tap for game log</small></span>
@@ -293,7 +296,7 @@ function RosterView({ parlay, setParlay, sport }: { parlay: ParlayPick[]; setPar
                   <><span data-label="GP">{player.games ?? "—"}</span><span data-label="G">{player.goals ?? "—"}</span><span data-label="A">{player.assists ?? "—"}</span><span data-label="PTS">{player.points ?? "—"}</span><span data-label="SOG">{player.shots ?? "—"}</span></>
                 )}
               </button>
-              <button type="button" className={"watch-star" + (starred ? " active" : "")} onClick={() => toggleWatch({ sport: "nhl", playerId: player.id, team, name: player.name, position: player.position })} aria-label={starred ? `Remove ${player.name} from watchlist` : `Watch ${player.name}`} aria-pressed={starred}>★</button>
+              <PlayerWatchStar sport="nhl" playerId={starredEntry.playerId} team={starredEntry.team} name={starredEntry.name} position={starredEntry.position} />
               </div>;
             })}
           </div></div>
@@ -441,7 +444,7 @@ function LeagueView({ sport }: { sport: Sport }) {
   if (overview.isPending) return <div className="loading"><span />Loading NHL schedule and standings…</div>;
   if (overview.isError || !overview.data) return <div className="error-state"><h2>League center is between shifts.</h2><p>The official NHL feed did not answer.</p><button onClick={() => overview.refetch()}>Retry</button></div>;
   const standings = overview.data.standings.filter((row) => conference === "All" || row.conference === conference);
-  return <><ScheduleStrip sport="nhl"/><section className="standings-section"><div className="section-heading"><div><p className="kicker">LEAGUE TABLE</p><h3>2026–27 standings</h3></div><span>{overview.data.standings.length} clubs</span></div><div className="metric-tabs"><button className={conference === "All" ? "active" : ""} onClick={() => setConference("All")}>All</button>{Array.from(new Set(overview.data.standings.map((row) => row.conference))).filter(Boolean).map((name) => <button key={name} className={conference === name ? "active" : ""} onClick={() => setConference(name)}>{name}</button>)}</div><div className="standings-scroll"><div className="standings-table" role="table"><div className="standings-row header" role="row"><span>Team</span><span>GP</span><span>W</span><span>L</span><span>OT</span><span>PTS</span><span>DIFF</span></div>{standings.map((row, index) => <div className="standings-row" role="row" key={row.team}><span><b>{index + 1}</b><strong>{row.name}</strong><small>{row.division}</small></span><span>{row.gamesPlayed}</span><span>{row.wins}</span><span>{row.losses}</span><span>{row.otLosses}</span><span><b>{row.points}</b></span><span className={row.goalsFor - row.goalsAgainst > 0 ? "positive" : ""}>{row.goalsFor - row.goalsAgainst > 0 ? "+" : ""}{row.goalsFor - row.goalsAgainst}</span></div>)}</div></div><div className="source-box"><span>Source</span><a href={overview.data.standingsSourceUrl} target="_blank" rel="noreferrer">NHL official standings ↗</a><small>Goals differential is computed from the listed official totals.</small></div></section></>;
+  return <><ScheduleStrip sport="nhl"/><section className="standings-section"><div className="section-heading"><div><p className="kicker">LEAGUE TABLE</p><h3>2026–27 standings</h3></div><span>{overview.data.standings.length} clubs</span></div><div className="metric-tabs"><button className={conference === "All" ? "active" : ""} onClick={() => setConference("All")}>All</button>{Array.from(new Set(overview.data.standings.map((row) => row.conference))).filter(Boolean).map((name) => <button key={name} className={conference === name ? "active" : ""} onClick={() => setConference(name)}>{name}</button>)}</div><div className="standings-scroll"><div className="standings-table" role="table"><div className="standings-row header" role="row"><span>Team</span><span>GP</span><span>W</span><span>L</span><span>OT</span><span>PTS</span><span>DIFF</span></div>{standings.map((row, index) => <div className="standings-row" role="row" key={row.team}><span><b>{index + 1}</b><strong>{row.name}</strong><small>{row.division}</small><span className="standings-star"><TeamWatchStar sport="nhl" team={row.team} name={row.name} /></span></span><span>{row.gamesPlayed}</span><span>{row.wins}</span><span>{row.losses}</span><span>{row.otLosses}</span><span><b>{row.points}</b></span><span className={row.goalsFor - row.goalsAgainst > 0 ? "positive" : ""}>{row.goalsFor - row.goalsAgainst > 0 ? "+" : ""}{row.goalsFor - row.goalsAgainst}</span></div>)}</div></div><div className="source-box"><span>Source</span><a href={overview.data.standingsSourceUrl} target="_blank" rel="noreferrer">NHL official standings ↗</a><small>Goals differential is computed from the listed official totals.</small></div></section></>;
 }
 
 function hotPlayerRef(row: HotStreaks["players"][number]): NhlPlayer {
@@ -462,7 +465,7 @@ function HotStreaksView({ sport }: { sport: Sport }) {
     if (category === "Goalies") return (b.lastFiveSavePct ?? -1) - (a.lastFiveSavePct ?? -1);
     return b.heatScore - a.heatScore;
   }).filter((row) => category !== "Goalies" || row.lastFiveSavePct !== null);
-  return <section className="hot-section"><div className="roster-title"><div><p className="kicker">HOT STREAKS</p><h2>Who’s cooking right now</h2><p className="roster-intro">Every qualifying streak is calculated from official recent NHL boxscores. Tap a player for the full stat file.</p></div>{hot.data && <div className="roster-update"><span>Updated {dateTime(hot.data.fetchedAt)}</span><button className="refresh" onClick={() => refresh.mutate()} disabled={refresh.isPending}>{refresh.isPending ? "Refreshing…" : "Refresh streaks"}</button></div>}</div><div className="metric-tabs hot-tabs">{["Heat index","Point streak","Goal streak","Last-5 points","Last-5 goals","Goalies"].map((name) => <button key={name} className={category === name ? "active" : ""} onClick={() => setCategory(name)}>{name}</button>)}</div>{hot.isPending ? <div className="loading"><span />Reading recent NHL boxscores…</div> : hot.isError ? <div className="error-state"><h2>Streak board unavailable.</h2><p>The official boxscore feed did not answer.</p><button onClick={() => hot.refetch()}>Retry</button></div> : players.length === 0 ? <div className="history-empty"><strong>No qualifying streaks in the official window.</strong><span>Only real players with at least two recent appearances and a qualifying hot signal are shown.</span></div> : <div className="hot-list">{players.map((row, index) => <button className="hot-row" key={row.playerId} onClick={() => setSelected({ player: hotPlayerRef(row), team: row.team })} aria-label={`Open ${row.name} full stat file`}><span className="hot-rank">#{index + 1}</span><span className="hot-player"><strong>{row.name}</strong><small>{row.team} · {row.position}</small></span><span className="streak-badges">{row.pointStreak >= 2 && <b>{row.pointStreak}G point streak</b>}{row.goalStreak >= 2 && <b>{row.goalStreak}G goal streak</b>}{row.lastFiveSavePct !== null && <b>{(row.lastFiveSavePct * 100).toFixed(1)} SV%</b>}</span><span className="hot-totals"><b>{row.lastFivePoints} PTS</b><small>{row.lastFiveGoals} G · last {row.games.length}</small></span><span className="spark-games">{row.games.map((game) => <i key={game.gameId} title={`${game.date} vs ${game.opponent}`}>{row.position === "G" ? `${game.saves ?? "—"} SV` : `${game.goals}G ${game.assists}A`}</i>)}</span></button>)}</div>}{hot.data && <div className="source-box"><span>Source</span><a href={hot.data.sourceUrl} target="_blank" rel="noreferrer">NHL official boxscores ↗</a><small>{gameDate(hot.data.windowStart)}–{gameDate(hot.data.windowEnd)} · refreshed daily without sportsbook quota</small></div>}{selected && <PlayerStatsSheet player={selected.player} team={selected.team} onClose={() => setSelected(null)}/>}</section>;
+  return <section className="hot-section"><div className="roster-title"><div><p className="kicker">HOT STREAKS</p><h2>Who’s cooking right now</h2><p className="roster-intro">Every qualifying streak is calculated from official recent NHL boxscores. Tap a player for the full stat file.</p></div>{hot.data && <div className="roster-update"><span>Updated {dateTime(hot.data.fetchedAt)}</span><button className="refresh" onClick={() => refresh.mutate()} disabled={refresh.isPending}>{refresh.isPending ? "Refreshing…" : "Refresh streaks"}</button></div>}</div><div className="metric-tabs hot-tabs">{["Heat index","Point streak","Goal streak","Last-5 points","Last-5 goals","Goalies"].map((name) => <button key={name} className={category === name ? "active" : ""} onClick={() => setCategory(name)}>{name}</button>)}</div>{hot.isPending ? <div className="loading"><span />Reading recent NHL boxscores…</div> : hot.isError ? <div className="error-state"><h2>Streak board unavailable.</h2><p>The official boxscore feed did not answer.</p><button onClick={() => hot.refetch()}>Retry</button></div> : players.length === 0 ? <div className="history-empty"><strong>No qualifying streaks in the official window.</strong><span>Only real players with at least two recent appearances and a qualifying hot signal are shown.</span></div> : <div className="hot-list">{players.map((row, index) => <div className="hot-row-wrap" key={row.playerId}><button className="hot-row" onClick={() => setSelected({ player: hotPlayerRef(row), team: row.team })} aria-label={`Open ${row.name} full stat file`}><span className="hot-rank">#{index + 1}</span><span className="hot-player"><strong>{row.name}</strong><small>{row.team} · {row.position}</small></span><span className="streak-badges">{row.pointStreak >= 2 && <b>{row.pointStreak}G point streak</b>}{row.goalStreak >= 2 && <b>{row.goalStreak}G goal streak</b>}{row.lastFiveSavePct !== null && <b>{(row.lastFiveSavePct * 100).toFixed(1)} SV%</b>}</span><span className="hot-totals"><b>{row.lastFivePoints} PTS</b><small>{row.lastFiveGoals} G · last {row.games.length}</small></span><span className="spark-games">{row.games.map((game) => <i key={game.gameId} title={`${game.date} vs ${game.opponent}`}>{row.position === "G" ? `${game.saves ?? "—"} SV` : `${game.goals}G ${game.assists}A`}</i>)}</span></button><PlayerWatchStar sport="nhl" playerId={row.playerId} team={row.team} name={row.name} position={row.position} /></div>)}</div>}{hot.data && <div className="source-box"><span>Source</span><a href={hot.data.sourceUrl} target="_blank" rel="noreferrer">NHL official boxscores ↗</a><small>{gameDate(hot.data.windowStart)}–{gameDate(hot.data.windowEnd)} · refreshed daily without sportsbook quota</small></div>}{selected && <PlayerStatsSheet player={selected.player} team={selected.team} onClose={() => setSelected(null)}/>}</section>;
 }
 
 function percentage(value: number | null): string { return value === null ? "—" : `${Math.round(value * 100)}%`; }
@@ -661,6 +664,28 @@ function WelcomeBanner({ sport }: { sport: Sport }) {
   </section>;
 }
 
+function PlayerWatchStar({ sport, playerId, team, name, position }: { sport: League; playerId: number; team: string; name: string; position: string }) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const onChange = () => setTick((n) => n + 1);
+    window.addEventListener("dh-watchlist-change", onChange);
+    return () => window.removeEventListener("dh-watchlist-change", onChange);
+  }, []);
+  const starred = isWatchedPlayer(sport, playerId);
+  return <button type="button" className={"watch-star" + (starred ? " active" : "")} onClick={() => toggleWatch({ kind: "player", sport, playerId, team, name, position })} aria-label={starred ? `Remove ${name} from watchlist` : `Watch ${name}`} aria-pressed={starred}>★</button>;
+}
+
+function TeamWatchStar({ sport, team, name }: { sport: League; team: string; name: string }) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const onChange = () => setTick((n) => n + 1);
+    window.addEventListener("dh-watchlist-change", onChange);
+    return () => window.removeEventListener("dh-watchlist-change", onChange);
+  }, []);
+  const starred = isWatchedTeam(sport, team);
+  return <button type="button" className={"watch-star" + (starred ? " active" : "")} onClick={() => toggleWatch({ kind: "team", sport, team, name })} aria-label={starred ? `Remove ${name} from watchlist` : `Watch ${name}`} aria-pressed={starred}>★</button>;
+}
+
 function TeamThemePicker({ sport }: { sport: Sport }) {
   const [open, setOpen] = useState(false);
   const [favs, setFavs] = useState<LeagueFavorites>(() => loadFavorites());
@@ -742,7 +767,7 @@ function NflLeagueView() {
     <div className="metric-tabs"><button className={conference === "All" ? "active" : ""} onClick={() => setConference("All")}>All</button>{["AFC", "NFC"].map((name) => <button key={name} className={conference === name ? "active" : ""} onClick={() => setConference(name)}>{name}</button>)}</div>
     <div className="standings-scroll"><div className="standings-table" role="table">
       <div className="standings-row header" role="row"><span>Team</span><span>W</span><span>L</span><span>T</span><span>PF</span><span>PA</span><span>DIFF</span></div>
-      {standings.map((row, index) => <div className="standings-row" role="row" key={row.team}><span><b>{index + 1}</b><strong>{row.name}</strong><small>{row.division}</small></span><span><b>{row.wins}</b></span><span>{row.losses}</span><span>{row.ties}</span><span>{row.pointsFor}</span><span>{row.pointsAgainst}</span><span className={row.pointsFor - row.pointsAgainst > 0 ? "positive" : ""}>{row.pointsFor - row.pointsAgainst > 0 ? "+" : ""}{row.pointsFor - row.pointsAgainst}</span></div>)}
+      {standings.map((row, index) => <div className="standings-row" role="row" key={row.team}><span><b>{index + 1}</b><strong>{row.name}</strong><small>{row.division}</small><span className="standings-star"><TeamWatchStar sport="nfl" team={row.team} name={row.name} /></span></span><span><b>{row.wins}</b></span><span>{row.losses}</span><span>{row.ties}</span><span>{row.pointsFor}</span><span>{row.pointsAgainst}</span><span className={row.pointsFor - row.pointsAgainst > 0 ? "positive" : ""}>{row.pointsFor - row.pointsAgainst > 0 ? "+" : ""}{row.pointsFor - row.pointsAgainst}</span></div>)}
     </div></div>
     <div className="source-box"><span>Source</span><a href={overview.data.standingsSourceUrl} target="_blank" rel="noreferrer">ESPN NFL standings ↗</a><small>Point differential is computed from the listed official totals.</small></div>
   </section></>;
@@ -889,8 +914,11 @@ function NflPlayerStatsSheet({ player, team, onClose }: { player: NflPlayer; tea
   </div>;
 }
 
-function NflRosterView({ parlay, setParlay }: { parlay: ParlayPick[]; setParlay: (next: ParlayPick[]) => void }) {
+function NflRosterView({ parlay, setParlay, teamFocus }: { parlay: ParlayPick[]; setParlay: (next: ParlayPick[]) => void; teamFocus: { sport: League; team: string; nonce: number } | null }) {
   const [team, setTeam] = useState<NflTeamCode>("KC");
+  useEffect(() => {
+    if (teamFocus && teamFocus.sport === "nfl" && nflTeams.some((t) => t.code === teamFocus.team)) setTeam(teamFocus.team as NflTeamCode);
+  }, [teamFocus]);
   const [selectedPlayer, setSelectedPlayer] = useState<NflPlayer | null>(null);
   const [watched, setWatched] = useState(0);
   const nfl = useQuery({ queryKey: ["nfl-roster", team], queryFn: () => api.getNflRoster({ team }) });
@@ -921,13 +949,13 @@ function NflRosterView({ parlay, setParlay }: { parlay: ParlayPick[]; setParlay:
           <div className="table-scroll"><div className="roster-table nfl-roster-table" role="table">
             <div className="roster-header" role="row"><span>Player</span><span>GP</span><span>Pass yds</span><span>Rush yds</span><span>Rec yds</span><span>TD</span></div>
             {nfl.data.players.map((player) => {
-              const starred = isWatched("nfl", player.id);
+              const starredEntry = { playerId: player.id, team, name: player.name, position: player.position };
               return <div className="roster-row-wrap" key={player.id}>
                 <button className="roster-row" role="row" onClick={() => setSelectedPlayer(player)} aria-label={`Open ${player.name} game log and charts`}>
                   <span><b>{player.jersey ? `#${player.jersey} ` : ""}{player.name}</b><small>{player.position} · tap for game log</small></span>
                   <span data-label="GP">{player.games ?? "—"}</span><span data-label="Pass yds">{player.passYards ?? "—"}</span><span data-label="Rush yds">{player.rushYards ?? "—"}</span><span data-label="Rec yds">{player.recYards ?? "—"}</span><span data-label="TD">{(player.passTds ?? 0) + (player.rushTds ?? 0) + (player.recTds ?? 0)}</span>
                 </button>
-                <button type="button" className={"watch-star" + (starred ? " active" : "")} onClick={() => toggleWatch({ sport: "nfl", playerId: player.id, team, name: player.name, position: player.position })} aria-label={starred ? `Remove ${player.name} from watchlist` : `Watch ${player.name}`} aria-pressed={starred}>★</button>
+                <PlayerWatchStar sport="nfl" playerId={starredEntry.playerId} team={starredEntry.team} name={starredEntry.name} position={starredEntry.position} />
               </div>;
             })}
           </div></div>
@@ -957,11 +985,11 @@ function NflHotStreaksView() {
     interceptions: null, rushYards: row.games.reduce((s, g) => s + g.rushYards, 0), rushTds: row.games.reduce((s, g) => s + g.rushTds, 0),
     receptions: null, recYards: row.games.reduce((s, g) => s + g.recYards, 0), recTds: row.games.reduce((s, g) => s + g.recTds, 0),
   });
-  return <section className="hot-section"><div className="roster-title"><div><p className="kicker">HOT STREAKS · NFL</p><h2>Who's cooking right now</h2><p className="roster-intro">Every qualifying streak is calculated from official recent NFL game data. Tap a player for the full stat file.</p></div>{hot.data && <div className="roster-update"><span>Updated {dateTime(hot.data.fetchedAt)}</span><button className="refresh" onClick={() => refresh.mutate()} disabled={refresh.isPending}>{refresh.isPending ? "Refreshing…" : "Refresh streaks"}</button></div>}</div><div className="metric-tabs hot-tabs">{["Heat index", "TD streak", "Yard streak", "Last-3 TDs"].map((name) => <button key={name} className={category === name ? "active" : ""} onClick={() => setCategory(name)}>{name}</button>)}</div>{hot.isPending ? <div className="loading"><span />Reading recent NFL game data…</div> : hot.isError ? <div className="error-state"><h2>Streak board unavailable.</h2><p>The ESPN feed did not answer.</p><button onClick={() => hot.refetch()}>Retry</button></div> : players.length === 0 ? <div className="history-empty"><strong>No qualifying streaks in the official window.</strong><span>Only real players with at least two recent appearances and a qualifying hot signal are shown.</span></div> : <div className="hot-list">{players.map((row, index) => <button className="hot-row" key={row.playerId} onClick={() => setSelected({ player: toPlayer(row), team: row.team as NflTeamCode })} aria-label={`Open ${row.name} full stat file`}><span className="hot-rank">#{index + 1}</span><span className="hot-player"><strong>{row.name}</strong><small>{row.team} · NFL</small></span><span className="streak-badges">{row.tdStreak >= 2 && <b>{row.tdStreak}G TD streak</b>}{row.yardStreak >= 2 && <b>{row.yardStreak}G 100+ yd</b>}</span><span className="hot-totals"><b>{row.lastThreeTds} TD</b><small>{row.lastThreeYards} yds · last {row.games.length}</small></span><span className="spark-games">{row.games.map((game) => <i key={game.gameId} title={`Week ${game.week} vs ${game.opponent}`}>{game.totalTds} TD · {game.scrimmageYards + game.passYards} yds</i>)}</span></button>)}</div>}{hot.data && <div className="source-box"><span>Source</span><a href={hot.data.sourceUrl} target="_blank" rel="noreferrer">ESPN NFL game data ↗</a><small>{nflGameDate(hot.data.windowStart)}–{nflGameDate(hot.data.windowEnd)} · refreshed daily without sportsbook quota</small></div>}{selected && <NflPlayerStatsSheet player={selected.player} team={selected.team} onClose={() => setSelected(null)} />}</section>;
+  return <section className="hot-section"><div className="roster-title"><div><p className="kicker">HOT STREAKS · NFL</p><h2>Who's cooking right now</h2><p className="roster-intro">Every qualifying streak is calculated from official recent NFL game data. Tap a player for the full stat file.</p></div>{hot.data && <div className="roster-update"><span>Updated {dateTime(hot.data.fetchedAt)}</span><button className="refresh" onClick={() => refresh.mutate()} disabled={refresh.isPending}>{refresh.isPending ? "Refreshing…" : "Refresh streaks"}</button></div>}</div><div className="metric-tabs hot-tabs">{["Heat index", "TD streak", "Yard streak", "Last-3 TDs"].map((name) => <button key={name} className={category === name ? "active" : ""} onClick={() => setCategory(name)}>{name}</button>)}</div>{hot.isPending ? <div className="loading"><span />Reading recent NFL game data…</div> : hot.isError ? <div className="error-state"><h2>Streak board unavailable.</h2><p>The ESPN feed did not answer.</p><button onClick={() => hot.refetch()}>Retry</button></div> : players.length === 0 ? <div className="history-empty"><strong>No qualifying streaks in the official window.</strong><span>Only real players with at least two recent appearances and a qualifying hot signal are shown.</span></div> : <div className="hot-list">{players.map((row, index) => <div className="hot-row-wrap" key={row.playerId}><button className="hot-row" onClick={() => setSelected({ player: toPlayer(row), team: row.team as NflTeamCode })} aria-label={`Open ${row.name} full stat file`}><span className="hot-rank">#{index + 1}</span><span className="hot-player"><strong>{row.name}</strong><small>{row.team} · NFL</small></span><span className="streak-badges">{row.tdStreak >= 2 && <b>{row.tdStreak}G TD streak</b>}{row.yardStreak >= 2 && <b>{row.yardStreak}G 100+ yd</b>}</span><span className="hot-totals"><b>{row.lastThreeTds} TD</b><small>{row.lastThreeYards} yds · last {row.games.length}</small></span><span className="spark-games">{row.games.map((game) => <i key={game.gameId} title={`Week ${game.week} vs ${game.opponent}`}>{game.totalTds} TD · {game.scrimmageYards + game.passYards} yds</i>)}</span></button><PlayerWatchStar sport="nfl" playerId={row.playerId} team={row.team} name={row.name} position={row.position} /></div>)}</div>}{hot.data && <div className="source-box"><span>Source</span><a href={hot.data.sourceUrl} target="_blank" rel="noreferrer">ESPN NFL game data ↗</a><small>{nflGameDate(hot.data.windowStart)}–{nflGameDate(hot.data.windowEnd)} · refreshed daily without sportsbook quota</small></div>}{selected && <NflPlayerStatsSheet player={selected.player} team={selected.team} onClose={() => setSelected(null)} />}</section>;
 }
 
-function WatchlistView() {
-  const [list, setList] = useState<WatchedPlayer[]>(() => loadWatchlist());
+function WatchlistView({ onViewTeam }: { onViewTeam: (sport: League, team: string) => void }) {
+  const [list, setList] = useState<WatchedEntry[]>(() => loadWatchlist());
   const [selected, setSelected] = useState<{ sport: League; player: { id: number; name: string; position: string; team: string } } | null>(null);
   useEffect(() => {
     const onChange = () => setList(loadWatchlist());
@@ -984,19 +1012,23 @@ function WatchlistView() {
       setNhlPlayer({ team: entry.team, id: entry.playerId });
     }
   };
-  const themeOf = (entry: WatchedPlayer) => themeFor(entry.sport, entry.team);
+  const themeOf = (entry: WatchedEntry) => themeFor(entry.sport, entry.team);
+  const teamName = (entry: WatchedTeam) => themeFor(entry.sport, entry.team)?.name ?? entry.name;
   return <section className="watchlist-section">
-    <div className="roster-title"><div><p className="kicker">YOUR WATCHLIST</p><h2>Players you're tracking</h2><p className="roster-intro">Star any player from the Players or Hot streaks tabs and they'll live here, across both leagues. Tap a row for the full stat file.</p></div><span>{list.length} watched</span></div>
-    {list.length === 0 ? <div className="history-empty"><strong>Nothing watched yet.</strong><span>Hit the ★ on any player in the Players or Hot streaks tabs — NHL or NFL — and they'll show up here.</span></div> :
+    <div className="roster-title"><div><p className="kicker">YOUR WATCHLIST</p><h2>Players & teams you're tracking</h2><p className="roster-intro">Star any player or team across both leagues and they'll live here. Tap a player for the full stat file, tap a team to open its roster.</p></div><span>{list.length} watched</span></div>
+    {list.length === 0 ? <div className="history-empty"><strong>Nothing watched yet.</strong><span>Hit the ★ on any player or team — NHL or NFL — and they'll show up here.</span></div> :
     <div className="watchlist-grid">{list.map((entry) => {
       const theme = themeOf(entry);
-      return <article className="watch-card" key={`${entry.sport}-${entry.playerId}`} style={theme ? ({ "--team-color": theme.color } as CSSProperties) : undefined}>
-        <button className="watch-open" onClick={() => openPlayer(entry)} aria-label={`Open ${entry.name} stat file`}>
+      const key = entry.kind === "player" ? `player-${entry.sport}-${entry.playerId}` : `team-${entry.sport}-${entry.team}`;
+      const sub = entry.kind === "player" ? `${entry.team} · ${entry.position} · ${entry.sport.toUpperCase()}` : `${entry.sport.toUpperCase()} · tap for roster`;
+      const label = entry.kind === "player" ? entry.name : teamName(entry);
+      return <article className="watch-card" key={key} style={theme ? ({ "--team-color": theme.color } as CSSProperties) : undefined}>
+        <button className="watch-open" onClick={() => entry.kind === "player" ? openPlayer(entry) : onViewTeam(entry.sport, entry.team)} aria-label={entry.kind === "player" ? `Open ${entry.name} stat file` : `Open ${label} roster`}>
           <span className="watch-team-bar" aria-hidden="true" />
-          <span className="watch-player"><strong>{entry.name}</strong><small>{entry.team} · {entry.position} · {entry.sport.toUpperCase()}</small></span>
-          <span className="watch-league">{entry.sport === "nfl" ? "NFL" : "NHL"}</span>
+          <span className="watch-player"><strong>{label}</strong><small>{sub}</small></span>
+          <span className="watch-league">{entry.kind === "team" ? "TEAM" : entry.sport === "nfl" ? "NFL" : "NHL"}</span>
         </button>
-        <button type="button" className="watch-remove" onClick={() => removeWatched(entry.sport, entry.playerId)} aria-label={`Remove ${entry.name} from watchlist`}>×</button>
+        <button type="button" className="watch-remove" onClick={() => removeWatchedEntry(entry)} aria-label={`Remove ${label} from watchlist`}>×</button>
       </article>;
     })}</div>}
     {selected?.sport === "nfl" && <NflPlayerStatsSheet player={{ id: selected.player.id, name: selected.player.name, jersey: null, position: selected.player.position, group: "offense", games: null, passYards: null, passTds: null, interceptions: null, rushYards: null, rushTds: null, receptions: null, recYards: null, recTds: null }} team={selected.player.team as NflTeamCode} onClose={() => setSelected(null)} />}
@@ -1011,6 +1043,7 @@ export function App(){
   const [mode, setMode] = useState<Mode>("board");
   const [sport, setSport] = useState<Sport>(() => loadSport());
   const [parlay, setParlay] = useState<ParlayPick[]>([]);
+  const [teamFocus, setTeamFocus] = useState<{ sport: League; team: string; nonce: number } | null>(null);
   useEffect(() => {
     const favs = loadFavorites();
     applyLeagueTheme(sport, favs[sport]);
@@ -1020,6 +1053,12 @@ export function App(){
     setSport(next);
     try { localStorage.setItem(SPORT_KEY, next); } catch { /* private mode */ }
   }
+  function viewTeam(targetSport: League, team: string) {
+    setSport(targetSport);
+    try { localStorage.setItem(SPORT_KEY, targetSport); } catch { /* private mode */ }
+    setTeamFocus({ sport: targetSport, team, nonce: Date.now() });
+    setMode("rosters");
+  }
   const boardLabel = sport === "nfl" ? "Gridiron" : "Ice board";
-  return <div className="app-shell"><SafeAreaTopScrim backgroundColor="var(--paper)"/><main><div className="topbar"><div className="sport-switch" role="group" aria-label="League"><button type="button" className={"sport-shape" + (sport === "nhl" ? " active" : "")} onClick={() => chooseSport("nhl")} aria-pressed={sport === "nhl"} aria-label="Hockey side"><span className="shape puck" aria-hidden="true" /><em>NHL</em></button><button type="button" className={"sport-shape" + (sport === "nfl" ? " active" : "")} onClick={() => chooseSport("nfl")} aria-pressed={sport === "nfl"} aria-label="Football side"><span className="shape ball" aria-hidden="true" /><em>NFL</em></button></div><nav className="mode-tabs" aria-label="Data view"><button className={mode==="board"?"active":""} onClick={()=>setMode("board")}>{boardLabel}</button><button className={mode==="matchup"?"active":""} onClick={()=>setMode("matchup")}>Matchup</button><button className={mode==="rosters"?"active":""} onClick={()=>setMode("rosters")}>Players</button><button className={mode==="hot"?"active":""} onClick={()=>setMode("hot")}>Hot streaks</button><button className={mode==="standings"?"active":""} onClick={()=>setMode("standings")}>League</button><button className={mode==="watchlist"?"active":""} onClick={()=>setMode("watchlist")}>Watchlist</button><button className={mode==="settings"?"active":""} onClick={()=>setMode("settings")}>Settings</button></nav><TeamThemePicker sport={sport}/></div>{mode==="board"&&<ProView parlay={parlay} setParlay={setParlay} home sport={sport}/>} {mode==="matchup"&&<MatchupView sport={sport}/>} {mode==="rosters"&&<RosterView parlay={parlay} setParlay={setParlay} sport={sport}/>} {mode==="hot"&&<HotStreaksView sport={sport}/>} {mode==="standings"&&<LeagueView sport={sport}/>} {mode==="watchlist"&&<WatchlistView/>} {mode==="settings"&&<SettingsView/>}</main></div>;
+  return <div className="app-shell"><SafeAreaTopScrim backgroundColor="var(--paper)"/><main><div className="topbar"><div className="sport-switch" role="group" aria-label="League"><button type="button" className={"sport-shape" + (sport === "nhl" ? " active" : "")} onClick={() => chooseSport("nhl")} aria-pressed={sport === "nhl"} aria-label="Hockey side"><span className="shape puck" aria-hidden="true" /><em>NHL</em></button><button type="button" className={"sport-shape" + (sport === "nfl" ? " active" : "")} onClick={() => chooseSport("nfl")} aria-pressed={sport === "nfl"} aria-label="Football side"><span className="shape ball" aria-hidden="true" /><em>NFL</em></button></div><nav className="mode-tabs" aria-label="Data view"><button className={mode==="board"?"active":""} onClick={()=>setMode("board")}>{boardLabel}</button><button className={mode==="matchup"?"active":""} onClick={()=>setMode("matchup")}>Matchup</button><button className={mode==="rosters"?"active":""} onClick={()=>setMode("rosters")}>Players</button><button className={mode==="hot"?"active":""} onClick={()=>setMode("hot")}>Hot streaks</button><button className={mode==="standings"?"active":""} onClick={()=>setMode("standings")}>League</button><button className={mode==="watchlist"?"active":""} onClick={()=>setMode("watchlist")}>Watchlist</button><button className={mode==="settings"?"active":""} onClick={()=>setMode("settings")}>Settings</button></nav><TeamThemePicker sport={sport}/></div>{mode==="board"&&<ProView parlay={parlay} setParlay={setParlay} home sport={sport}/>} {mode==="matchup"&&<MatchupView sport={sport}/>} {mode==="rosters"&&<RosterView parlay={parlay} setParlay={setParlay} sport={sport} teamFocus={teamFocus}/>} {mode==="hot"&&<HotStreaksView sport={sport}/>} {mode==="standings"&&<LeagueView sport={sport}/>} {mode==="watchlist"&&<WatchlistView onViewTeam={viewTeam}/>} {mode==="settings"&&<SettingsView/>}</main></div>;
 }
