@@ -1453,6 +1453,20 @@ function TeamDetailSheet({ sport, team, onClose, onViewRoster }: { sport: League
 }
 
 export function App(){
+  useEffect(() => {
+    // Dismiss the branded startup splash once the app has painted, keeping it
+    // up long enough for the branding to register.
+    const splash = document.getElementById("dh-splash");
+    if (!splash) return;
+    const t0 = performance.now();
+    const dismiss = () => {
+      const wait = 900 - (performance.now() - t0);
+      if (wait > 0) { setTimeout(dismiss, wait); return; }
+      splash.style.opacity = "0";
+      setTimeout(() => splash.remove(), 400);
+    };
+    dismiss();
+  }, []);
   const [mode, setMode] = useState<Mode>("board");
 
   const [sport, setSport] = useState<Sport>(() => loadSport());
