@@ -855,3 +855,12 @@ main > section { animation: view-in .22s ease; }
 .brightness-veil { display: none; position: fixed; inset: 0; z-index: 20; pointer-events: none;
   -webkit-backdrop-filter: brightness(var(--app-brightness)); backdrop-filter: brightness(var(--app-brightness)); }
 html[data-dimmed="true"] .brightness-veil { display: block; }
+
+/* Flip % — honest model win probability on every game card */
+.flip-meter { margin: 10px 0 2px; }
+.flip-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 5px; }
+.flip-head span { font-size: 10px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; color: var(--text); }
+.flip-head em { font-style: normal; font-size: 9px; color: var(--dim); }
+.flip-meter .winner-track { height: 14px; }
+.flip-labels { display: flex; justify-content: space-between; margin-top: 4px; font-size: 12px; color: var(--dim); }
+.flip-labels b { color: var(--text); font-size: 14px; }

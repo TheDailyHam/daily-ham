@@ -277,6 +277,7 @@ function RosterView({ parlay, setParlay, sport, teamFocus }: { parlay: ParlayPic
   const [selectedPlayer, setSelectedPlayer] = useState<NhlPlayer | null>(null);
   const nhl = useQuery({ queryKey: ["nhl-roster", team], queryFn: () => api.getNhlRoster({ team }) });
   const teamBoard = useQuery({ queryKey: ["premium-board", "nhl"], queryFn: () => api.getPremiumBoard({ sport: "nhl" }), retry: false });
+  const overview = useQuery({ queryKey: ["nhl-overview"], queryFn: () => api.getNhlOverview({}), staleTime: 15 * 60 * 1000, retry: 1 });
   const selectedTeamName = teams.find((item) => item.code === team)?.name ?? team;
   const teamMoneylines = useMemo(() => moneylinePicks(groupPremiumOffers(teamBoard.data?.offers ?? [])).filter((group) => group.matchup.includes(selectedTeamName)), [teamBoard.data, selectedTeamName]);
 
@@ -286,7 +287,7 @@ function RosterView({ parlay, setParlay, sport, teamFocus }: { parlay: ParlayPic
       <div className="roster-title"><div><p className="kicker">OFFICIAL NHL ROSTERS</p><h2>Team stats & player trends</h2><p className="roster-intro">Tap any player to open graphs, last-five form and the complete game log.</p></div>{nhl.data && <span>Updated {dateTime(nhl.data.fetchedAt)}</span>}</div>
       <label className="select-label" htmlFor="team">Team</label>
       <select id="team" value={team} onChange={(e) => { setTeam(e.target.value as TeamCode); setSelectedPlayer(null); }}>{teams.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select>
-      {teamMoneylines.length > 0 && <section className="team-moneyline"><div className="section-heading"><div><p className="kicker">NEXT GAME</p><h3>Moneyline board</h3></div><span>Best · DraftKings · FanDuel · BetMGM</span></div><div className="moneyline-grid">{teamMoneylines.map((group) => { const side = strongestSide(group); if (!side) return null; const added = parlay.some((item) => item.id === side.id); const pick: ParlayPick = { id: side.id, groupId: group.id, matchup: group.matchup, entity: group.entity, marketName: group.marketName, side }; return <article className="moneyline-card" key={group.id}><div className="moneyline-open"><small>{group.matchup}</small><h4>{group.entity}</h4><div><span>Best <b>{bookName(side.best.book)} {formatAmerican(side.best.odds)}</b></span><span>DraftKings <b>{formatAmerican(side.draftKings?.odds ?? null)}</b></span><span>FanDuel <b>{formatAmerican(side.fanDuel?.odds ?? null)}</b></span><span>BetMGM <b>{formatAmerican(side.betMGM?.odds ?? null)}</b></span></div><p className={side.evPercent !== null && side.evPercent > 0 ? "signal positive" : "signal"}>{side.evPercent !== null && side.evPercent > 0 ? `+${side.evPercent.toFixed(1)}% fair-odds EV` : "Market favorite"}</p></div><button className={added ? "pick-button added" : "pick-button"} onClick={() => setParlay(added ? parlay.filter((item) => item.id !== side.id) : [...parlay, pick])}>{added ? "Remove" : "Add ML"}</button></article>;})}</div></section>}
+      {teamMoneylines.length > 0 && <section className="team-moneyline"><div className="section-heading"><div><p className="kicker">NEXT GAME</p><h3>Moneyline board</h3></div><span>Best · DraftKings · FanDuel · BetMGM</span></div><div className="moneyline-grid">{teamMoneylines.map((group) => { const side = strongestSide(group); if (!side) return null; const added = parlay.some((item) => item.id === side.id); const pick: ParlayPick = { id: side.id, groupId: group.id, matchup: group.matchup, entity: group.entity, marketName: group.marketName, side }; return <article className="moneyline-card" key={group.id}><div className="moneyline-open"><small>{group.matchup}</small><h4>{group.entity}</h4><div><span>Best <b>{bookName(side.best.book)} {formatAmerican(side.best.odds)}</b></span><span>DraftKings <b>{formatAmerican(side.draftKings?.odds ?? null)}</b></span><span>FanDuel <b>{formatAmerican(side.fanDuel?.odds ?? null)}</b></span><span>BetMGM <b>{formatAmerican(side.betMGM?.odds ?? null)}</b></span></div><FlipMeter sport="nhl" market={group} nhlStandings={overview.data?.standings ?? null} nflStandings={null} /><p className={side.evPercent !== null && side.evPercent > 0 ? "signal positive" : "signal"}>{side.evPercent !== null && side.evPercent > 0 ? `+${side.evPercent.toFixed(1)}% fair-odds EV` : "Market favorite"}</p></div><button className={added ? "pick-button added" : "pick-button"} onClick={() => setParlay(added ? parlay.filter((item) => item.id !== side.id) : [...parlay, pick])}>{added ? "Remove" : "Add ML"}</button></article>;})}</div></section>}
       {nhl.isPending ? (
         <div className="loading"><span />Loading official roster…</div>
       ) : nhl.isError ? (
@@ -368,6 +369,54 @@ function GameGoalieLine({ market, games }: { market: MarketGroup; games: NhlOver
   return <span className="market-goalies">G {display(game.away)} · {display(game.home)}</span>;
 }
 
+function FlipMeter({ sport, market, nhlStandings, nflStandings }: {
+  sport: Sport;
+  market: MarketGroup;
+  nhlStandings: NhlOverview["standings"] | null;
+  nflStandings: NflOverview["standings"] | null;
+}) {
+  const standings = sport === "nfl" ? nflStandings : nhlStandings;
+  if (!standings || standings.length === 0) return null;
+  // Pull the two teams straight from the moneyline sides (or the "Away @ Home" matchup line).
+  const sideNames = market.sides.map((side) => side.side).filter(Boolean);
+  const matchupParts = market.matchup.split("@").map((part) => part.trim()).filter(Boolean);
+  const candidates = sideNames.length >= 2 ? sideNames : matchupParts.length >= 2 ? matchupParts : [market.entity];
+  const matchRow = (label: string) => {
+    const needle = label.toLowerCase();
+    return standings.find((row) => {
+      const name = (row.name ?? "").toLowerCase();
+      const abbrev = (row.team ?? "").toLowerCase();
+      return name !== "" && (needle === name || needle === abbrev || needle.includes(name) || name.includes(needle));
+    }) ?? null;
+  };
+  const awayLabel = candidates[0];
+  const homeLabel = candidates[candidates.length - 1];
+  const awayRow = awayLabel ? matchRow(awayLabel) : null;
+  const homeRow = homeLabel ? matchRow(homeLabel) : null;
+  if (!awayRow || !homeRow || awayRow.team === homeRow.team) return null;
+  const awayGP = "gamesPlayed" in awayRow ? awayRow.gamesPlayed : awayRow.wins + awayRow.losses + awayRow.ties;
+  const homeGP = "gamesPlayed" in homeRow ? homeRow.gamesPlayed : homeRow.wins + homeRow.losses + homeRow.ties;
+  if (awayGP === 0 || homeGP === 0) return null;
+  const awayWins = "ties" in awayRow ? awayRow.wins + awayRow.ties / 2 : awayRow.wins;
+  const homeWins = "ties" in homeRow ? homeRow.wins + homeRow.ties / 2 : homeRow.wins;
+  const awayPct = awayWins / awayGP;
+  const homePct = homeWins / homeGP;
+  const awayRaw = (awayPct + (1 - homePct)) / 2;
+  const homeRaw = (homePct + (1 - awayPct)) / 2;
+  const total = awayRaw + homeRaw;
+  if (total <= 0) return null;
+  const awayProb = awayRaw / total;
+  const homeProb = homeRaw / total;
+  const pct = (v: number) => `${Math.round(v * 100)}%`;
+  return <div className="flip-meter">
+    <div className="flip-head"><span>Flip %</span><em>model estimate</em></div>
+    <div className="winner-track" role="img" aria-label={`Model win probability: ${awayRow.team} ${pct(awayProb)}, ${homeRow.team} ${pct(homeProb)}. Model estimate from season records, not a sportsbook line.`}>
+      <i style={{ width: `${awayProb * 100}%` }} /><b style={{ width: `${homeProb * 100}%` }} />
+    </div>
+    <div className="flip-labels"><span>{awayRow.team} <b>{pct(awayProb)}</b></span><span><b>{pct(homeProb)}</b> {homeRow.team}</span></div>
+  </div>;
+}
+
 function strongestSide(group: MarketGroup): MarketSide | null {
   if (group.sides.length === 0) return null;
   return [...group.sides].sort((a, b) => {
@@ -425,6 +474,7 @@ function ParlayView({ parlay, setParlay, sport, onGoBoard }: { parlay: ParlayPic
 function ProView({ parlay, setParlay, home = false, sport }: { parlay: ParlayPick[]; setParlay: (next: ParlayPick[]) => void; home?: boolean; sport: Sport }) {
   const board = useQuery({ queryKey: ["premium-board", sport], queryFn: () => api.getPremiumBoard({ sport }), retry: false });
   const overview = useQuery({ queryKey: ["nhl-overview"], queryFn: () => api.getNhlOverview({}), staleTime: 15 * 60 * 1000, retry: 1, enabled: sport === "nhl" });
+  const nflOverview = useQuery({ queryKey: ["nfl-overview", "current"], queryFn: () => api.getNflOverview({}), staleTime: 15 * 60 * 1000, retry: 1, enabled: sport === "nfl" });
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("All");
   const [selectedMarket, setSelectedMarket] = useState<MarketGroup | null>(null);
@@ -448,7 +498,9 @@ function ProView({ parlay, setParlay, home = false, sport }: { parlay: ParlayPic
     {board.data && <section className="pro-board">
       <div className="roster-title"><div><p className="kicker">{home ? "TODAY'S COMPLETE BOARD" : "LIVE SPORTSBOOK BOARD"}</p><h2>{groups.length.toLocaleString()} markets · {board.data.offerCount.toLocaleString()} book prices</h2><p className="roster-intro">Every market returned by the feed, paired across sides when both are offered.</p></div><span>{board.data.eventCount} events · {dateTime(board.data.fetchedAt)}</span></div>
       <div className={board.data.cacheStatus === "fresh" ? "refresh-health fresh" : "refresh-health stale"} role="status"><span className="health-dot"/><div><strong>{board.data.cacheStatus === "fresh" ? "Odds feed healthy" : "Showing last successful update"}</strong><small>{board.data.healthMessage} · Updated {dateTime(board.data.fetchedAt)}</small></div></div>
-      {moneylines.length > 0 && <section className="moneyline-rail" aria-labelledby="moneyline-title"><div className="section-heading"><div><p className="kicker">FIRST LOOK</p><h3 id="moneyline-title">Moneyline picks</h3></div><span>Best · DraftKings · FanDuel · BetMGM</span></div><div className="moneyline-grid">{moneylines.map((group) => { const side = strongestSide(group); if (!side) return null; const added = parlay.some((item) => item.id === side.id); const positiveEv = side.evPercent !== null && side.evPercent > 0; return <article className="moneyline-card" key={group.id}><button className="moneyline-open" onClick={() => setSelectedMarket(group)} aria-label={`Open moneyline prices for ${group.entity}`}><small>{group.matchup}</small><h4>{group.entity}</h4><div><span>Best <b>{bookName(side.best.book)} {formatAmerican(side.best.odds)}</b></span><span>DraftKings <b>{formatAmerican(side.draftKings?.odds ?? null)}</b></span><span>FanDuel <b>{formatAmerican(side.fanDuel?.odds ?? null)}</b></span><span>BetMGM <b>{formatAmerican(side.betMGM?.odds ?? null)}</b></span></div>{sport === "nhl" && <GameGoalieLine market={group} games={overview.data?.games ?? []}/>}<p className={positiveEv ? "signal positive" : "signal"}>{positiveEv ? `+${side.evPercent?.toFixed(1)}% fair-odds EV` : "Market favorite"}</p></button><button className={added ? "pick-button added" : "pick-button"} onClick={() => toggleParlay(group, side)}>{added ? "Remove" : "Add ML"}</button></article>;})}</div></section>}
+      {moneylines.length > 0 && <section className="moneyline-rail" aria-labelledby="moneyline-title"><div className="section-heading"><div><p className="kicker">FIRST LOOK</p><h3 id="moneyline-title">Moneyline picks</h3></div><span>Best · DraftKings · FanDuel · BetMGM</span></div><div className="moneyline-grid">{moneylines.map((group) => { const side = strongestSide(group); if (!side) return null; const added = parlay.some((item) => item.id === side.id); const positiveEv = side.evPercent !== null && side.evPercent > 0; return <article className="moneyline-card" key={group.id}><button className="moneyline-open" onClick={() => setSelectedMarket(group)} aria-label={`Open moneyline prices for ${group.entity}`}><small>{group.matchup}</small><h4>{group.entity}</h4><div><span>Best <b>{bookName(side.best.book)} {formatAmerican(side.best.odds)}</b></span><span>DraftKings <b>{formatAmerican(side.draftKings?.odds ?? null)}</b></span><span>FanDuel <b>{formatAmerican(side.fanDuel?.odds ?? null)}</b></span><span>BetMGM <b>{formatAmerican(side.betMGM?.odds ?? null)}</b></span></div>{sport === "nhl" && <GameGoalieLine market={group} games={overview.data?.games ?? []}/>}
+<FlipMeter sport={sport} market={group} nhlStandings={overview.data?.standings ?? null} nflStandings={nflOverview.data?.standings ?? null} />
+<p className={positiveEv ? "signal positive" : "signal"}>{positiveEv ? `+${side.evPercent?.toFixed(1)}% fair-odds EV` : "Market favorite"}</p></button><button className={added ? "pick-button added" : "pick-button"} onClick={() => toggleParlay(group, side)}>{added ? "Remove" : "Add ML"}</button></article>;})}</div></section>}
       {parlay.length>0&&<aside className="parlay-panel" aria-label="Parlay builder"><div><p className="kicker">PARLAY BUILDER</p><h3>{parlay.length} legs · {combined}</h3></div><label>Price at<select value={priceMode} onChange={(event)=>setPriceMode(event.target.value as PriceMode)} aria-label="Parlay sportsbook"><option value="draftkings">DraftKings</option><option value="fanduel">FanDuel</option><option value="betmgm">BetMGM</option><option value="best">Best price</option></select></label><label>Stake<input inputMode="decimal" value={stake} onChange={(event)=>setStake(event.target.value)} aria-label="Parlay stake"/></label><div><small>Estimated return</small><strong>${payout.toFixed(2)}</strong></div><button onClick={()=>setParlay([])}>Clear</button><ul>{parlay.map((item)=>{const priced=offerForMode(item.side,priceMode);return <li key={item.id}><span>{item.entity} · {titleCase(item.side.side)} {item.side.line??""}</span><b>{priced ? `${bookName(priced.book)} ${formatAmerican(priced.odds)}` : "Not offered"}</b></li>;})}</ul><p>Planning tool only. Every leg must be offered by the selected sportsbook; unavailable legs are never substituted.</p></aside>}
       <div className="pro-controls"><input className="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search player, team or market" aria-label="Search live odds"/><select value={category} onChange={(event) => setCategory(event.target.value)} aria-label="Filter market type">{categories.map((name) => <option key={name}>{name}</option>)}</select><button onClick={() => board.refetch()} disabled={board.isFetching}>{board.isFetching ? "Refreshing…" : "Refresh lines"}</button></div>
       <div className="market-table complete-market-table">{visible.map((market) => { const matchupLine = market.matchup.includes(market.entity) ? `${market.matchup} · ${titleCase(market.period)}` : `${market.entity} · ${market.matchup} · ${titleCase(market.period)}`; return <article className="complete-market" key={market.id}><button className="market-open" onClick={()=>setSelectedMarket(market)} aria-label={`Open ${market.marketName} for ${market.entity}`}><b>{market.marketName}</b><small>{matchupLine}</small>{sport === "nhl" && <GameGoalieLine market={market} games={overview.data?.games ?? []}/>}</button><div className="side-quotes">{market.sides.map((side) => { const added = parlay.some((item) => item.id === side.id); const openingProbability=impliedProbability(side.best.openingOdds); const currentProbability=impliedProbability(side.best.odds); const move=openingProbability!==null&&currentProbability!==null?(currentProbability-openingProbability)*100:null; return <div className="side-quote" key={side.id}><div className="quote-main"><strong>{titleCase(side.side)} {side.line ?? ""}</strong><div className="quote-books"><span>Best <b>{bookName(side.best.book)} {formatAmerican(side.best.odds)}</b></span><span>DK <b>{formatAmerican(side.draftKings?.odds ?? null)}</b></span><span>FD <b>{formatAmerican(side.fanDuel?.odds ?? null)}</b></span><span>MGM <b>{formatAmerican(side.betMGM?.odds ?? null)}</b></span></div><div className="quote-chips">{side.evPercent !== null && side.evPercent > 0 && <em>+{side.evPercent.toFixed(1)}% EV</em>}{move!==null&&Math.abs(move)>=2&&<em className="steam-chip">Move {move>0?"+":""}{move.toFixed(1)} pts</em>}</div></div><button className={added ? "pick-button added" : "pick-button"} onClick={() => toggleParlay(market, side)}>{added ? "Remove" : "Add"}</button></div>;})}</div></article>;})}</div>
@@ -1129,6 +1181,7 @@ function NflRosterView({ parlay, setParlay, teamFocus }: { parlay: ParlayPick[];
   const [watched, setWatched] = useState(0);
   const nfl = useQuery({ queryKey: ["nfl-roster", team], queryFn: () => api.getNflRoster({ team }) });
   const teamBoard = useQuery({ queryKey: ["premium-board", "nfl"], queryFn: () => api.getPremiumBoard({ sport: "nfl" }), retry: false });
+  const nflOverview = useQuery({ queryKey: ["nfl-overview", "current"], queryFn: () => api.getNflOverview({}), staleTime: 15 * 60 * 1000, retry: 1 });
   const selectedTeamName = nflTeams.find((item) => item.code === team)?.name ?? team;
   const teamMoneylines = useMemo(() => moneylinePicks(groupPremiumOffers(teamBoard.data?.offers ?? [])).filter((group) => group.matchup.includes(selectedTeamName)), [teamBoard.data, selectedTeamName]);
   useEffect(() => {
@@ -1144,7 +1197,7 @@ function NflRosterView({ parlay, setParlay, teamFocus }: { parlay: ParlayPick[];
       <div className="roster-title"><div><p className="kicker">OFFICIAL NFL ROSTERS</p><h2>Team stats & player trends</h2><p className="roster-intro">Tap any player to open graphs, last-five form and the complete game log. Star a player to add them to your Watchlist.</p></div>{nfl.data && <span>Updated {dateTime(nfl.data.fetchedAt)}</span>}</div>
       <label className="select-label" htmlFor="nfl-team">Team</label>
       <select id="nfl-team" value={team} onChange={(e) => { setTeam(e.target.value as NflTeamCode); setSelectedPlayer(null); }}>{nflTeams.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select>
-      {teamMoneylines.length > 0 && <section className="team-moneyline"><div className="section-heading"><div><p className="kicker">NEXT GAME</p><h3>Moneyline board</h3></div><span>Best · DraftKings · FanDuel · BetMGM</span></div><div className="moneyline-grid">{teamMoneylines.map((group) => { const side = strongestSide(group); if (!side) return null; const added = parlay.some((item) => item.id === side.id); const pick: ParlayPick = { id: side.id, groupId: group.id, matchup: group.matchup, entity: group.entity, marketName: group.marketName, side }; return <article className="moneyline-card" key={group.id}><div className="moneyline-open"><small>{group.matchup}</small><h4>{group.entity}</h4><div><span>Best <b>{bookName(side.best.book)} {formatAmerican(side.best.odds)}</b></span><span>DraftKings <b>{formatAmerican(side.draftKings?.odds ?? null)}</b></span><span>FanDuel <b>{formatAmerican(side.fanDuel?.odds ?? null)}</b></span><span>BetMGM <b>{formatAmerican(side.betMGM?.odds ?? null)}</b></span></div><p className={side.evPercent !== null && side.evPercent > 0 ? "signal positive" : "signal"}>{side.evPercent !== null && side.evPercent > 0 ? `+${side.evPercent.toFixed(1)}% fair-odds EV` : "Market favorite"}</p></div><button className={added ? "pick-button added" : "pick-button"} onClick={() => setParlay(added ? parlay.filter((item) => item.id !== side.id) : [...parlay, pick])}>{added ? "Remove" : "Add ML"}</button></article>;})}</div></section>}
+      {teamMoneylines.length > 0 && <section className="team-moneyline"><div className="section-heading"><div><p className="kicker">NEXT GAME</p><h3>Moneyline board</h3></div><span>Best · DraftKings · FanDuel · BetMGM</span></div><div className="moneyline-grid">{teamMoneylines.map((group) => { const side = strongestSide(group); if (!side) return null; const added = parlay.some((item) => item.id === side.id); const pick: ParlayPick = { id: side.id, groupId: group.id, matchup: group.matchup, entity: group.entity, marketName: group.marketName, side }; return <article className="moneyline-card" key={group.id}><div className="moneyline-open"><small>{group.matchup}</small><h4>{group.entity}</h4><div><span>Best <b>{bookName(side.best.book)} {formatAmerican(side.best.odds)}</b></span><span>DraftKings <b>{formatAmerican(side.draftKings?.odds ?? null)}</b></span><span>FanDuel <b>{formatAmerican(side.fanDuel?.odds ?? null)}</b></span><span>BetMGM <b>{formatAmerican(side.betMGM?.odds ?? null)}</b></span></div><FlipMeter sport="nfl" market={group} nhlStandings={null} nflStandings={nflOverview.data?.standings ?? null} /><p className={side.evPercent !== null && side.evPercent > 0 ? "signal positive" : "signal"}>{side.evPercent !== null && side.evPercent > 0 ? `+${side.evPercent.toFixed(1)}% fair-odds EV` : "Market favorite"}</p></div><button className={added ? "pick-button added" : "pick-button"} onClick={() => setParlay(added ? parlay.filter((item) => item.id !== side.id) : [...parlay, pick])}>{added ? "Remove" : "Add ML"}</button></article>;})}</div></section>}
       {nfl.isPending ? (
         <div className="loading"><span />Loading official roster…</div>
       ) : nfl.isError ? (
