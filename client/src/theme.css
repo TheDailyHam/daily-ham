@@ -875,3 +875,17 @@ html[data-dimmed="true"] .brightness-veil { display: block; }
 .slate-flip .winner-track { height: 12px; }
 .slate-flip-empty { font-size: 12px; color: var(--dim); }
 @media (prefers-reduced-motion: reduce) { .slate-flip { transition: none; } .slate-flip:active { transform: none; } }
+
+/* Model vs Books — flip alerts and coin-toss detection */
+.model-vs-books { margin: 26px 0 0; padding: 18px; background: var(--surface); border: 1px solid var(--rule); border-radius: 14px; }
+.model-vs-books .section-heading { margin-bottom: 12px; }
+.model-vs-books .section-heading > span { font-size: 12px; font-weight: 900; letter-spacing: .04em; }
+.mvb-rows { display: grid; gap: 12px; }
+.mvb-row { display: grid; grid-template-columns: 52px 1fr; gap: 4px 10px; align-items: center; }
+.mvb-row > span:first-child { font-size: 10px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
+.mvb-row > span:last-child { grid-column: 2; font-size: 12px; color: var(--dim); }
+.mvb-row > span:last-child b { color: var(--text); }
+.mvb-row .winner-track { height: 14px; }
+.mvb-row .winner-track.books i { background: var(--accent); }
+.mvb-row .winner-track.books b { background: var(--dim); }
+.mvb-note { margin: 12px 0 0; font-size: 12px; line-height: 1.5; color: var(--dim); }

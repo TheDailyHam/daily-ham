@@ -618,11 +618,63 @@ function MatchupView({ sport }: { sport: Sport }) {
   return <MatchupCalculator />;
 }
 
+function ModelVsBooks({ sport, awayCode, homeCode, awayModel, homeModel, groups }: {
+  sport: Sport;
+  awayCode: string;
+  homeCode: string;
+  awayModel: number | null;
+  homeModel: number | null;
+  groups: MarketGroup[];
+}) {
+  const roster = sport === "nfl" ? nflTeams : teams;
+  const awayName = roster.find((t) => t.code === awayCode)?.name ?? awayCode;
+  const homeName = roster.find((t) => t.code === homeCode)?.name ?? homeCode;
+  const mlGroups = groups.filter((g) => g.marketName.toLowerCase().includes("moneyline"));
+  const groupFor = (name: string) => mlGroups.find((g) =>
+    g.entity.toLowerCase() === name.toLowerCase() ||
+    g.sides.some((side) => side.side.toLowerCase() === name.toLowerCase()));
+  const bestOdds = (name: string) => {
+    const group = groupFor(name);
+    if (!group) return null;
+    const side = group.sides.find((s) => s.side.toLowerCase() === name.toLowerCase()) ?? strongestSide(group);
+    return side?.best.odds ?? null;
+  };
+  const awayImplied = impliedProbability(bestOdds(awayName));
+  const homeImplied = impliedProbability(bestOdds(homeName));
+  if (awayModel === null || homeModel === null || awayImplied === null || homeImplied === null || awayImplied + homeImplied <= 0) return null;
+  // Strip the vig so books and model are on the same scale.
+  const awayBook = awayImplied / (awayImplied + homeImplied);
+  const homeBook = homeImplied / (awayImplied + homeImplied);
+  const modelWinner = awayModel >= homeModel ? awayCode : homeCode;
+  const bookFave = awayBook >= homeBook ? awayCode : homeCode;
+  const isFlip = modelWinner !== bookFave;
+  const isCoinToss = Math.abs(awayModel - 0.5) < 0.03;
+  const pct = (v: number) => `${Math.round(v * 100)}%`;
+  return <section className="model-vs-books" aria-label="Model versus sportsbook comparison">
+    <div className="section-heading"><div><p className="kicker">MODEL VS BOOKS</p><h3>Does it flip?</h3></div>
+    <span>{isFlip ? "⚡ Flip alert" : isCoinToss ? "🪙 Coin toss" : "✓ Aligned"}</span></div>
+    <div className="mvb-rows">
+      <div className="mvb-row"><span>Model</span><div className="winner-track"><i style={{ width: `${awayModel * 100}%` }} /><b style={{ width: `${homeModel * 100}%` }} /></div><span>{awayCode} <b>{pct(awayModel)}</b> · {homeCode} <b>{pct(homeModel)}</b></span></div>
+      <div className="mvb-row"><span>Books</span><div className="winner-track books"><i style={{ width: `${awayBook * 100}%` }} /><b style={{ width: `${homeBook * 100}%` }} /></div><span>{awayCode} <b>{pct(awayBook)}</b> · {homeCode} <b>{pct(homeBook)}</b></span></div>
+    </div>
+    <p className="mvb-note">
+      {isFlip
+        ? `The model flips the books: it likes ${modelWinner} while the books favor ${bookFave}.`
+        : isCoinToss
+          ? "Too close to call — the model sees this as a coin toss."
+          : `Both agree on ${modelWinner}.`}
+      {" "}Book percentages are vig-stripped from the best available moneyline; the model is a statistical estimate, not a pick.
+    </p>
+  </section>;
+}
+
 function MatchupCalculator() {
   const [awayTeam, setAwayTeam] = useState<TeamCode>("WSH");
   const [homeTeam, setHomeTeam] = useState<TeamCode>("PIT");
   const [matchup, setMatchup] = useState<{ away: TeamCode; home: TeamCode }>({ away: "WSH", home: "PIT" });
   const overview = useQuery({ queryKey: ["nhl-overview"], queryFn: () => api.getNhlOverview({}), staleTime: 15 * 60 * 1000, retry: 1 });
+  const board = useQuery({ queryKey: ["premium-board", "nhl"], queryFn: () => api.getPremiumBoard({ sport: "nhl" }), retry: false });
+  const boardGroups = useMemo(() => groupPremiumOffers(board.data?.offers ?? []), [board.data]);
   const result = useQuery({ queryKey: ["first-goal-matchup", matchup.away, matchup.home], queryFn: () => api.getFirstGoalMatchup({ awayTeam: matchup.away, homeTeam: matchup.home, force: false }), retry: 1 });
   const refresh = useMutation({ mutationFn: () => api.getFirstGoalMatchup({ awayTeam: matchup.away, homeTeam: matchup.home, force: true }), onSuccess: () => result.refetch() });
   const data: FirstGoalMatchup | undefined = result.data;
@@ -659,6 +711,7 @@ function MatchupCalculator() {
         <div className="winner-score"><div><span>{data.away.team} · away</span><strong>{percentage(data.awayWinProbability)}</strong><small>{data.away.wins}/{data.away.games} recent wins</small></div><div className="winner-track" role="img" aria-label={`${data.away.team} ${percentage(data.awayWinProbability)} and ${data.home.team} ${percentage(data.homeWinProbability)} predicted win probability`}><i style={{ width: `${(data.awayWinProbability ?? .5) * 100}%` }}/><b style={{ width: `${(data.homeWinProbability ?? .5) * 100}%` }}/></div><div className="home"><span>{data.home.team} · home</span><strong>{percentage(data.homeWinProbability)}</strong><small>{data.home.wins}/{data.home.games} recent wins</small></div></div>
         <p className="winner-explain">The winner model blends each club’s recent win rate with the opponent’s loss rate, weighting away and home splits when at least five matching games exist. Overtime and shootout winners count. This is a model estimate, not a sportsbook line.</p>
       </section>
+      {data && <ModelVsBooks sport="nhl" awayCode={data.away.team} homeCode={data.home.team} awayModel={data.awayWinProbability} homeModel={data.homeWinProbability} groups={boardGroups} />}
       <section className="first-goal-card">
         <div className="section-heading"><div><p className="kicker">MODEL ESTIMATE</p><h2>First goal probability</h2></div><span>{data.edgeTeam ? `${data.edgeTeam} +${data.edgePoints?.toFixed(1) ?? "0.0"} pts` : "Insufficient sample"}</span></div>
         <div className="first-goal-score"><div><span>{data.away.team} · away</span><strong>{percentage(data.awayProbability)}</strong></div><div className="first-goal-track" role="img" aria-label={`${data.away.team} ${percentage(data.awayProbability)} and ${data.home.team} ${percentage(data.homeProbability)} to score first`}><i style={{ width: `${(data.awayProbability ?? .5) * 100}%` }}/><b style={{ width: `${(data.homeProbability ?? .5) * 100}%` }}/></div><div className="home"><span>{data.home.team} · home</span><strong>{percentage(data.homeProbability)}</strong></div></div>
@@ -1054,6 +1107,8 @@ function NflMatchupCalculator() {
   const [homeTeam, setHomeTeam] = useState<NflTeamCode>("BUF");
   const [matchup, setMatchup] = useState<{ away: NflTeamCode; home: NflTeamCode }>({ away: "KC", home: "BUF" });
   const overview = useQuery({ queryKey: ["nfl-overview", "current"], queryFn: () => api.getNflOverview({}), staleTime: 15 * 60 * 1000, retry: 1 });
+  const board = useQuery({ queryKey: ["premium-board", "nfl"], queryFn: () => api.getPremiumBoard({ sport: "nfl" }), retry: false });
+  const boardGroups = useMemo(() => groupPremiumOffers(board.data?.offers ?? []), [board.data]);
   const result = useQuery({ queryKey: ["nfl-matchup", matchup.away, matchup.home], queryFn: () => api.getNflMatchup({ awayTeam: matchup.away, homeTeam: matchup.home, force: false }), retry: 1 });
   const refresh = useMutation({ mutationFn: () => api.getNflMatchup({ awayTeam: matchup.away, homeTeam: matchup.home, force: true }), onSuccess: () => result.refetch() });
   const data: NflMatchup | undefined = result.data;
@@ -1090,6 +1145,7 @@ function NflMatchupCalculator() {
         <div className="winner-score"><div><span>{data.away.team} · away</span><strong>{percentage(data.awayWinProbability)}</strong><small>{data.away.wins}/{data.away.games} recent wins</small></div><div className="winner-track" role="img" aria-label={`${data.away.team} ${percentage(data.awayWinProbability)} and ${data.home.team} ${percentage(data.homeWinProbability)} predicted win probability`}><i style={{ width: `${(data.awayWinProbability ?? .5) * 100}%` }}/><b style={{ width: `${(data.homeWinProbability ?? .5) * 100}%` }}/></div><div className="home"><span>{data.home.team} · home</span><strong>{percentage(data.homeWinProbability)}</strong><small>{data.home.wins}/{data.home.games} recent wins</small></div></div>
         <p className="winner-explain">The winner model blends each club's recent win rate with the opponent's loss rate, weighting away and home splits when at least three matching games exist. This is a model estimate, not a sportsbook line.</p>
       </section>
+      {data && <ModelVsBooks sport="nfl" awayCode={data.away.team} homeCode={data.home.team} awayModel={data.awayWinProbability} homeModel={data.homeWinProbability} groups={boardGroups} />}
       <section className="first-goal-card">
         <div className="section-heading"><div><p className="kicker">MODEL ESTIMATE</p><h2>First score probability</h2></div><span>{data.firstScoreEdgeTeam ? `${data.firstScoreEdgeTeam} +${data.firstScoreEdgePoints?.toFixed(1) ?? "0.0"} pts` : "Insufficient sample"}</span></div>
         <div className="first-goal-score"><div><span>{data.away.team} · away</span><strong>{percentage(data.firstScoreAwayProbability)}</strong></div><div className="first-goal-track" role="img" aria-label={`${data.away.team} ${percentage(data.firstScoreAwayProbability)} and ${data.home.team} ${percentage(data.firstScoreHomeProbability)} to score first`}><i style={{ width: `${(data.firstScoreAwayProbability ?? .5) * 100}%` }}/><b style={{ width: `${(data.firstScoreHomeProbability ?? .5) * 100}%` }}/></div><div className="home"><span>{data.home.team} · home</span><strong>{percentage(data.firstScoreHomeProbability)}</strong></div></div>
