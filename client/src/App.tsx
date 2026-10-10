@@ -369,6 +369,44 @@ function GameGoalieLine({ market, games }: { market: MarketGroup; games: NhlOver
   return <span className="market-goalies">G {display(game.away)} · {display(game.home)}</span>;
 }
 
+type StandingRow = { team: string; name: string; wins: number; losses: number; ties?: number; gamesPlayed?: number };
+
+function flipProbability(awayRow: StandingRow | null, homeRow: StandingRow | null): { away: number; home: number } | null {
+  if (!awayRow || !homeRow || awayRow.team === homeRow.team) return null;
+  const awayGP = awayRow.gamesPlayed ?? awayRow.wins + awayRow.losses + (awayRow.ties ?? 0);
+  const homeGP = homeRow.gamesPlayed ?? homeRow.wins + homeRow.losses + (homeRow.ties ?? 0);
+  if (awayGP === 0 || homeGP === 0) return null;
+  const awayWins = awayRow.wins + (awayRow.ties ?? 0) / 2;
+  const homeWins = homeRow.wins + (homeRow.ties ?? 0) / 2;
+  const awayPct = awayWins / awayGP;
+  const homePct = homeWins / homeGP;
+  const awayRaw = (awayPct + (1 - homePct)) / 2;
+  const homeRaw = (homePct + (1 - awayPct)) / 2;
+  const total = awayRaw + homeRaw;
+  if (total <= 0) return null;
+  return { away: awayRaw / total, home: homeRaw / total };
+}
+
+function FlipBars({ awayAbbrev, homeAbbrev, awayProb, homeProb }: { awayAbbrev: string; homeAbbrev: string; awayProb: number; homeProb: number }) {
+  const pct = (v: number) => `${Math.round(v * 100)}%`;
+  return <>
+    <div className="winner-track" role="img" aria-label={`Model win probability: ${awayAbbrev} ${pct(awayProb)}, ${homeAbbrev} ${pct(homeProb)}. Model estimate from season records, not a sportsbook line.`}>
+      <i style={{ width: `${awayProb * 100}%` }} /><b style={{ width: `${homeProb * 100}%` }} />
+    </div>
+    <div className="flip-labels"><span>{awayAbbrev} <b>{pct(awayProb)}</b></span><span><b>{pct(homeProb)}</b> {homeAbbrev}</span></div>
+  </>;
+}
+
+function SlateFlipCard({ awayAbbrev, homeAbbrev, standings, active, onPick }: {
+  awayAbbrev: string; homeAbbrev: string; standings: StandingRow[] | null; active: boolean; onPick: () => void;
+}) {
+  const probs = flipProbability(standings?.find((row) => row.team === awayAbbrev) ?? null, standings?.find((row) => row.team === homeAbbrev) ?? null);
+  return <button className={active ? "slate-flip active" : "slate-flip"} onClick={onPick} aria-label={`Load ${awayAbbrev} at ${homeAbbrev} into the calculator`}>
+    <strong>{awayAbbrev} @ {homeAbbrev}</strong>
+    {probs ? <FlipBars awayAbbrev={awayAbbrev} homeAbbrev={homeAbbrev} awayProb={probs.away} homeProb={probs.home} /> : <span className="slate-flip-empty">Not enough games yet</span>}
+  </button>;
+}
+
 function FlipMeter({ sport, market, nhlStandings, nflStandings }: {
   sport: Sport;
   market: MarketGroup;
@@ -391,29 +429,13 @@ function FlipMeter({ sport, market, nhlStandings, nflStandings }: {
   };
   const awayLabel = candidates[0];
   const homeLabel = candidates[candidates.length - 1];
-  const awayRow = awayLabel ? matchRow(awayLabel) : null;
-  const homeRow = homeLabel ? matchRow(homeLabel) : null;
-  if (!awayRow || !homeRow || awayRow.team === homeRow.team) return null;
-  const awayGP = "gamesPlayed" in awayRow ? awayRow.gamesPlayed : awayRow.wins + awayRow.losses + awayRow.ties;
-  const homeGP = "gamesPlayed" in homeRow ? homeRow.gamesPlayed : homeRow.wins + homeRow.losses + homeRow.ties;
-  if (awayGP === 0 || homeGP === 0) return null;
-  const awayWins = "ties" in awayRow ? awayRow.wins + awayRow.ties / 2 : awayRow.wins;
-  const homeWins = "ties" in homeRow ? homeRow.wins + homeRow.ties / 2 : homeRow.wins;
-  const awayPct = awayWins / awayGP;
-  const homePct = homeWins / homeGP;
-  const awayRaw = (awayPct + (1 - homePct)) / 2;
-  const homeRaw = (homePct + (1 - awayPct)) / 2;
-  const total = awayRaw + homeRaw;
-  if (total <= 0) return null;
-  const awayProb = awayRaw / total;
-  const homeProb = homeRaw / total;
-  const pct = (v: number) => `${Math.round(v * 100)}%`;
+  const awayRow = (awayLabel ? matchRow(awayLabel) : null) as StandingRow | null;
+  const homeRow = (homeLabel ? matchRow(homeLabel) : null) as StandingRow | null;
+  const probs = flipProbability(awayRow, homeRow);
+  if (!probs || !awayRow || !homeRow) return null;
   return <div className="flip-meter">
     <div className="flip-head"><span>Flip %</span><em>model estimate</em></div>
-    <div className="winner-track" role="img" aria-label={`Model win probability: ${awayRow.team} ${pct(awayProb)}, ${homeRow.team} ${pct(homeProb)}. Model estimate from season records, not a sportsbook line.`}>
-      <i style={{ width: `${awayProb * 100}%` }} /><b style={{ width: `${homeProb * 100}%` }} />
-    </div>
-    <div className="flip-labels"><span>{awayRow.team} <b>{pct(awayProb)}</b></span><span><b>{pct(homeProb)}</b> {homeRow.team}</span></div>
+    <FlipBars awayAbbrev={awayRow.team} homeAbbrev={homeRow.team} awayProb={probs.away} homeProb={probs.home} />
   </div>;
 }
 
@@ -623,7 +645,7 @@ function MatchupCalculator() {
   const todayGames = overview.data?.games.filter((game) => game.date === overview.data?.date) ?? [];
   return <section className="matchup-lab">
     <div className="matchup-heading"><div><p className="kicker">MATCHUP CALCULATOR</p><h1>Who takes it?</h1><p>Predict the winner, compare first-goal chances, and read first-period and full-game scripts from official recent results.</p></div>{data && <button className="refresh" onClick={() => refresh.mutate()} disabled={refresh.isPending}>{refresh.isPending ? "Recalculating…" : "Refresh data"}</button>}</div>
-    {todayGames.length > 0 && <div className="slate-picks" aria-label="Today’s NHL matchups">{todayGames.map((game) => <button key={game.id} onClick={() => chooseGame(game.away.abbrev, game.home.abbrev)}>{game.away.abbrev} @ {game.home.abbrev}</button>)}</div>}
+    {todayGames.length > 0 && <div className="slate-flips" aria-label="Today’s NHL matchups with model flip percentages">{todayGames.map((game) => <SlateFlipCard key={game.id} awayAbbrev={game.away.abbrev} homeAbbrev={game.home.abbrev} standings={overview.data?.standings ?? null} active={matchup.away === game.away.abbrev && matchup.home === game.home.abbrev} onPick={() => chooseGame(game.away.abbrev, game.home.abbrev)} />)}</div>}
     <form className="matchup-form" onSubmit={submit}>
       <label>Away team<select value={awayTeam} onChange={(event) => setAwayTeam(event.target.value as TeamCode)}>{teams.map((team) => <option key={team.code} value={team.code}>{team.name}</option>)}</select></label>
       <span aria-hidden="true">@</span>
@@ -1054,7 +1076,7 @@ function NflMatchupCalculator() {
   const weekGames = overview.data?.games.filter((g) => g.state !== "final") ?? [];
   return <section className="matchup-lab">
     <div className="matchup-heading"><div><p className="kicker">MATCHUP CALCULATOR</p><h1>Who takes it?</h1><p>Predict the winner, compare first-score chances, and read first-half and full-game scripts from official recent results.</p></div>{data && <button className="refresh" onClick={() => refresh.mutate()} disabled={refresh.isPending}>{refresh.isPending ? "Recalculating…" : "Refresh data"}</button>}</div>
-    {weekGames.length > 0 && <div className="slate-picks" aria-label="This week's NFL matchups">{weekGames.slice(0, 12).map((game) => <button key={game.id} onClick={() => chooseGame(game.away.abbrev, game.home.abbrev)}>{game.away.abbrev} @ {game.home.abbrev}</button>)}</div>}
+    {weekGames.length > 0 && <div className="slate-flips" aria-label="This week's NFL matchups with model flip percentages">{weekGames.slice(0, 12).map((game) => <SlateFlipCard key={game.id} awayAbbrev={game.away.abbrev} homeAbbrev={game.home.abbrev} standings={overview.data?.standings ?? null} active={matchup.away === game.away.abbrev && matchup.home === game.home.abbrev} onPick={() => chooseGame(game.away.abbrev, game.home.abbrev)} />)}</div>}
     <form className="matchup-form" onSubmit={submit}>
       <label>Away team<select value={awayTeam} onChange={(event) => setAwayTeam(event.target.value as NflTeamCode)}>{nflTeams.map((team) => <option key={team.code} value={team.code}>{team.name}</option>)}</select></label>
       <span aria-hidden="true">@</span>
