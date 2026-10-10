@@ -16,7 +16,27 @@
     <title>The Daily Ham — NHL & NFL · Fresh Cuts Daily</title>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="dh-splash" aria-hidden="true">
+        <style>
+          #dh-splash { position: fixed; inset: 0; z-index: 9999; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; background: #14100b; color: #f5efe4; font-family: Georgia, 'Times New Roman', serif; text-align: center; padding: 24px; }
+          #dh-splash .splash-logo { width: 120px; height: 120px; border-radius: 50%; object-fit: cover; border: 4px solid #c97b2d; box-shadow: 0 8px 40px rgba(0,0,0,.5); animation: splash-in .5s ease; }
+          #dh-splash h1 { margin: 6px 0 0; font-size: 34px; letter-spacing: .02em; animation: splash-in .5s ease .1s both; }
+          #dh-splash p { margin: 0; font-size: 13px; letter-spacing: .28em; text-transform: uppercase; color: #d8c8b3; animation: splash-in .5s ease .2s both; }
+          #dh-splash .splash-dots { display: flex; gap: 8px; margin-top: 18px; }
+          #dh-splash .splash-dots i { width: 9px; height: 9px; border-radius: 50%; background: #c97b2d; animation: splash-pulse 1.1s ease infinite; }
+          #dh-splash .splash-dots i:nth-child(2) { animation-delay: .18s; }
+          #dh-splash .splash-dots i:nth-child(3) { animation-delay: .36s; }
+          @keyframes splash-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+          @keyframes splash-pulse { 0%, 100% { opacity: .25; transform: scale(.8); } 50% { opacity: 1; transform: scale(1.15); } }
+          @media (prefers-reduced-motion: reduce) { #dh-splash .splash-logo, #dh-splash h1, #dh-splash p { animation: none; } #dh-splash .splash-dots i { animation: none; opacity: .7; } }
+        </style>
+        <img class="splash-logo" src="/logo.jpg" alt="" />
+        <h1>The Daily Ham</h1>
+        <p>Fresh Cuts Daily</p>
+        <div class="splash-dots"><i></i><i></i><i></i></div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
