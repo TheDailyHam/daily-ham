@@ -15,6 +15,7 @@ createRoot(rootEl).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <div className="app-root">
+        <div className="brightness-veil" aria-hidden="true" />
         <App />
       </div>
     </QueryClientProvider>
@@ -26,6 +27,7 @@ try {
   const brightness = Number(localStorage.getItem("dh-brightness"));
   if (Number.isFinite(brightness) && brightness >= 40 && brightness <= 100) {
     document.documentElement.style.setProperty("--app-brightness", String(brightness / 100));
+    document.documentElement.dataset.dimmed = brightness < 100 ? "true" : "false";
   }
   if (localStorage.getItem("dh-smooth-scroll") === "off") {
     document.documentElement.style.scrollBehavior = "auto";

@@ -687,6 +687,7 @@ function loadBrightness(): number {
 function applyBrightness(value: number) {
   try {
     document.documentElement.style.setProperty("--app-brightness", String(value / 100));
+    document.documentElement.dataset.dimmed = value < 100 ? "true" : "false";
     localStorage.setItem(BRIGHTNESS_KEY, String(value));
   } catch { /* best-effort */ }
 }

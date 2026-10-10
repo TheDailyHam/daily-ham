@@ -764,7 +764,8 @@ body[data-sport="nhl"] .mode-tabs button.active { background: var(--accent); col
 
 /* Display preferences */
 :root { --app-brightness: 1; }
-.app-root { filter: brightness(var(--app-brightness)); }
+/* Brightness is applied via the .brightness-veil overlay (backdrop-filter) so fixed sheets keep working. */
+.app-root { min-height: 100dvh; }
 .display-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .display-row > div { display: grid; gap: 2px; }
 .display-row strong { font-size: 15px; }
@@ -848,3 +849,9 @@ main > section { animation: view-in .22s ease; }
   .game-card-list { display: grid; gap: 10px; }
   .full-log .game-card-list.compact { max-height: none; }
 }
+
+/* Brightness veil — dims page content without breaking fixed-position sheets.
+   backdrop-filter (not filter) keeps .sheet-backdrop / toasts / banners anchored to the viewport. */
+.brightness-veil { display: none; position: fixed; inset: 0; z-index: 20; pointer-events: none;
+  -webkit-backdrop-filter: brightness(var(--app-brightness)); backdrop-filter: brightness(var(--app-brightness)); }
+html[data-dimmed="true"] .brightness-veil { display: block; }
