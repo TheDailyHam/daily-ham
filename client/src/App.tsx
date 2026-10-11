@@ -497,6 +497,7 @@ function ProView({ parlay, setParlay, home = false, sport }: { parlay: ParlayPic
   const board = useQuery({ queryKey: ["premium-board", sport], queryFn: () => api.getPremiumBoard({ sport }), retry: false });
   const overview = useQuery({ queryKey: ["nhl-overview"], queryFn: () => api.getNhlOverview({}), staleTime: 15 * 60 * 1000, retry: 1, enabled: sport === "nhl" });
   const nflOverview = useQuery({ queryKey: ["nfl-overview", "current"], queryFn: () => api.getNflOverview({}), staleTime: 15 * 60 * 1000, retry: 1, enabled: sport === "nfl" });
+  const scorers = useQuery({ queryKey: ["likely-scorers", sport], queryFn: () => api.getLikelyScorers({ sport }), staleTime: 12 * 60 * 60 * 1000, retry: 1 });
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("All");
   const [selectedMarket, setSelectedMarket] = useState<MarketGroup | null>(null);
@@ -522,6 +523,7 @@ function ProView({ parlay, setParlay, home = false, sport }: { parlay: ParlayPic
       <div className={board.data.cacheStatus === "fresh" ? "refresh-health fresh" : "refresh-health stale"} role="status"><span className="health-dot"/><div><strong>{board.data.cacheStatus === "fresh" ? "Odds feed healthy" : "Showing last successful update"}</strong><small>{board.data.healthMessage} · Updated {dateTime(board.data.fetchedAt)}</small></div></div>
       {moneylines.length > 0 && <section className="moneyline-rail" aria-labelledby="moneyline-title"><div className="section-heading"><div><p className="kicker">FIRST LOOK</p><h3 id="moneyline-title">Moneyline picks</h3></div><span>Best · DraftKings · FanDuel · BetMGM</span></div><div className="moneyline-grid">{moneylines.map((group) => { const side = strongestSide(group); if (!side) return null; const added = parlay.some((item) => item.id === side.id); const positiveEv = side.evPercent !== null && side.evPercent > 0; return <article className="moneyline-card" key={group.id}><button className="moneyline-open" onClick={() => setSelectedMarket(group)} aria-label={`Open moneyline prices for ${group.entity}`}><small>{group.matchup}</small><h4>{group.entity}</h4><div><span>Best <b>{bookName(side.best.book)} {formatAmerican(side.best.odds)}</b></span><span>DraftKings <b>{formatAmerican(side.draftKings?.odds ?? null)}</b></span><span>FanDuel <b>{formatAmerican(side.fanDuel?.odds ?? null)}</b></span><span>BetMGM <b>{formatAmerican(side.betMGM?.odds ?? null)}</b></span></div>{sport === "nhl" && <GameGoalieLine market={group} games={overview.data?.games ?? []}/>}
 <FlipMeter sport={sport} market={group} nhlStandings={overview.data?.standings ?? null} nflStandings={nflOverview.data?.standings ?? null} />
+<LikelyScorersStrip sport={sport} market={group} nhlStandings={overview.data?.standings ?? null} nflStandings={nflOverview.data?.standings ?? null} scorers={scorers.data ?? null} />
 <p className={positiveEv ? "signal positive" : "signal"}>{positiveEv ? `+${side.evPercent?.toFixed(1)}% fair-odds EV` : "Market favorite"}</p></button><button className={added ? "pick-button added" : "pick-button"} onClick={() => toggleParlay(group, side)}>{added ? "Remove" : "Add ML"}</button></article>;})}</div></section>}
       {parlay.length>0&&<aside className="parlay-panel" aria-label="Parlay builder"><div><p className="kicker">PARLAY BUILDER</p><h3>{parlay.length} legs · {combined}</h3></div><label>Price at<select value={priceMode} onChange={(event)=>setPriceMode(event.target.value as PriceMode)} aria-label="Parlay sportsbook"><option value="draftkings">DraftKings</option><option value="fanduel">FanDuel</option><option value="betmgm">BetMGM</option><option value="best">Best price</option></select></label><label>Stake<input inputMode="decimal" value={stake} onChange={(event)=>setStake(event.target.value)} aria-label="Parlay stake"/></label><div><small>Estimated return</small><strong>${payout.toFixed(2)}</strong></div><button onClick={()=>setParlay([])}>Clear</button><ul>{parlay.map((item)=>{const priced=offerForMode(item.side,priceMode);return <li key={item.id}><span>{item.entity} · {titleCase(item.side.side)} {item.side.line??""}</span><b>{priced ? `${bookName(priced.book)} ${formatAmerican(priced.odds)}` : "Not offered"}</b></li>;})}</ul><p>Planning tool only. Every leg must be offered by the selected sportsbook; unavailable legs are never substituted.</p></aside>}
       <div className="pro-controls"><input className="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search player, team or market" aria-label="Search live odds"/><select value={category} onChange={(event) => setCategory(event.target.value)} aria-label="Filter market type">{categories.map((name) => <option key={name}>{name}</option>)}</select><button onClick={() => board.refetch()} disabled={board.isFetching}>{board.isFetching ? "Refreshing…" : "Refresh lines"}</button></div>
@@ -668,6 +670,75 @@ function ModelVsBooks({ sport, awayCode, homeCode, awayModel, homeModel, groups 
   </section>;
 }
 
+type LikelyScorers = ApiResponse<typeof api, "getLikelyScorers">;
+type LikelyScorer = LikelyScorers["teams"][string][number];
+
+function marketTeamCodes(sport: Sport, market: MarketGroup, nhlStandings: NhlOverview["standings"] | null, nflStandings: NflOverview["standings"] | null): [string, string] | null {
+  const standings = sport === "nfl" ? nflStandings : nhlStandings;
+  if (!standings || standings.length === 0) return null;
+  const sideNames = market.sides.map((side) => side.side).filter(Boolean);
+  const matchupParts = market.matchup.split("@").map((part) => part.trim()).filter(Boolean);
+  const candidates = sideNames.length >= 2 ? sideNames : matchupParts.length >= 2 ? matchupParts : [market.entity];
+  const matchCode = (label: string): string | null => {
+    const needle = label.toLowerCase();
+    const row = standings.find((item) => {
+      const name = (item.name ?? "").toLowerCase();
+      const abbrev = (item.team ?? "").toLowerCase();
+      return name !== "" && (needle === name || needle === abbrev || needle.includes(name) || name.includes(needle));
+    });
+    return row?.team ?? null;
+  };
+  const awayLabel = candidates[0];
+  const homeLabel = candidates[candidates.length - 1];
+  const away = awayLabel ? matchCode(awayLabel) : null;
+  const home = homeLabel ? matchCode(homeLabel) : null;
+  return away && home ? [away, home] : null;
+}
+
+function topGameScorers(scorers: LikelyScorers, awayCode: string, homeCode: string): LikelyScorer[] {
+  return [...(scorers.teams[awayCode] ?? []), ...(scorers.teams[homeCode] ?? [])]
+    .sort((a, b) => b.rate - a.rate || b.stat - a.stat || a.name.localeCompare(b.name))
+    .slice(0, 2);
+}
+
+function LikelyScorersStrip({ sport, market, nhlStandings, nflStandings, scorers }: {
+  sport: Sport;
+  market: MarketGroup;
+  nhlStandings: NhlOverview["standings"] | null;
+  nflStandings: NflOverview["standings"] | null;
+  scorers: LikelyScorers | null;
+}) {
+  const codes = marketTeamCodes(sport, market, nhlStandings, nflStandings);
+  if (!codes || !scorers) return null;
+  const top = topGameScorers(scorers, codes[0], codes[1]);
+  if (top.length === 0) return null;
+  const unit = sport === "nhl" ? "G" : "TD";
+  const thing = sport === "nhl" ? "goals" : "touchdowns";
+  return <div className="scorer-strip">
+    <div className="scorer-head"><span>🎯 {sport === "nhl" ? "Likely scorers" : "Likely TD scorers"}</span><em>season leaders</em></div>
+    <div className="scorer-names">{top.map((player) => <span key={`${player.team}-${player.name}`}><b>{player.name}</b><i>{player.team} · {player.stat}{unit}</i></span>)}</div>
+    <small className="scorer-note">Most {thing} per game this season — a stat, not a sportsbook line.</small>
+  </div>;
+}
+
+function LikelyScorersSection({ sport, awayCode, homeCode, scorers }: {
+  sport: Sport;
+  awayCode: string;
+  homeCode: string;
+  scorers: LikelyScorers | undefined;
+}) {
+  if (!scorers) return null;
+  const top = topGameScorers(scorers, awayCode, homeCode);
+  if (top.length === 0) return null;
+  const unit = sport === "nhl" ? "G" : "TD";
+  const thing = sport === "nhl" ? "goal" : "touchdown";
+  return <section className="likely-scorers" aria-label={sport === "nhl" ? "Likely goal scorers" : "Likely touchdown scorers"}>
+    <div className="section-heading"><div><p className="kicker">{sport === "nhl" ? "LIKELY GOAL SCORERS" : "LIKELY TD SCORERS"}</p><h3>Who finds {sport === "nhl" ? "the net" : "the end zone"}</h3></div><span>🎯</span></div>
+    <ol className="scorer-list">{top.map((player, index) => <li key={`${player.team}-${player.name}`}><span className="scorer-rank">#{index + 1}</span><span className="scorer-player"><strong>{player.name}</strong><small>{player.team}</small></span><span className="scorer-stat"><b>{player.stat} {unit}</b><small>{player.games} GP · {player.rate.toFixed(2)}/game</small></span></li>)}</ol>
+    <p className="mvb-note">Ranked by {thing}s per game this season from official stats. A stat, not a sportsbook line or prop.</p>
+  </section>;
+}
+
 function MatchupCalculator() {
   const [awayTeam, setAwayTeam] = useState<TeamCode>("WSH");
   const [homeTeam, setHomeTeam] = useState<TeamCode>("PIT");
@@ -676,6 +747,7 @@ function MatchupCalculator() {
   const board = useQuery({ queryKey: ["premium-board", "nhl"], queryFn: () => api.getPremiumBoard({ sport: "nhl" }), retry: false });
   const boardGroups = useMemo(() => groupPremiumOffers(board.data?.offers ?? []), [board.data]);
   const result = useQuery({ queryKey: ["first-goal-matchup", matchup.away, matchup.home], queryFn: () => api.getFirstGoalMatchup({ awayTeam: matchup.away, homeTeam: matchup.home, force: false }), retry: 1 });
+  const scorers = useQuery({ queryKey: ["likely-scorers", "nhl"], queryFn: () => api.getLikelyScorers({ sport: "nhl" }), staleTime: 12 * 60 * 60 * 1000, retry: 1 });
   const refresh = useMutation({ mutationFn: () => api.getFirstGoalMatchup({ awayTeam: matchup.away, homeTeam: matchup.home, force: true }), onSuccess: () => result.refetch() });
   const data: FirstGoalMatchup | undefined = result.data;
   const chooseGame = (away: string, home: string) => {
@@ -712,6 +784,7 @@ function MatchupCalculator() {
         <p className="winner-explain">The winner model blends each club’s recent win rate with the opponent’s loss rate, weighting away and home splits when at least five matching games exist. Overtime and shootout winners count. This is a model estimate, not a sportsbook line.</p>
       </section>
       {data && <ModelVsBooks sport="nhl" awayCode={data.away.team} homeCode={data.home.team} awayModel={data.awayWinProbability} homeModel={data.homeWinProbability} groups={boardGroups} />}
+      {data && <LikelyScorersSection sport="nhl" awayCode={data.away.team} homeCode={data.home.team} scorers={scorers.data} />}
       <section className="first-goal-card">
         <div className="section-heading"><div><p className="kicker">MODEL ESTIMATE</p><h2>First goal probability</h2></div><span>{data.edgeTeam ? `${data.edgeTeam} +${data.edgePoints?.toFixed(1) ?? "0.0"} pts` : "Insufficient sample"}</span></div>
         <div className="first-goal-score"><div><span>{data.away.team} · away</span><strong>{percentage(data.awayProbability)}</strong></div><div className="first-goal-track" role="img" aria-label={`${data.away.team} ${percentage(data.awayProbability)} and ${data.home.team} ${percentage(data.homeProbability)} to score first`}><i style={{ width: `${(data.awayProbability ?? .5) * 100}%` }}/><b style={{ width: `${(data.homeProbability ?? .5) * 100}%` }}/></div><div className="home"><span>{data.home.team} · home</span><strong>{percentage(data.homeProbability)}</strong></div></div>
@@ -1110,6 +1183,7 @@ function NflMatchupCalculator() {
   const board = useQuery({ queryKey: ["premium-board", "nfl"], queryFn: () => api.getPremiumBoard({ sport: "nfl" }), retry: false });
   const boardGroups = useMemo(() => groupPremiumOffers(board.data?.offers ?? []), [board.data]);
   const result = useQuery({ queryKey: ["nfl-matchup", matchup.away, matchup.home], queryFn: () => api.getNflMatchup({ awayTeam: matchup.away, homeTeam: matchup.home, force: false }), retry: 1 });
+  const scorers = useQuery({ queryKey: ["likely-scorers", "nfl"], queryFn: () => api.getLikelyScorers({ sport: "nfl" }), staleTime: 12 * 60 * 60 * 1000, retry: 1 });
   const refresh = useMutation({ mutationFn: () => api.getNflMatchup({ awayTeam: matchup.away, homeTeam: matchup.home, force: true }), onSuccess: () => result.refetch() });
   const data: NflMatchup | undefined = result.data;
   const chooseGame = (away: string, home: string) => {
@@ -1146,6 +1220,7 @@ function NflMatchupCalculator() {
         <p className="winner-explain">The winner model blends each club's recent win rate with the opponent's loss rate, weighting away and home splits when at least three matching games exist. This is a model estimate, not a sportsbook line.</p>
       </section>
       {data && <ModelVsBooks sport="nfl" awayCode={data.away.team} homeCode={data.home.team} awayModel={data.awayWinProbability} homeModel={data.homeWinProbability} groups={boardGroups} />}
+      {data && <LikelyScorersSection sport="nfl" awayCode={data.away.team} homeCode={data.home.team} scorers={scorers.data} />}
       <section className="first-goal-card">
         <div className="section-heading"><div><p className="kicker">MODEL ESTIMATE</p><h2>First score probability</h2></div><span>{data.firstScoreEdgeTeam ? `${data.firstScoreEdgeTeam} +${data.firstScoreEdgePoints?.toFixed(1) ?? "0.0"} pts` : "Insufficient sample"}</span></div>
         <div className="first-goal-score"><div><span>{data.away.team} · away</span><strong>{percentage(data.firstScoreAwayProbability)}</strong></div><div className="first-goal-track" role="img" aria-label={`${data.away.team} ${percentage(data.firstScoreAwayProbability)} and ${data.home.team} ${percentage(data.firstScoreHomeProbability)} to score first`}><i style={{ width: `${(data.firstScoreAwayProbability ?? .5) * 100}%` }}/><b style={{ width: `${(data.firstScoreHomeProbability ?? .5) * 100}%` }}/></div><div className="home"><span>{data.home.team} · home</span><strong>{percentage(data.firstScoreHomeProbability)}</strong></div></div>

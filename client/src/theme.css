@@ -867,6 +867,27 @@ html[data-dimmed="true"] .brightness-veil { display: block; }
 
 /* Slate flip cards — every real game shows its live model flip % in the matchup lab */
 .slate-flips { display: grid; gap: 10px; margin: 14px 0 4px; }
+
+/* Likely scorers — top-2 season scoring leaders for each game, both leagues */
+.scorer-strip { margin: 8px 0 2px; padding: 9px 11px; border: 1px dashed var(--rule); border-radius: 10px; background: color-mix(in srgb, var(--surface) 70%, transparent); }
+.scorer-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 5px; }
+.scorer-head span { font-size: 10px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; color: var(--text); }
+.scorer-head em { font-style: normal; font-size: 9px; color: var(--dim); }
+.scorer-names { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.scorer-names span { display: inline-flex; align-items: baseline; gap: 6px; font-size: 13px; }
+.scorer-names b { color: var(--text); }
+.scorer-names i { font-style: normal; font-size: 11px; color: var(--dim); }
+.scorer-note { display: block; margin-top: 5px; font-size: 10px; color: var(--dim); }
+.likely-scorers { margin: 14px 0; }
+.scorer-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.scorer-list li { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); }
+.scorer-rank { font-size: 12px; font-weight: 900; color: var(--accent); min-width: 26px; }
+.scorer-player { flex: 1; display: grid; }
+.scorer-player strong { font-size: 14px; }
+.scorer-player small { font-size: 11px; color: var(--dim); }
+.scorer-stat { text-align: right; display: grid; }
+.scorer-stat b { font-size: 14px; color: var(--text); }
+.scorer-stat small { font-size: 10px; color: var(--dim); }
 @media (min-width: 560px) { .slate-flips { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .slate-flip { text-align: left; border: 1px solid var(--rule); background: var(--surface); color: var(--text); border-radius: 12px; padding: 12px 14px; cursor: pointer; font: inherit; display: grid; gap: 8px; transition: transform .12s ease, border-color .12s ease; }
 .slate-flip:active { transform: scale(.98); }

@@ -41,6 +41,7 @@ export const api = {
   getNflMatchup: (args: ActionArgs<"getNflMatchup">) => callAction("getNflMatchup", args),
   getNflHotStreaks: (args: ActionArgs<"getNflHotStreaks">) => callAction("getNflHotStreaks", args),
   getNflColdStreaks: (args: ActionArgs<"getNflColdStreaks">) => callAction("getNflColdStreaks", args),
+  getLikelyScorers: (args: ActionArgs<"getLikelyScorers">) => callAction("getLikelyScorers", args),
   getNflRoster: (args: ActionArgs<"getNflRoster">) => callAction("getNflRoster", args),
   getNflPlayerGameLog: (args: ActionArgs<"getNflPlayerGameLog">) => callAction("getNflPlayerGameLog", args),
   getPremiumBoard: (args: ActionArgs<"getPremiumBoard">) => callAction("getPremiumBoard", args),
