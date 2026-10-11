@@ -31,17 +31,17 @@
   --border: #c9ad85;
   --rule: #d8c096;
   --accent: #e98a35;
-  --orange: #b85f1e;
+  --orange: color-mix(in srgb, var(--accent) 45%, #b85f1e);
   --green: #237a57;
   --toast: #f2e4cf;
   --radius: 14px;
-  /* prestige additions */
+  /* prestige additions — metals follow the team color; the logo artwork itself never changes */
   --ink: #2a1e13;
   --card: #fffdf8;
   --muted: #6f5c4c;
-  --gold: #d9a441;
-  --gold-deep: #a86f1f;
-  --gold-pale: #f4dfae;
+  --gold: color-mix(in srgb, var(--accent) 55%, #d9a441);
+  --gold-deep: color-mix(in srgb, var(--accent) 62%, #a86f1f);
+  --gold-pale: color-mix(in srgb, var(--accent) 30%, #f4dfae);
   --shadow-warm: 94, 62, 28;
   --space-surface: var(--surface);
   --space-surface-alt: var(--paper);
@@ -60,15 +60,15 @@
     --border: #4a3a2c;
     --rule: #3d2f24;
     --accent: #f39a48;
-    --orange: #f2a05b;
+    --orange: color-mix(in srgb, var(--accent) 45%, #f2a05b);
     --green: #54c28d;
     --toast: #2a2119;
     --ink: #0d0906;
     --card: #251d13;
     --muted: #c6ab8d;
-    --gold: #e8b54d;
-    --gold-deep: #b57e24;
-    --gold-pale: #f7e3ae;
+    --gold: color-mix(in srgb, var(--accent) 55%, #e8b54d);
+    --gold-deep: color-mix(in srgb, var(--accent) 62%, #b57e24);
+    --gold-pale: color-mix(in srgb, var(--accent) 30%, #f7e3ae);
     --shadow-warm: 0, 0, 0;
   }
 }
@@ -1651,3 +1651,39 @@ html[data-dimmed="true"] .brightness-veil { display: block; }
 }
 
 @media (prefers-reduced-motion: reduce) { .welcome-sign::before { animation: none; } }
+
+/* Hockey side — skate on the rink: pale ice, skate scratches, faint markings, team color in the air */
+body[data-sport="nhl"] .app-shell {
+  background:
+    radial-gradient(120% 60% at 50% -10%, color-mix(in srgb, var(--gold-pale) 26%, transparent), transparent 60%),
+    radial-gradient(90% 50% at 0% 0%, color-mix(in srgb, var(--accent) 38%, transparent), transparent 60%),
+    radial-gradient(70% 42% at 100% 6%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 62%),
+    radial-gradient(circle at 88% 20%, transparent 0 68px, color-mix(in srgb, #d23c3c 15%, transparent) 70px 74px, transparent 76px),
+    radial-gradient(circle at 88% 20%, transparent 0 34px, color-mix(in srgb, #2a5db0 13%, transparent) 36px 39px, transparent 41px),
+    linear-gradient(180deg, transparent 0 31%, color-mix(in srgb, #2a5db0 11%, transparent) 31% 32.2%, transparent 32.2% 61%, color-mix(in srgb, #d23c3c 11%, transparent) 61% 62.4%, transparent 62.4%),
+    repeating-linear-gradient(115deg, transparent 0 26px, color-mix(in srgb, #9fb6cc 9%, transparent) 26px 27px),
+    repeating-linear-gradient(64deg, transparent 0 42px, color-mix(in srgb, #9fb6cc 7%, transparent) 42px 43px),
+    linear-gradient(180deg, color-mix(in srgb, #cfe0f2 32%, var(--paper)), color-mix(in srgb, #cfe0f2 12%, var(--paper)) 460px, var(--paper)),
+    radial-gradient(90% 45% at 50% 108%, color-mix(in srgb, var(--accent) 26%, transparent), transparent 62%),
+    var(--paper);
+}
+
+/* Football side — own the field: turf tint, yard lines, mow stripes, team color in the air */
+body[data-sport="nfl"] .app-shell {
+  background:
+    radial-gradient(120% 60% at 50% -10%, color-mix(in srgb, var(--gold-pale) 26%, transparent), transparent 60%),
+    radial-gradient(90% 50% at 0% 0%, color-mix(in srgb, var(--accent) 38%, transparent), transparent 60%),
+    radial-gradient(70% 42% at 100% 6%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 62%),
+    repeating-linear-gradient(90deg, transparent 0 74px, color-mix(in srgb, #ffffff 20%, transparent) 74px 77px),
+    repeating-linear-gradient(90deg, color-mix(in srgb, #2e7d3a 9%, transparent) 0 74px, transparent 74px 148px),
+    linear-gradient(180deg, color-mix(in srgb, #2e7d3a 20%, var(--paper)), color-mix(in srgb, #2e7d3a 9%, var(--paper)) 460px, var(--paper)),
+    radial-gradient(90% 45% at 50% 108%, color-mix(in srgb, var(--accent) 26%, transparent), transparent 62%),
+    var(--paper);
+}
+
+/* Welcome card actions — My team + tour side by side, text kept crisp above the sheen */
+.welcome-sign > div { position: relative; z-index: 1; }
+.welcome-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 14px; }
+.welcome-actions .tour-cta { margin-top: 0; }
+.welcome-actions .team-picker-btn { min-height: 44px; text-shadow: 0 1px 0 rgba(255,255,255,.4); }
+.welcome-sign p, .welcome-sign strong, .welcome-sign span { text-shadow: 0 1px 2px rgba(255,255,255,.35); }

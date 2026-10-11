@@ -503,7 +503,7 @@ const TUTORIAL_SLIDES: { icon: string; kicker: string; title: string; points: st
   ]},
   { icon: "🏒", kicker: "PICK YOUR SIDE", title: "Hockey or football?", points: [
     "Tap NHL / NFL at the top to switch leagues — each side is built to full depth.",
-    "Hit My team and pick your squad: the whole app, background included, dresses in your team's colors.",
+    "Hit My team on the welcome card and pick your squad: the whole app, background included, dresses in your team's colors. The hockey side shows only NHL teams, the football side only NFL teams.",
     "The tabs below are your cutting board: Board, Jamón Ibérico, Parlay, Matchup, Players, Streaks, League, Watchlist, Settings.",
   ]},
   { icon: "📋", kicker: "THE BOARD", title: "Every game, one card.", points: [
@@ -632,7 +632,7 @@ function JamonView({ sport }: { sport: Sport }) {
   </section>;
 }
 
-function ProView({ parlay, setParlay, home = false, sport, onTour }: { parlay: ParlayPick[]; setParlay: (next: ParlayPick[]) => void; home?: boolean; sport: Sport; onTour?: () => void }) {
+function ProView({ parlay, setParlay, home = false, sport }: { parlay: ParlayPick[]; setParlay: (next: ParlayPick[]) => void; home?: boolean; sport: Sport }) {
   const board = useQuery({ queryKey: ["premium-board", sport], queryFn: () => api.getPremiumBoard({ sport }), retry: false });
   const overview = useQuery({ queryKey: ["nhl-overview"], queryFn: () => api.getNhlOverview({}), staleTime: 15 * 60 * 1000, retry: 1, enabled: sport === "nhl" });
   const nflOverview = useQuery({ queryKey: ["nfl-overview", "current"], queryFn: () => api.getNflOverview({}), staleTime: 15 * 60 * 1000, retry: 1, enabled: sport === "nfl" });
@@ -655,7 +655,7 @@ function ProView({ parlay, setParlay, home = false, sport, onTour }: { parlay: P
     setParlay(parlay.some((item) => item.id === pick.id) ? parlay.filter((item) => item.id !== pick.id) : [...parlay, pick]);
   };
   return <>
-    {home && <><WelcomeBanner sport={sport} onTour={onTour}/><InstallCard/><ScheduleStrip compact sport={sport}/></>}
+    {home && <><InstallCard/><ScheduleStrip compact sport={sport}/></>}
     <ProviderStatus pending={board.isPending || board.isFetching} error={board.error instanceof Error ? board.error.message : null} onRetry={() => board.refetch()} />
     {board.data && <section className="pro-board">
       <div className="roster-title"><div><p className="kicker">{home ? "TODAY'S COMPLETE BOARD" : "LIVE SPORTSBOOK BOARD"}</p><h2>{groups.length.toLocaleString()} markets · {board.data.offerCount.toLocaleString()} book prices</h2><p className="roster-intro">Every market returned by the feed, paired across sides when both are offered.</p></div><span>{board.data.eventCount} events · {dateTime(board.data.fetchedAt)}</span></div>
@@ -1217,7 +1217,10 @@ function WelcomeBanner({ sport, onTour }: { sport: Sport; onTour?: () => void })
       <p className="welcome-kicker">{team ? <>Welcome, {team.name} fan <b className="welcome-team-badge">{team.code}</b></> : "Welcome to the Daily Ham"}</p>
       <strong>Fresh Cuts Daily</strong>
       <span>{team ? "Tonight's board, dressed in your team's colors." : "Every NHL & NFL market, official league data, model projections and sharp price comparison."}</span>
-      {onTour && <button type="button" className="tour-cta" onClick={onTour}>Take the tour — learn the app</button>}
+      <div className="welcome-actions">
+        <TeamThemePicker sport={sport}/>
+        {onTour && <button type="button" className="tour-cta" onClick={onTour}>Take the tour — learn the app</button>}
+      </div>
     </div>
   </section>;
 }
@@ -1315,18 +1318,18 @@ function TeamThemePicker({ sport }: { sport: Sport }) {
     </button>
     {open && <div className="team-modal-backdrop" onClick={() => setOpen(false)}>
       <div className="team-modal" role="dialog" aria-modal="true" aria-label="Pick your favorite teams" onClick={(e) => e.stopPropagation()}>
-        <div className="team-modal-head"><h3>Your teams, your colors</h3><button type="button" className="team-modal-close" onClick={() => setOpen(false)} aria-label="Close">×</button></div>
-        <p>Pick a favorite in each league — the site dresses in your NHL colors on the hockey side and your NFL colors on the football side. Saved on this device.</p>
-        {(["nhl", "nfl"] as League[]).map((league) => <div key={league}>
-          <p className="team-league-label">{league === "nhl" ? "NHL" : "NFL"}</p>
+        <div className="team-modal-head"><h3>Your team, your colors</h3><button type="button" className="team-modal-close" onClick={() => setOpen(false)} aria-label="Close">×</button></div>
+        <p>Pick your favorite {sport === "nhl" ? "NHL" : "NFL"} team — this side of the site dresses in its colors. Switch to the {sport === "nhl" ? "football" : "hockey"} side to pick a team there. Saved on this device.</p>
+        <div>
+          <p className="team-league-label">{sport === "nhl" ? "NHL" : "NFL"}</p>
           <div className="team-grid">
-            {LEAGUE_THEMES[league].map((t) => <button key={`${league}-${t.code}`} type="button" className={"team-cell" + (favs[league] === t.code ? " sel" : "")} onClick={() => pick(league, t.code)} aria-pressed={favs[league] === t.code}>
+            {LEAGUE_THEMES[sport].map((t) => <button key={`${sport}-${t.code}`} type="button" className={"team-cell" + (favs[sport] === t.code ? " sel" : "")} onClick={() => pick(sport, t.code)} aria-pressed={favs[sport] === t.code}>
               <span className="team-swatch" style={{ background: `linear-gradient(135deg, ${t.color} 50%, ${t.secondary} 50%)` }} aria-hidden="true" />
               <b>{t.code}</b><small>{t.name}</small>
             </button>)}
           </div>
-        </div>)}
-        {(favs.nhl || favs.nfl) && <button type="button" className="team-clear" onClick={() => { saveFavorite("nhl", null); saveFavorite("nfl", null); setFavs(loadFavorites()); }}>Reset to The Daily Ham colors</button>}
+        </div>
+        {favs[sport] && <button type="button" className="team-clear" onClick={() => { saveFavorite(sport, null); setFavs(loadFavorites()); }}>Reset to The Daily Ham colors</button>}
       </div>
     </div>}
   </>;
@@ -1823,7 +1826,7 @@ export function App(){
     setMode("rosters");
   }
   const boardLabel = sport === "nfl" ? "Gridiron" : "Ice board";
-  return <div className="app-shell"><SafeAreaTopScrim backgroundColor="var(--paper)"/><ToastHost/><InstallPrompt/><main><div className="topbar"><div className="sport-switch" role="group" aria-label="League"><button type="button" className={"sport-shape" + (sport === "nhl" ? " active" : "")} onClick={() => chooseSport("nhl")} aria-pressed={sport === "nhl"} aria-label="Hockey side"><span className="shape puck" aria-hidden="true" /><em>NHL</em></button><button type="button" className={"sport-shape" + (sport === "nfl" ? " active" : "")} onClick={() => chooseSport("nfl")} aria-pressed={sport === "nfl"} aria-label="Football side"><span className="shape ball" aria-hidden="true" /><em>NFL</em></button></div><nav className="mode-tabs shapes" aria-label="Data view">{([
+  return <div className="app-shell"><SafeAreaTopScrim backgroundColor="var(--paper)"/><ToastHost/><InstallPrompt/><main>{mode==="board"&&<WelcomeBanner sport={sport} onTour={() => setTutorialOpen(true)}/>}<div className="topbar"><div className="sport-switch" role="group" aria-label="League"><button type="button" className={"sport-shape" + (sport === "nhl" ? " active" : "")} onClick={() => chooseSport("nhl")} aria-pressed={sport === "nhl"} aria-label="Hockey side"><span className="shape puck" aria-hidden="true" /><em>NHL</em></button><button type="button" className={"sport-shape" + (sport === "nfl" ? " active" : "")} onClick={() => chooseSport("nfl")} aria-pressed={sport === "nfl"} aria-label="Football side"><span className="shape ball" aria-hidden="true" /><em>NFL</em></button></div><nav className="mode-tabs shapes" aria-label="Data view">{([
         ["board", boardLabel],
         ["jamon", "Jamón Ibérico"],
         ["parlay", parlay.length > 0 ? `Parlay (${parlay.length})` : "Parlay"],
@@ -1833,5 +1836,5 @@ export function App(){
         ["standings", "League"],
         ["watchlist", "Watchlist"],
         ["settings", "Settings"],
-      ] as [Mode, string][]).map(([key, label]) => <button key={key} type="button" className={"mode-shape" + (mode === key ? " active" : "")} onClick={() => setMode(key)} aria-pressed={mode === key} aria-label={label}><span className={"rink " + (key === "jamon" ? "platter" : sport === "nhl" ? "ice" : "turf")} aria-hidden="true"><span className={"shape " + (key === "jamon" ? "plate" : sport === "nhl" ? "puck" : "ball")} /></span>{mode === key && <i className="mode-glow" aria-hidden="true" />}<em>{label}</em></button>)}</nav><TeamThemePicker sport={sport}/></div>{mode==="board"&&<ProView parlay={parlay} setParlay={setParlay} home sport={sport} onTour={() => setTutorialOpen(true)}/>} {mode==="jamon"&&<JamonView sport={sport}/>} {mode==="parlay"&&<ParlayView parlay={parlay} setParlay={setParlay} sport={sport} onGoBoard={()=>setMode("board")}/>} {mode==="matchup"&&<MatchupView sport={sport}/>} {mode==="rosters"&&<RosterView parlay={parlay} setParlay={setParlay} sport={sport} teamFocus={teamFocus}/>} {mode==="streaks"&&<StreaksView sport={sport}/>} {mode==="standings"&&<LeagueView sport={sport}/>} {mode==="watchlist"&&<WatchlistView onViewTeam={viewTeam}/>} {mode==="settings"&&<SiteSettings/>}{tutorialOpen&&<TutorialSheet onClose={() => setTutorialOpen(false)}/>}</main></div>;
+      ] as [Mode, string][]).map(([key, label]) => <button key={key} type="button" className={"mode-shape" + (mode === key ? " active" : "")} onClick={() => setMode(key)} aria-pressed={mode === key} aria-label={label}><span className={"rink " + (key === "jamon" ? "platter" : sport === "nhl" ? "ice" : "turf")} aria-hidden="true"><span className={"shape " + (key === "jamon" ? "plate" : sport === "nhl" ? "puck" : "ball")} /></span>{mode === key && <i className="mode-glow" aria-hidden="true" />}<em>{label}</em></button>)}</nav></div>{mode==="board"&&<ProView parlay={parlay} setParlay={setParlay} home sport={sport}/>} {mode==="jamon"&&<JamonView sport={sport}/>} {mode==="parlay"&&<ParlayView parlay={parlay} setParlay={setParlay} sport={sport} onGoBoard={()=>setMode("board")}/>} {mode==="matchup"&&<MatchupView sport={sport}/>} {mode==="rosters"&&<RosterView parlay={parlay} setParlay={setParlay} sport={sport} teamFocus={teamFocus}/>} {mode==="streaks"&&<StreaksView sport={sport}/>} {mode==="standings"&&<LeagueView sport={sport}/>} {mode==="watchlist"&&<WatchlistView onViewTeam={viewTeam}/>} {mode==="settings"&&<SiteSettings/>}{tutorialOpen&&<TutorialSheet onClose={() => setTutorialOpen(false)}/>}</main></div>;
 }
