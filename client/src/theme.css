@@ -78,13 +78,15 @@ body { margin: 0; background: var(--bg); }
 button, a { -webkit-tap-highlight-color: transparent; }
 button { font: inherit; }
 
-/* App shell — warm vignette over fine butcher-paper ruling, washed in your team's colors */
+/* App shell — warm vignette over fine butcher-paper ruling, bathed in your team's colors */
 .app-shell {
   min-height: 100vh;
   background:
     radial-gradient(120% 60% at 50% -10%, color-mix(in srgb, var(--gold-pale) 26%, transparent), transparent 60%),
-    radial-gradient(85% 44% at 3% 0%, color-mix(in srgb, var(--accent) 24%, transparent), transparent 62%),
-    radial-gradient(85% 44% at 97% 100%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 62%),
+    radial-gradient(90% 50% at 0% 0%, color-mix(in srgb, var(--accent) 38%, transparent), transparent 60%),
+    radial-gradient(70% 42% at 100% 6%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 62%),
+    linear-gradient(115deg, transparent 42%, color-mix(in srgb, var(--accent) 10%, transparent) 50%, transparent 58%),
+    radial-gradient(90% 45% at 50% 108%, color-mix(in srgb, var(--accent) 26%, transparent), transparent 62%),
     radial-gradient(140% 90% at 50% 115%, color-mix(in srgb, var(--ink) 10%, transparent), transparent 55%),
     repeating-linear-gradient(0deg, transparent 0, transparent 31px, color-mix(in srgb, var(--rule) 30%, transparent) 32px),
     var(--paper);
@@ -1545,16 +1547,7 @@ html[data-dimmed="true"] .brightness-veil { display: block; }
 @media (min-width: 680px) { .jamon-spread { grid-template-columns: repeat(2, minmax(0,1fr)); } }
 @media (prefers-reduced-motion: reduce) { .jamon-hero::before { animation: none; } }
 
-/* Tutorial — guide button, tour CTA, swipeable sheet */
-.guide-btn {
-  display: inline-flex; align-items: center; gap: 8px; min-height: 42px; padding: 0 14px;
-  border: 1px solid var(--gold-deep); color: var(--ink); border-radius: 12px; font-weight: 800; font-size: 13px; cursor: pointer; justify-self: start;
-  background: linear-gradient(180deg, #fff8e8, var(--gold-pale) 70%, #ecd9a8);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.7), 0 5px 12px -6px rgba(var(--shadow-warm), .55), 0 0 14px -4px color-mix(in srgb, var(--gold) 55%, transparent);
-  transition: transform .1s ease;
-}
-.guide-btn:active { transform: translateY(1px); }
-.guide-btn em { font-style: normal; }
+/* Tutorial — tour CTA, swipeable sheet */
 .tour-cta {
   margin-top: 10px; align-self: flex-start; min-height: 44px; padding: 0 18px; border-radius: 999px; cursor: pointer;
   border: 1px solid rgba(0,0,0,.3); font-weight: 900; font-size: 14px; color: #fff8ea; text-shadow: 0 1px 2px rgba(0,0,0,.4);
@@ -1605,3 +1598,50 @@ html[data-dimmed="true"] .brightness-veil { display: block; }
 .tutorial-nav button:not(.primary):disabled { opacity: .4; }
 .tutorial-nav .primary { min-height: 46px; padding: 0 20px; }
 @media (prefers-reduced-motion: reduce) { .tutorial-rail { scroll-snap-type: none; } .tutorial-dots span { transition: none; } }
+
+/* Spectacular fan design — team colors as the masterpiece */
+.topbar {
+  position: relative;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--accent) 20%, transparent), color-mix(in srgb, var(--accent) 8%, transparent) 72%, color-mix(in srgb, var(--ink) 7%, transparent)),
+    var(--paper);
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border));
+  border-radius: 20px;
+  padding: 14px 14px 18px;
+  box-shadow: 0 20px 40px -18px color-mix(in srgb, var(--accent) 55%, transparent), inset 0 1px 0 rgba(255,255,255,.55), inset 0 -2px 8px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.topbar::after {
+  content: ""; position: absolute; left: 22px; right: 22px; bottom: 7px; height: 3px; border-radius: 999px;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 90%, transparent), transparent);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 65%, transparent);
+  pointer-events: none;
+}
+
+/* Welcome sign — the hero, drenched in team color with a slow sheen */
+.welcome-sign {
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.5), rgba(255,255,255,0) 90px),
+    linear-gradient(115deg, color-mix(in srgb, var(--team-color, var(--accent)) 36%, transparent), transparent 66%),
+    color-mix(in srgb, var(--team-color, var(--accent)) 17%, var(--paper));
+  border: 1px solid color-mix(in srgb, var(--team-color, var(--accent)) 45%, var(--border));
+  border-left: 6px solid color-mix(in srgb, var(--team-color, var(--accent)) 80%, var(--gold-deep));
+  box-shadow: 0 22px 48px -16px color-mix(in srgb, var(--team-color, var(--accent)) 60%, transparent), inset 0 1px 0 rgba(255,255,255,.6), 0 0 26px -8px color-mix(in srgb, var(--team-color, var(--accent)) 45%, transparent);
+}
+.welcome-sign::before {
+  content: ""; position: absolute; inset: -40%; pointer-events: none;
+  background: linear-gradient(105deg, transparent 44%, color-mix(in srgb, var(--team-color, var(--accent)) 24%, transparent) 50%, transparent 56%);
+  animation: hero-sheen 8s ease-in-out infinite;
+}
+
+/* Game cards — team-color ribbon across the top */
+.game-card {
+  border-top: 3px solid color-mix(in srgb, var(--accent) 68%, var(--gold-deep));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.55), 0 6px 14px -10px rgba(var(--shadow-warm), .5), 0 -10px 20px -14px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+/* Moneyline cards — team-color aura rising off the gold edge */
+.moneyline-card {
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.65), 0 14px 28px -16px rgba(var(--shadow-warm), .55), 0 -12px 24px -16px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) { .welcome-sign::before { animation: none; } }
