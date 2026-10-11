@@ -1495,3 +1495,50 @@ html[data-dimmed="true"] .brightness-veil { display: block; }
   flex: 1; min-height: 38px; border: 1px solid var(--border); border-radius: 8px; background: var(--paper); color: var(--text); font-weight: 800; font-size: 13px; cursor: pointer;
 }
 .plate-row-actions button.danger { border-color: var(--orange); color: var(--orange); }
+
+/* Jamón Ibérico nav — golden plate on a dark wood platter */
+.mode-shape .rink.platter {
+  background: linear-gradient(160deg, #54402a, #241a0e 75%);
+  box-shadow: inset 0 2px 6px rgba(255,255,255,.2), inset 0 -4px 8px rgba(0,0,0,.55), 0 8px 16px -6px rgba(var(--shadow-warm), .5);
+}
+.mode-shape .rink.platter::after { content: ""; position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 0%, rgba(217,164,65,.25), transparent 60%); pointer-events: none; }
+.mode-shape .plate {
+  width: 46px; height: 46px; border-radius: 50%; position: relative;
+  background: radial-gradient(circle at 38% 32%, #fffdf7 0%, #f6ead0 52%, #ddc192 100%);
+  border: 3px solid var(--gold-deep);
+  box-shadow: 0 7px 14px rgba(0,0,0,.45), inset 0 -5px 9px rgba(168,111,31,.35), inset 0 3px 5px rgba(255,255,255,.85), 0 0 16px color-mix(in srgb, var(--gold) 55%, transparent);
+}
+.mode-shape .plate::after {
+  content: ""; position: absolute; inset: 8px; border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--gold-deep) 55%, transparent);
+  box-shadow: inset 0 2px 6px rgba(168,111,31,.22);
+}
+
+/* Jamón Ibérico dedicated view — the carving board */
+.jamon-view { display: grid; gap: 18px; }
+.jamon-hero {
+  position: relative; overflow: hidden; border-radius: 18px; padding: 26px 20px;
+  color: var(--paper); text-align: center;
+  background:
+    radial-gradient(85% 130% at 50% 0%, color-mix(in srgb, var(--gold) 22%, transparent), transparent 60%),
+    linear-gradient(170deg, #3a2c1c, #1a1208 78%);
+  border: 1px solid rgba(217,164,65,.45);
+  box-shadow: 0 22px 48px -18px rgba(var(--shadow-warm), .65), inset 0 1px 0 rgba(255,255,255,.16), inset 0 -3px 10px rgba(0,0,0,.4);
+}
+.jamon-hero::before { content: ""; position: absolute; inset: -40%; pointer-events: none; background: linear-gradient(105deg, transparent 44%, rgba(244,223,174,.12) 50%, transparent 56%); animation: hero-sheen 7s ease-in-out infinite; }
+.jamon-hero .kicker { color: var(--gold-pale); position: relative; }
+.jamon-hero h1 {
+  margin: 6px 0 8px; font-size: clamp(38px, 10vw, 60px); line-height: .95; letter-spacing: -.03em; position: relative;
+  background: linear-gradient(180deg, #fff8e8 20%, var(--gold-pale) 60%, var(--gold) 95%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  filter: drop-shadow(0 3px 8px rgba(0,0,0,.55));
+}
+.jamon-hero p:last-child { margin: 0; color: #ddcdb9; font-size: 13px; position: relative; }
+.jamon-spread { display: grid; gap: 16px; }
+.jamon-plate.large { flex: none; max-width: none; padding: 22px 20px 24px; }
+.jamon-plate.large .plate-pick { font-size: clamp(26px, 7vw, 34px); }
+.jamon-plate.large .plate-note { font-size: 14px; }
+.jamon-empty { margin: 0; }
+.jamon-view .jamon-foot { margin: 0; }
+@media (min-width: 680px) { .jamon-spread { grid-template-columns: repeat(2, minmax(0,1fr)); } }
+@media (prefers-reduced-motion: reduce) { .jamon-hero::before { animation: none; } }

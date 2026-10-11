@@ -13,7 +13,7 @@ import { LEAGUE_THEMES, applyLeagueTheme, loadFavorites, saveFavorite, themeFor,
 import { isWatchedPlayer, isWatchedTeam, loadWatchlist, removeWatchedEntry, toggleWatch, type WatchedEntry, type WatchedPlayer, type WatchedTeam } from "./watchlist";
 
 type Sport = League;
-type Mode = "board" | "matchup" | "rosters" | "streaks" | "standings" | "watchlist" | "parlay" | "settings";
+type Mode = "board" | "matchup" | "rosters" | "streaks" | "standings" | "watchlist" | "parlay" | "settings" | "jamon";
 const SPORT_KEY = "dh-sport";
 function loadSport(): Sport {
   try {
@@ -495,7 +495,7 @@ function ParlayView({ parlay, setParlay, sport, onGoBoard }: { parlay: ParlayPic
 
 type CodyPlate = ApiResponse<typeof api, "getPublicPlates">["plates"][number];
 
-function JamonIberico({ sport }: { sport: Sport }) {
+function JamonView({ sport }: { sport: Sport }) {
   const [adminToken] = useState<string | null>(() => {
     try { return sessionStorage.getItem(ADMIN_SESSION_KEY); } catch { return null; }
   });
@@ -509,13 +509,16 @@ function JamonIberico({ sport }: { sport: Sport }) {
     retry: 1,
   });
   const visible = (plates.data ?? []).filter((plate) => plate.sport === sport);
-  if (!plates.isPending && visible.length === 0 && !adminToken) return null;
-  return <section className="jamon-section" aria-label="Jamón Ibérico — Cody's picks">
-    <div className="section-heading"><div><p className="kicker">JAMÓN IBÉRICO</p><h3>Cody's picks</h3></div><span>The premium cut</span></div>
+  return <section className="jamon-view" aria-label="Jamón Ibérico — Cody's picks">
+    <div className="jamon-hero">
+      <p className="kicker">JAMÓN IBÉRICO</p>
+      <h1>Cody's picks</h1>
+      <p>The premium cut — {sport === "nhl" ? "hockey" : "football"} picks, plated by hand.</p>
+    </div>
     {plates.isPending ? <div className="slate-loading">Plating the picks…</div> : visible.length === 0 ? (
-      <div className="history-empty"><strong>No picks plated yet.</strong><span>{adminToken ? "Add your first plate in Settings → Jamón Ibérico below." : "Check back soon — Cody's personal picks land here."}</span></div>
+      <div className="history-empty jamon-empty"><strong>No picks plated yet.</strong><span>{adminToken ? "Add your first plate in Settings → My plates." : "Check back soon — Cody's personal picks land here."}</span></div>
     ) : (
-      <div className="jamon-rail">{visible.map((plate) => <article className="jamon-plate" key={plate.id}>
+      <div className="jamon-spread">{visible.map((plate) => <article className="jamon-plate large" key={plate.id}>
         <div className="plate-top"><span className="plate-league">{plate.sport === "nhl" ? "NHL" : "NFL"}</span>{!plate.isPublic && <em className="plate-private">Private</em>}</div>
         <small className="plate-matchup">{plate.matchup}</small>
         <strong className="plate-pick">{plate.pick}</strong>
@@ -549,7 +552,7 @@ function ProView({ parlay, setParlay, home = false, sport }: { parlay: ParlayPic
     setParlay(parlay.some((item) => item.id === pick.id) ? parlay.filter((item) => item.id !== pick.id) : [...parlay, pick]);
   };
   return <>
-    {home && <><WelcomeBanner sport={sport}/><JamonIberico sport={sport}/><InstallCard/><ScheduleStrip compact sport={sport}/></>}
+    {home && <><WelcomeBanner sport={sport}/><InstallCard/><ScheduleStrip compact sport={sport}/></>}
     <ProviderStatus pending={board.isPending || board.isFetching} error={board.error instanceof Error ? board.error.message : null} onRetry={() => board.refetch()} />
     {board.data && <section className="pro-board">
       <div className="roster-title"><div><p className="kicker">{home ? "TODAY'S COMPLETE BOARD" : "LIVE SPORTSBOOK BOARD"}</p><h2>{groups.length.toLocaleString()} markets · {board.data.offerCount.toLocaleString()} book prices</h2><p className="roster-intro">Every market returned by the feed, paired across sides when both are offered.</p></div><span>{board.data.eventCount} events · {dateTime(board.data.fetchedAt)}</span></div>
@@ -1717,6 +1720,7 @@ export function App(){
   const boardLabel = sport === "nfl" ? "Gridiron" : "Ice board";
   return <div className="app-shell"><SafeAreaTopScrim backgroundColor="var(--paper)"/><ToastHost/><InstallPrompt/><main><div className="topbar"><div className="sport-switch" role="group" aria-label="League"><button type="button" className={"sport-shape" + (sport === "nhl" ? " active" : "")} onClick={() => chooseSport("nhl")} aria-pressed={sport === "nhl"} aria-label="Hockey side"><span className="shape puck" aria-hidden="true" /><em>NHL</em></button><button type="button" className={"sport-shape" + (sport === "nfl" ? " active" : "")} onClick={() => chooseSport("nfl")} aria-pressed={sport === "nfl"} aria-label="Football side"><span className="shape ball" aria-hidden="true" /><em>NFL</em></button></div><nav className="mode-tabs shapes" aria-label="Data view">{([
         ["board", boardLabel],
+        ["jamon", "Jamón Ibérico"],
         ["parlay", parlay.length > 0 ? `Parlay (${parlay.length})` : "Parlay"],
         ["matchup", "Matchup"],
         ["rosters", "Players"],
@@ -1724,5 +1728,5 @@ export function App(){
         ["standings", "League"],
         ["watchlist", "Watchlist"],
         ["settings", "Settings"],
-      ] as [Mode, string][]).map(([key, label]) => <button key={key} type="button" className={"mode-shape" + (mode === key ? " active" : "")} onClick={() => setMode(key)} aria-pressed={mode === key} aria-label={label}><span className={"rink " + (sport === "nhl" ? "ice" : "turf")} aria-hidden="true"><span className={"shape " + (sport === "nhl" ? "puck" : "ball")} /></span>{mode === key && <i className="mode-glow" aria-hidden="true" />}<em>{label}</em></button>)}</nav><TeamThemePicker sport={sport}/></div>{mode==="board"&&<ProView parlay={parlay} setParlay={setParlay} home sport={sport}/>} {mode==="parlay"&&<ParlayView parlay={parlay} setParlay={setParlay} sport={sport} onGoBoard={()=>setMode("board")}/>} {mode==="matchup"&&<MatchupView sport={sport}/>} {mode==="rosters"&&<RosterView parlay={parlay} setParlay={setParlay} sport={sport} teamFocus={teamFocus}/>} {mode==="streaks"&&<StreaksView sport={sport}/>} {mode==="standings"&&<LeagueView sport={sport}/>} {mode==="watchlist"&&<WatchlistView onViewTeam={viewTeam}/>} {mode==="settings"&&<SiteSettings/>}</main></div>;
+      ] as [Mode, string][]).map(([key, label]) => <button key={key} type="button" className={"mode-shape" + (mode === key ? " active" : "")} onClick={() => setMode(key)} aria-pressed={mode === key} aria-label={label}><span className={"rink " + (key === "jamon" ? "platter" : sport === "nhl" ? "ice" : "turf")} aria-hidden="true"><span className={"shape " + (key === "jamon" ? "plate" : sport === "nhl" ? "puck" : "ball")} /></span>{mode === key && <i className="mode-glow" aria-hidden="true" />}<em>{label}</em></button>)}</nav><TeamThemePicker sport={sport}/></div>{mode==="board"&&<ProView parlay={parlay} setParlay={setParlay} home sport={sport}/>} {mode==="jamon"&&<JamonView sport={sport}/>} {mode==="parlay"&&<ParlayView parlay={parlay} setParlay={setParlay} sport={sport} onGoBoard={()=>setMode("board")}/>} {mode==="matchup"&&<MatchupView sport={sport}/>} {mode==="rosters"&&<RosterView parlay={parlay} setParlay={setParlay} sport={sport} teamFocus={teamFocus}/>} {mode==="streaks"&&<StreaksView sport={sport}/>} {mode==="standings"&&<LeagueView sport={sport}/>} {mode==="watchlist"&&<WatchlistView onViewTeam={viewTeam}/>} {mode==="settings"&&<SiteSettings/>}</main></div>;
 }
