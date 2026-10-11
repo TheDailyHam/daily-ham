@@ -551,7 +551,6 @@ const TUTORIAL_SLIDES: { icon: string; kicker: string; title: string; points: st
   { icon: "🍽️", kicker: "JAMÓN IBÉRICO", title: "Cody's picks", points: [
     "The golden plate tab holds Cody's personal picks, plated for public viewing.",
     "These are his reads — not model output, not sportsbook lines.",
-    "He can also keep private plates that only he can see.",
   ]},
   { icon: "⚙️", kicker: "MAKE IT YOURS", title: "Settings", points: [
     "Brightness slider and scroll feel, saved per device.",
