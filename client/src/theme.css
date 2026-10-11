@@ -1639,6 +1639,12 @@ html[data-dimmed="true"] .brightness-veil { display: block; }
   box-shadow: inset 0 1px 0 rgba(255,255,255,.55), 0 6px 14px -10px rgba(var(--shadow-warm), .5), 0 -10px 20px -14px color-mix(in srgb, var(--accent) 55%, transparent);
 }
 
+/* Schedule tiles — team-color ribbon across the top */
+.game-tile {
+  border-top: 3px solid color-mix(in srgb, var(--accent) 68%, var(--gold-deep));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.6), 0 10px 22px -14px rgba(var(--shadow-warm), .55), 0 -10px 20px -14px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
 /* Moneyline cards — team-color aura rising off the gold edge */
 .moneyline-card {
   box-shadow: inset 0 1px 0 rgba(255,255,255,.65), 0 14px 28px -16px rgba(var(--shadow-warm), .55), 0 -12px 24px -16px color-mix(in srgb, var(--accent) 55%, transparent);
