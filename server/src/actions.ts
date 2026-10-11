@@ -1307,6 +1307,27 @@ async function fetchLikelyScorers(ctx: Ctx, sport: (typeof sports)[number], forc
   return response;
 }
 
+const plateSchema = z.object({
+  id: z.string(),
+  sport: z.enum(sports),
+  matchup: z.string(),
+  pick: z.string(),
+  note: z.string().nullable(),
+  isPublic: z.boolean(),
+  createdAt: z.string(),
+});
+const platesResponse = z.object({ plates: z.array(plateSchema) });
+
+function toPlate(row: typeof schema.codyPlates.$inferSelect): z.infer<typeof plateSchema> {
+  return { id: row.id, sport: row.sport, matchup: row.matchup, pick: row.pick, note: row.note, isPublic: row.isPublic === 1, createdAt: row.createdAt.toISOString() };
+}
+
+async function listPlates(ctx: Ctx, publicOnly: boolean): Promise<z.infer<typeof platesResponse>> {
+  const base = ctx.db.select().from(schema.codyPlates).orderBy(desc(schema.codyPlates.createdAt));
+  const rows = publicOnly ? await base.where(eq(schema.codyPlates.isPublic, 1)) : await base;
+  return { plates: rows.map(toPlate) };
+}
+
 export const Actions = {
   getDashboard: defineAction({ request: z.object({ sport: z.enum(sports).default("nhl") }), response: dashboardResponse, async handler(ctx, args) { return loadDashboard(ctx, args.sport); } }),
   refreshDaily: defineAction({ request: z.object({}), response: z.object({ status: z.enum(["success", "partial", "failed"]), message: z.string(), rowCount: z.number(), snapshotDate: z.string() }), async handler(ctx) { const result = await refresh(ctx); try { await fetchHotStreaks(ctx, true); } catch { /* Keep odds refresh independent of free NHL insight refresh. */ } try { await fetchNflHotStreaks(ctx, true); } catch { /* Same for the NFL leg. */ } try { await fetchColdStreaks(ctx, true); } catch { /* Cold streaks refresh with the same daily job. */ } try { await fetchNflColdStreaks(ctx, true); } catch { /* Same for the NFL leg. */ } try { await fetchLikelyScorers(ctx, "nhl", true); } catch { /* Likely scorers warm with the same daily job. */ } try { await fetchLikelyScorers(ctx, "nfl", true); } catch { /* Same for the NFL leg. */ } return result; } }),
@@ -1321,7 +1342,37 @@ export const Actions = {
   getColdStreaks: defineAction({ request: z.object({ force: z.boolean().default(false) }), response: coldStreaksResponse, async handler(ctx, args) { return fetchColdStreaks(ctx, args.force); } }),
   getNflColdStreaks: defineAction({ request: z.object({ force: z.boolean().default(false) }), response: nflColdStreaksResponse, async handler(ctx, args) { return fetchNflColdStreaks(ctx, args.force); } }),
   getLikelyScorers: defineAction({ request: z.object({ sport: z.enum(sports), force: z.boolean().default(false) }), response: likelyScorersResponse, async handler(ctx, args) { return fetchLikelyScorers(ctx, args.sport, args.force); } }),
-  getNflRoster: defineAction({ request: z.object({ team: z.enum(nflTeamCodes) }), response: nflRosterResponse, async handler(ctx, args) { return loadNflRoster(ctx, args.team); } }),
+  getPublicPlates: defineAction({ request: z.object({}), response: platesResponse, async handler(ctx) { return listPlates(ctx, true); } }),
+  getMyPlates: defineAction({ request: z.object({ adminToken: adminTokenSchema }), response: platesResponse, async handler(ctx, args) { requireAdmin(args); return listPlates(ctx, false); } }),
+  savePlate: defineAction({
+    request: z.object({
+      adminToken: adminTokenSchema,
+      plate: z.object({
+        id: z.string().min(1).max(64).optional(),
+        sport: z.enum(sports),
+        matchup: z.string().trim().min(1).max(120),
+        pick: z.string().trim().min(1).max(120),
+        note: z.string().trim().max(600).optional().default(""),
+        isPublic: z.boolean().default(true),
+      }),
+    }),
+    response: plateSchema,
+    async handler(ctx, args) {
+      requireAdmin(args);
+      const input = args.plate;
+      const id = input.id ?? crypto.randomUUID();
+      const values = { id, sport: input.sport, matchup: input.matchup, pick: input.pick, note: input.note || null, isPublic: input.isPublic ? 1 : 0, createdAt: new Date() };
+      await ctx.db.insert(schema.codyPlates).values(values).onConflictDoUpdate({ target: schema.codyPlates.id, set: { sport: values.sport, matchup: values.matchup, pick: values.pick, note: values.note, isPublic: values.isPublic } });
+      const rows = await ctx.db.select().from(schema.codyPlates).where(eq(schema.codyPlates.id, id)).limit(1);
+      if (!rows[0]) throw new Error("Plate could not be saved.");
+      return toPlate(rows[0]);
+    },
+  }),
+  deletePlate: defineAction({
+    request: z.object({ adminToken: adminTokenSchema, id: z.string().min(1).max(64) }),
+    response: z.object({ deleted: z.boolean() }),
+    async handler(ctx, args) { requireAdmin(args); await ctx.db.delete(schema.codyPlates).where(eq(schema.codyPlates.id, args.id)); return { deleted: true }; },
+  }),  getNflRoster: defineAction({ request: z.object({ team: z.enum(nflTeamCodes) }), response: nflRosterResponse, async handler(ctx, args) { return loadNflRoster(ctx, args.team); } }),
   getNflPlayerGameLog: defineAction({ request: z.object({ team: z.enum(nflTeamCodes), playerId: z.number().int().positive() }), response: nflGameLogResponse, async handler(ctx, args) { return loadNflPlayerGameLog(ctx, args.team, args.playerId); } }),
   getPremiumBoard: defineAction({ request: z.object({ sport: z.enum(sports) }), response: premiumResponse, async handler(ctx, args) { return loadPremium(ctx, args.sport); } }),
   getAdminStatus: defineAction({ request: z.object({}), response: z.object({ configured: z.boolean() }), async handler() { return { configured: !!process.env.ADMIN_TOKEN?.trim() }; } }),

@@ -493,6 +493,39 @@ function ParlayView({ parlay, setParlay, sport, onGoBoard }: { parlay: ParlayPic
   </section>;
 }
 
+type CodyPlate = ApiResponse<typeof api, "getPublicPlates">["plates"][number];
+
+function JamonIberico({ sport }: { sport: Sport }) {
+  const [adminToken] = useState<string | null>(() => {
+    try { return sessionStorage.getItem(ADMIN_SESSION_KEY); } catch { return null; }
+  });
+  const plates = useQuery({
+    queryKey: ["jamon-plates", !!adminToken],
+    queryFn: async () => {
+      const data = adminToken ? await api.getMyPlates({ adminToken }) : await api.getPublicPlates({});
+      return data.plates;
+    },
+    staleTime: 5 * 60 * 1000,
+    retry: 1,
+  });
+  const visible = (plates.data ?? []).filter((plate) => plate.sport === sport);
+  if (!plates.isPending && visible.length === 0 && !adminToken) return null;
+  return <section className="jamon-section" aria-label="Jamón Ibérico — Cody's picks">
+    <div className="section-heading"><div><p className="kicker">JAMÓN IBÉRICO</p><h3>Cody's picks</h3></div><span>The premium cut</span></div>
+    {plates.isPending ? <div className="slate-loading">Plating the picks…</div> : visible.length === 0 ? (
+      <div className="history-empty"><strong>No picks plated yet.</strong><span>{adminToken ? "Add your first plate in Settings → Jamón Ibérico below." : "Check back soon — Cody's personal picks land here."}</span></div>
+    ) : (
+      <div className="jamon-rail">{visible.map((plate) => <article className="jamon-plate" key={plate.id}>
+        <div className="plate-top"><span className="plate-league">{plate.sport === "nhl" ? "NHL" : "NFL"}</span>{!plate.isPublic && <em className="plate-private">Private</em>}</div>
+        <small className="plate-matchup">{plate.matchup}</small>
+        <strong className="plate-pick">{plate.pick}</strong>
+        {plate.note ? <p className="plate-note">{plate.note}</p> : null}
+      </article>)}</div>
+    )}
+    <p className="jamon-foot">Cody's personal picks — his read, not model output and not a sportsbook line.</p>
+  </section>;
+}
+
 function ProView({ parlay, setParlay, home = false, sport }: { parlay: ParlayPick[]; setParlay: (next: ParlayPick[]) => void; home?: boolean; sport: Sport }) {
   const board = useQuery({ queryKey: ["premium-board", sport], queryFn: () => api.getPremiumBoard({ sport }), retry: false });
   const overview = useQuery({ queryKey: ["nhl-overview"], queryFn: () => api.getNhlOverview({}), staleTime: 15 * 60 * 1000, retry: 1, enabled: sport === "nhl" });
@@ -516,7 +549,7 @@ function ProView({ parlay, setParlay, home = false, sport }: { parlay: ParlayPic
     setParlay(parlay.some((item) => item.id === pick.id) ? parlay.filter((item) => item.id !== pick.id) : [...parlay, pick]);
   };
   return <>
-    {home && <><WelcomeBanner sport={sport}/><InstallCard/><ScheduleStrip compact sport={sport}/></>}
+    {home && <><WelcomeBanner sport={sport}/><JamonIberico sport={sport}/><InstallCard/><ScheduleStrip compact sport={sport}/></>}
     <ProviderStatus pending={board.isPending || board.isFetching} error={board.error instanceof Error ? board.error.message : null} onRetry={() => board.refetch()} />
     {board.data && <section className="pro-board">
       <div className="roster-title"><div><p className="kicker">{home ? "TODAY'S COMPLETE BOARD" : "LIVE SPORTSBOOK BOARD"}</p><h2>{groups.length.toLocaleString()} markets · {board.data.offerCount.toLocaleString()} book prices</h2><p className="roster-intro">Every market returned by the feed, paired across sides when both are offered.</p></div><span>{board.data.eventCount} events · {dateTime(board.data.fetchedAt)}</span></div>
@@ -921,6 +954,68 @@ function DisplaySettings() {
   </section>;
 }
 
+function PlatesManager({ adminToken }: { adminToken: string }) {
+  const plates = useQuery({ queryKey: ["jamon-mine", "manager"], queryFn: () => api.getMyPlates({ adminToken }), staleTime: 60 * 1000, retry: 1 });
+  const [sport, setSport] = useState<Sport>("nhl");
+  const [matchup, setMatchup] = useState("");
+  const [play, setPlay] = useState("");
+  const [note, setNote] = useState("");
+  const [isPublic, setIsPublic] = useState(true);
+  const [editing, setEditing] = useState<CodyPlate | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+
+  function reset() {
+    setSport("nhl"); setMatchup(""); setPlay(""); setNote(""); setIsPublic(true); setEditing(null);
+  }
+  function startEdit(plate: CodyPlate) {
+    setEditing(plate); setSport(plate.sport); setMatchup(plate.matchup); setPlay(plate.pick); setNote(plate.note ?? ""); setIsPublic(plate.isPublic);
+    setMessage(null);
+  }
+  const save = useMutation({
+    mutationFn: () => api.savePlate({ adminToken, plate: { id: editing?.id, sport, matchup: matchup.trim(), pick: play.trim(), note: note.trim(), isPublic } }),
+    onSuccess: () => { setMessage(editing ? "Plate updated." : "Plate added — it's live."); reset(); plates.refetch(); },
+    onError: (error) => setMessage(error instanceof Error ? error.message : "Could not save the plate."),
+  });
+  const remove = useMutation({
+    mutationFn: (id: string) => api.deletePlate({ adminToken, id }),
+    onSuccess: () => { setMessage("Plate removed."); if (editing) reset(); plates.refetch(); },
+    onError: (error) => setMessage(error instanceof Error ? error.message : "Could not delete the plate."),
+  });
+  const valid = matchup.trim().length > 0 && play.trim().length > 0;
+
+  return <section className="credential-card plates-manager" aria-label="Jamón Ibérico plate manager">
+    <div className="credential-status"><span className="status-dot configured" /><div><small>JAMÓN IBÉRICO</small><strong>My plates</strong><span>Unlimited — public plates show on the board, private plates are only visible to you.</span></div></div>
+    <form onSubmit={(event) => { event.preventDefault(); if (valid && !save.isPending) save.mutate(); }}>
+      <div className="plate-form-grid">
+        <label>Sport<select value={sport} onChange={(event) => setSport(event.target.value as Sport)}><option value="nhl">NHL</option><option value="nfl">NFL</option></select></label>
+        <label>Matchup<input value={matchup} onChange={(event) => setMatchup(event.target.value)} placeholder="WSH @ NYR" maxLength={120} /></label>
+      </div>
+      <label>The pick<input value={play} onChange={(event) => setPlay(event.target.value)} placeholder="Capitals ML" maxLength={120} /></label>
+      <label>Note <small>(optional)</small><textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="Why you like it…" maxLength={600} rows={2} /></label>
+      <div className="plate-visibility">
+        <button type="button" className={isPublic ? "active" : ""} onClick={() => setIsPublic(true)}>Public — everyone sees it</button>
+        <button type="button" className={!isPublic ? "active private" : ""} onClick={() => setIsPublic(false)}>Private — just me</button>
+      </div>
+      <div className="plate-form-actions">
+        <button className="primary" type="submit" disabled={!valid || save.isPending}>{save.isPending ? "Plating…" : editing ? "Update plate" : "Add plate"}</button>
+        {editing && <button type="button" className="slip-clear" onClick={reset}>Cancel</button>}
+      </div>
+    </form>
+    {message && <p className="settings-message" role="status">{message}</p>}
+    <div className="plate-list">
+      {plates.isPending ? <p className="settings-message">Loading your plates…</p> : (plates.data?.plates ?? []).length === 0 ? <p className="settings-message">No plates yet — add your first one above.</p> :
+        (plates.data?.plates ?? []).map((plate) => <div className="plate-row" key={plate.id}>
+          <div><strong>{plate.pick}</strong><small>{plate.sport.toUpperCase()} · {plate.matchup}</small>{plate.note ? <span>{plate.note}</span> : null}</div>
+          <em className={plate.isPublic ? "plate-badge public" : "plate-badge private"}>{plate.isPublic ? "Public" : "Private"}</em>
+          <div className="plate-row-actions">
+            <button type="button" onClick={() => startEdit(plate)}>Edit</button>
+            <button type="button" className="danger" onClick={() => remove.mutate(plate.id)} disabled={remove.isPending}>Delete</button>
+          </div>
+        </div>)}
+    </div>
+  </section>;
+}
+
 function SettingsView() {
   const adminStatus = useQuery({ queryKey: ["admin-status"], queryFn: () => api.getAdminStatus({}), retry: false });
   const [adminToken, setAdminToken] = useState<string | null>(() => {
@@ -956,6 +1051,7 @@ function SettingsView() {
       <ProviderCard storageKey="sportsgameodds" providerLabel="SportsGameOdds" statusQueryKey="sports-game-odds-key-status" getStatus={() => api.getSportsGameOddsKeyStatus({})} saveKey={(args) => api.saveSportsGameOddsKey(args)} removeKey={(args) => api.removeSportsGameOddsKey(args)} helpText="The field is cleared immediately after submission. The saved value is never displayed." adminToken={adminToken} />
       <ProviderCard storageKey="theoddsapi" providerLabel="The Odds API" statusQueryKey="odds-api-key-status" getStatus={() => api.getOddsApiKeyStatus({})} saveKey={(args) => api.saveOddsApiKey(args)} removeKey={(args) => api.removeOddsApiKey(args)} helpText="Free tier: 500 requests/month, no credit card — one board refresh costs a single request. Get a key at the-odds-api.com. The field is cleared immediately after submission." adminToken={adminToken} />
     </>}
+    {gateConfigured && adminToken && <PlatesManager adminToken={adminToken} />}
   </section>;
 }
 

@@ -68,3 +68,13 @@ export const nhlInsightCache = sqliteTable("nhl_insight_cache", {
   fetchedAt: integer("fetched_at", { mode: "timestamp_ms" }).notNull(),
   expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
 });
+
+export const codyPlates = sqliteTable("cody_plates", {
+  id: text("id").primaryKey(),
+  sport: text("sport", { enum: ["nhl", "nfl"] }).notNull(),
+  matchup: text("matchup").notNull(),
+  pick: text("pick").notNull(),
+  note: text("note"),
+  isPublic: integer("is_public").notNull().default(1),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+});
