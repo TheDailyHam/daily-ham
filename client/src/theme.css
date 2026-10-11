@@ -1248,7 +1248,7 @@ body[data-sport="nhl"] .mode-tabs button.active {
 }
 .mode-shape .ball::after { content: ""; position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); width: 26px; height: 10px; background: repeating-linear-gradient(90deg, #f7f2e7 0 2px, transparent 2px 6px), linear-gradient(#f7f2e7,#f7f2e7); background-size: 100% 5px, 100% 2px; background-position: center; background-repeat: no-repeat; }
 .mode-shape em { font-style: normal; font-size: 11px; font-weight: 800; color: var(--muted); white-space: nowrap; letter-spacing: .02em; text-shadow: 0 1px 0 rgba(255,255,255,.4); }
-.mode-shape.active em { color: var(--gold-deep); }
+.mode-shape.active em { color: #fff8ea; text-shadow: 0 1px 3px rgba(0,0,0,.65), 0 0 12px color-mix(in srgb, var(--accent) 85%, transparent); position: relative; }
 .mode-shape.active .rink { transform: scale(1.05); box-shadow: 0 0 0 2px var(--gold), 0 0 22px color-mix(in srgb, var(--gold) 70%, transparent), 0 10px 20px -8px rgba(var(--shadow-warm), .6); animation: none; }
 .mode-glow { position: absolute; inset: 0; border-radius: 16px; pointer-events: none; background: radial-gradient(60% 60% at 50% 45%, color-mix(in srgb, var(--gold) 35%, transparent), transparent 70%); }
 
@@ -1504,6 +1504,7 @@ html[data-dimmed="true"] .brightness-veil { display: block; }
 .mode-shape .rink.platter {
   background: linear-gradient(160deg, #54402a, #241a0e 75%);
   box-shadow: inset 0 2px 6px rgba(255,255,255,.2), inset 0 -4px 8px rgba(0,0,0,.55), 0 8px 16px -6px rgba(var(--shadow-warm), .5);
+  margin-bottom: 3px;
 }
 .mode-shape .rink.platter::after { content: ""; position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 0%, rgba(217,164,65,.25), transparent 60%); pointer-events: none; }
 .mode-shape .plate {
@@ -1658,9 +1659,10 @@ body[data-sport="nhl"] .app-shell {
     radial-gradient(120% 60% at 50% -10%, color-mix(in srgb, var(--gold-pale) 26%, transparent), transparent 60%),
     radial-gradient(90% 50% at 0% 0%, color-mix(in srgb, var(--accent) 38%, transparent), transparent 60%),
     radial-gradient(70% 42% at 100% 6%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 62%),
-    radial-gradient(circle at 88% 20%, transparent 0 68px, color-mix(in srgb, #d23c3c 15%, transparent) 70px 74px, transparent 76px),
-    radial-gradient(circle at 88% 20%, transparent 0 34px, color-mix(in srgb, #2a5db0 13%, transparent) 36px 39px, transparent 41px),
-    linear-gradient(180deg, transparent 0 31%, color-mix(in srgb, #2a5db0 11%, transparent) 31% 32.2%, transparent 32.2% 61%, color-mix(in srgb, #d23c3c 11%, transparent) 61% 62.4%, transparent 62.4%),
+    radial-gradient(circle at 88% 20%, transparent 0 66px, color-mix(in srgb, #d23c3c 30%, transparent) 68px 73px, transparent 75px),
+    radial-gradient(circle at 88% 20%, transparent 0 32px, color-mix(in srgb, #2a5db0 26%, transparent) 34px 38px, transparent 40px),
+    radial-gradient(circle at 88% 20%, color-mix(in srgb, #d23c3c 30%, transparent) 0 7px, transparent 9px),
+    linear-gradient(180deg, transparent 0 31%, color-mix(in srgb, #2a5db0 20%, transparent) 31% 32.2%, transparent 32.2% 61%, color-mix(in srgb, #d23c3c 20%, transparent) 61% 62.4%, transparent 62.4%),
     repeating-linear-gradient(115deg, transparent 0 26px, color-mix(in srgb, #9fb6cc 9%, transparent) 26px 27px),
     repeating-linear-gradient(64deg, transparent 0 42px, color-mix(in srgb, #9fb6cc 7%, transparent) 42px 43px),
     linear-gradient(180deg, color-mix(in srgb, #cfe0f2 32%, var(--paper)), color-mix(in srgb, #cfe0f2 12%, var(--paper)) 460px, var(--paper)),
@@ -1674,7 +1676,7 @@ body[data-sport="nfl"] .app-shell {
     radial-gradient(120% 60% at 50% -10%, color-mix(in srgb, var(--gold-pale) 26%, transparent), transparent 60%),
     radial-gradient(90% 50% at 0% 0%, color-mix(in srgb, var(--accent) 38%, transparent), transparent 60%),
     radial-gradient(70% 42% at 100% 6%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 62%),
-    repeating-linear-gradient(90deg, transparent 0 74px, color-mix(in srgb, #ffffff 20%, transparent) 74px 77px),
+    repeating-linear-gradient(90deg, transparent 0 74px, color-mix(in srgb, #ffffff 34%, transparent) 74px 78px),
     repeating-linear-gradient(90deg, color-mix(in srgb, #2e7d3a 9%, transparent) 0 74px, transparent 74px 148px),
     linear-gradient(180deg, color-mix(in srgb, #2e7d3a 20%, var(--paper)), color-mix(in srgb, #2e7d3a 9%, var(--paper)) 460px, var(--paper)),
     radial-gradient(90% 45% at 50% 108%, color-mix(in srgb, var(--accent) 26%, transparent), transparent 62%),
@@ -1687,3 +1689,79 @@ body[data-sport="nfl"] .app-shell {
 .welcome-actions .tour-cta { margin-top: 0; }
 .welcome-actions .team-picker-btn { min-height: 44px; text-shadow: 0 1px 0 rgba(255,255,255,.4); }
 .welcome-sign p, .welcome-sign strong, .welcome-sign span { text-shadow: 0 1px 2px rgba(255,255,255,.35); }
+
+/* Gloss finish — liquid shine swept across every major surface */
+.game-card {
+  background:
+    linear-gradient(115deg, rgba(255,255,255,.32), rgba(255,255,255,.08) 30%, transparent 48%),
+    linear-gradient(180deg, rgba(255,255,255,.5), rgba(255,255,255,0) 60%),
+    var(--surface);
+  box-shadow: inset 0 2px 1px rgba(255,255,255,.95), 0 6px 14px -10px rgba(var(--shadow-warm), .5), 0 -10px 20px -14px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.game-tile {
+  background:
+    linear-gradient(115deg, rgba(255,255,255,.32), rgba(255,255,255,.08) 30%, transparent 48%),
+    linear-gradient(180deg, rgba(255,255,255,.55), rgba(255,255,255,0) 70%),
+    var(--paper);
+  box-shadow: inset 0 2px 1px rgba(255,255,255,.95), 0 10px 22px -14px rgba(var(--shadow-warm), .55), 0 -10px 20px -14px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.moneyline-card {
+  background:
+    linear-gradient(115deg, rgba(255,255,255,.34), rgba(255,255,255,.08) 30%, transparent 48%),
+    linear-gradient(180deg, rgba(255,255,255,.55), rgba(255,255,255,0) 70%),
+    var(--card);
+  box-shadow: inset 0 2px 1px rgba(255,255,255,.95), 0 14px 28px -16px rgba(var(--shadow-warm), .55), 0 -12px 24px -16px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.slate-section, .standings-section, .hot-section, .matchup-lab {
+  background:
+    linear-gradient(115deg, rgba(255,255,255,.3), rgba(255,255,255,.07) 32%, transparent 50%),
+    linear-gradient(180deg, rgba(255,255,255,.45), rgba(255,255,255,0) 130px),
+    var(--surface);
+  box-shadow: 0 18px 40px -22px rgba(var(--shadow-warm), .55), inset 0 2px 1px rgba(255,255,255,.9);
+}
+.model-panel {
+  background:
+    linear-gradient(115deg, rgba(255,255,255,.14), rgba(255,255,255,.04) 32%, transparent 50%),
+    radial-gradient(90% 130% at 85% 0%, color-mix(in srgb, var(--accent) 20%, transparent), transparent 55%),
+    linear-gradient(170deg, #3a2c1c, #1c130a 78%);
+  box-shadow: 0 18px 40px -16px rgba(var(--shadow-warm), .6), inset 0 2px 1px rgba(255,255,255,.28);
+}
+.first-goal-card {
+  background:
+    linear-gradient(115deg, rgba(255,255,255,.14), rgba(255,255,255,.04) 32%, transparent 50%),
+    radial-gradient(85% 120% at 88% 0%, color-mix(in srgb, var(--accent) 20%, transparent), transparent 55%),
+    linear-gradient(170deg, #3a2c1c, #1c130a 78%);
+  box-shadow: 0 18px 40px -16px rgba(var(--shadow-warm), .6), inset 0 2px 1px rgba(255,255,255,.28);
+}
+.topbar {
+  background:
+    linear-gradient(115deg, rgba(255,255,255,.3), rgba(255,255,255,.06) 34%, transparent 52%),
+    linear-gradient(180deg, color-mix(in srgb, var(--accent) 20%, transparent), color-mix(in srgb, var(--accent) 8%, transparent) 72%, color-mix(in srgb, var(--ink) 7%, transparent)),
+    var(--paper);
+  box-shadow: 0 20px 40px -18px color-mix(in srgb, var(--accent) 55%, transparent), inset 0 2px 1px rgba(255,255,255,.9), inset 0 -2px 8px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.welcome-sign {
+  box-shadow: 0 22px 48px -16px color-mix(in srgb, var(--team-color, var(--accent)) 60%, transparent), inset 0 2px 1px rgba(255,255,255,.9), 0 0 26px -8px color-mix(in srgb, var(--team-color, var(--accent)) 45%, transparent);
+}
+.sheet {
+  box-shadow: 0 -24px 70px rgba(0,0,0,.4), inset 0 2px 1px rgba(255,255,255,.9);
+}
+.jamon-plate {
+  box-shadow:
+    inset 0 2px 2px rgba(255,255,255,.95),
+    inset 0 -6px 14px rgba(168,111,31,.18),
+    inset 0 0 0 5px rgba(244,223,174,.5),
+    0 18px 34px -14px rgba(var(--shadow-warm), .6),
+    0 0 22px -6px color-mix(in srgb, var(--gold) 45%, transparent);
+}
+.tutorial-slide li, .plate-row {
+  box-shadow: inset 0 2px 1px rgba(255,255,255,.9);
+}
+
+/* Letter clarity — crisp offset on dark surfaces, no blurry glows on text */
+.mode-shape em { color: #e9dab9; text-shadow: 0 1px 2px rgba(0,0,0,.65); }
+.mode-shape.active em { color: #fff8ea; text-shadow: 0 1px 2px rgba(0,0,0,.7); position: relative; }
+.model-panel > div:first-child > span, .model-panel > p { text-shadow: 0 1px 2px rgba(0,0,0,.65); }
+.model-panel > strong { filter: drop-shadow(0 1px 3px rgba(0,0,0,.6)); }
+.jamon-hero p:last-child { text-shadow: 0 1px 2px rgba(0,0,0,.65); }
+.jamon-hero .kicker { text-shadow: 0 1px 2px rgba(0,0,0,.6); }
