@@ -495,6 +495,110 @@ function ParlayView({ parlay, setParlay, sport, onGoBoard }: { parlay: ParlayPic
 
 type CodyPlate = ApiResponse<typeof api, "getPublicPlates">["plates"][number];
 
+const TUTORIAL_SLIDES: { icon: string; kicker: string; title: string; points: string[] }[] = [
+  { icon: "🍖", kicker: "WELCOME", title: "Fresh cuts, daily.", points: [
+    "The Daily Ham serves NHL & NFL projections, real sportsbook prices, official league stats, and Cody's personal picks.",
+    "Anything the model calculates is labeled a model estimate — never confused with a sportsbook line.",
+    "Swipe through this guide to learn the whole shop.",
+  ]},
+  { icon: "🏒", kicker: "PICK YOUR SIDE", title: "Hockey or football?", points: [
+    "Tap NHL / NFL at the top to switch leagues — each side is built to full depth.",
+    "Hit My team and pick your squad: the whole app, background included, dresses in your team's colors.",
+    "The tabs below are your cutting board: Board, Jamón Ibérico, Parlay, Matchup, Players, Streaks, League, Watchlist, Settings.",
+  ]},
+  { icon: "📋", kicker: "THE BOARD", title: "Every game, one card.", points: [
+    "Each game card shows the matchup, start time, and the Flip % bar.",
+    "Flip % is the model's win estimate from each team's actual record — e.g. 58% vs 42%.",
+    "Under it sit the two likely scorers: season leaders by goals (NHL) or TDs (NFL). A stat, not a prop.",
+  ]},
+  { icon: "💲", kicker: "READING THE ODDS", title: "Best · DraftKings · FanDuel · BetMGM", points: [
+    "Every moneyline card lists the best price plus DraftKings, FanDuel and BetMGM.",
+    "Tap any price to add it to your parlay slip.",
+    "A — means that book isn't posting a price for this game.",
+  ]},
+  { icon: "➕", kicker: "BETTING BASICS", title: "What + and − mean", points: [
+    "− means favorite: the number is what you bet to win $100 profit. −150 → bet $150 to win $100.",
+    "+ means underdog: the number is the profit on a $100 bet. +130 → bet $100 to win $130.",
+    "Bigger − = heavier favorite. Bigger + = bigger underdog.",
+    "−110 is the standard line: bet $110 to win $100. The extra $10 is the book's cut.",
+  ]},
+  { icon: "⚖️", kicker: "MODEL VS BOOKS", title: "Finding value", points: [
+    "The matchup calculator compares the model's estimate to what the books imply.",
+    "A flip alert fires when the model likes a side more than the books do.",
+    "Coin toss means it's too close to call — no edge either way.",
+  ]},
+  { icon: "🎯", kicker: "MATCHUP CALCULATOR", title: "Six ways to slice it", points: [
+    "Pick any game for the model's take: winner, first score, and situational calls like a 14+ blowout or overtime.",
+    "Every percentage is a model estimate from official game data — not a sportsbook price.",
+    "Use it to sanity-check your own read before you bet.",
+  ]},
+  { icon: "📊", kicker: "CHARTS & GRAPHS", title: "How to read the visuals", points: [
+    "Flip % bar: the split is the model's win estimate — more fill, more likely.",
+    "Glass probability bars: fuller means more likely. Same idea everywhere.",
+    "Player trend graph: per-game stat over recent games — a rising line means heating up.",
+    "Donut chart: how the books split their prices. Tendency bars: how often a team scores first.",
+  ]},
+  { icon: "🔥", kicker: "PLAYERS & STREAKS", title: "Form at a glance", points: [
+    "Tap any player for the full file: trend graph, model projection, last five games, full game log.",
+    "Tap ★ to watch a player or team — they land in your Watchlist.",
+    "Streaks shows who's hot 🔥 and who's ice-cold 🧊 (The Cutting Board), from official box scores.",
+  ]},
+  { icon: "🧾", kicker: "PARLAY & WATCHLIST", title: "Build your slip", points: [
+    "Prices you tap stack up in the Parlay tab — set a stake to see combined odds and payout.",
+    "Your Watchlist keeps every starred player and team one tap away.",
+    "Team cards open the full team file with the depth chart.",
+  ]},
+  { icon: "🍽️", kicker: "JAMÓN IBÉRICO", title: "Cody's picks", points: [
+    "The golden plate tab holds Cody's personal picks, plated for public viewing.",
+    "These are his reads — not model output, not sportsbook lines.",
+    "He can also keep private plates that only he can see.",
+  ]},
+  { icon: "⚙️", kicker: "MAKE IT YOURS", title: "Settings", points: [
+    "Brightness slider and scroll feel, saved per device.",
+    "Install the app to your home screen for the full experience.",
+    "That's the whole tour — go slice up the board.",
+  ]},
+];
+
+function TutorialSheet({ onClose }: { onClose: () => void }) {
+  const [index, setIndex] = useState(0);
+  const railRef = useRef<HTMLDivElement>(null);
+  const reduceMotion = typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const goTo = (next: number) => {
+    const clamped = Math.max(0, Math.min(TUTORIAL_SLIDES.length - 1, next));
+    setIndex(clamped);
+    const child = railRef.current?.children[clamped] as HTMLElement | undefined;
+    child?.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", inline: "center", block: "nearest" });
+  };
+  const onScroll = () => {
+    const rail = railRef.current;
+    if (!rail || rail.clientWidth === 0) return;
+    setIndex(Math.max(0, Math.min(TUTORIAL_SLIDES.length - 1, Math.round(rail.scrollLeft / rail.clientWidth))));
+  };
+  return <div className="sheet-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <section className="sheet tutorial-sheet" role="dialog" aria-modal="true" aria-labelledby="tutorial-title">
+      <button className="close" onClick={onClose} aria-label="Close tutorial">×</button>
+      <p className="kicker">HOW TO USE THE DAILY HAM</p>
+      <div className="tutorial-rail" ref={railRef} onScroll={onScroll}>
+        {TUTORIAL_SLIDES.map((slide, i) => <article className="tutorial-slide" key={slide.title}>
+          <span className="tutorial-icon" aria-hidden="true">{slide.icon}</span>
+          <p className="tutorial-slide-kicker">{slide.kicker}</p>
+          <h2 id={i === 0 ? "tutorial-title" : undefined}>{slide.title}</h2>
+          <ul>{slide.points.map((point) => <li key={point}>{point}</li>)}</ul>
+        </article>)}
+      </div>
+      <div className="tutorial-dots" aria-hidden="true">{TUTORIAL_SLIDES.map((slide) => <span key={slide.title} className={TUTORIAL_SLIDES[index] === slide ? "active" : ""} />)}</div>
+      <div className="tutorial-nav">
+        <button type="button" onClick={() => goTo(index - 1)} disabled={index === 0} aria-label="Previous tutorial page">← Back</button>
+        <span>{index + 1} of {TUTORIAL_SLIDES.length} · swipe →</span>
+        {index < TUTORIAL_SLIDES.length - 1
+          ? <button type="button" className="primary" onClick={() => goTo(index + 1)}>Next →</button>
+          : <button type="button" className="primary" onClick={onClose}>Start slicing</button>}
+      </div>
+    </section>
+  </div>;
+}
+
 function JamonView({ sport }: { sport: Sport }) {
   const [adminToken] = useState<string | null>(() => {
     try { return sessionStorage.getItem(ADMIN_SESSION_KEY); } catch { return null; }
@@ -529,7 +633,7 @@ function JamonView({ sport }: { sport: Sport }) {
   </section>;
 }
 
-function ProView({ parlay, setParlay, home = false, sport }: { parlay: ParlayPick[]; setParlay: (next: ParlayPick[]) => void; home?: boolean; sport: Sport }) {
+function ProView({ parlay, setParlay, home = false, sport, onTour }: { parlay: ParlayPick[]; setParlay: (next: ParlayPick[]) => void; home?: boolean; sport: Sport; onTour?: () => void }) {
   const board = useQuery({ queryKey: ["premium-board", sport], queryFn: () => api.getPremiumBoard({ sport }), retry: false });
   const overview = useQuery({ queryKey: ["nhl-overview"], queryFn: () => api.getNhlOverview({}), staleTime: 15 * 60 * 1000, retry: 1, enabled: sport === "nhl" });
   const nflOverview = useQuery({ queryKey: ["nfl-overview", "current"], queryFn: () => api.getNflOverview({}), staleTime: 15 * 60 * 1000, retry: 1, enabled: sport === "nfl" });
@@ -552,7 +656,7 @@ function ProView({ parlay, setParlay, home = false, sport }: { parlay: ParlayPic
     setParlay(parlay.some((item) => item.id === pick.id) ? parlay.filter((item) => item.id !== pick.id) : [...parlay, pick]);
   };
   return <>
-    {home && <><WelcomeBanner sport={sport}/><InstallCard/><ScheduleStrip compact sport={sport}/></>}
+    {home && <><WelcomeBanner sport={sport} onTour={onTour}/><InstallCard/><ScheduleStrip compact sport={sport}/></>}
     <ProviderStatus pending={board.isPending || board.isFetching} error={board.error instanceof Error ? board.error.message : null} onRetry={() => board.refetch()} />
     {board.data && <section className="pro-board">
       <div className="roster-title"><div><p className="kicker">{home ? "TODAY'S COMPLETE BOARD" : "LIVE SPORTSBOOK BOARD"}</p><h2>{groups.length.toLocaleString()} markets · {board.data.offerCount.toLocaleString()} book prices</h2><p className="roster-intro">Every market returned by the feed, paired across sides when both are offered.</p></div><span>{board.data.eventCount} events · {dateTime(board.data.fetchedAt)}</span></div>
@@ -1099,7 +1203,7 @@ function InstallCard() {
   </section>;
 }
 
-function WelcomeBanner({ sport }: { sport: Sport }) {
+function WelcomeBanner({ sport, onTour }: { sport: Sport; onTour?: () => void }) {
   const [favs, setFavs] = useState<LeagueFavorites>(() => loadFavorites());
   useEffect(() => {
     const onChange = () => setFavs(loadFavorites());
@@ -1114,6 +1218,7 @@ function WelcomeBanner({ sport }: { sport: Sport }) {
       <p className="welcome-kicker">{team ? <>Welcome, {team.name} fan <b className="welcome-team-badge">{team.code}</b></> : "Welcome to the Daily Ham"}</p>
       <strong>Fresh Cuts Daily</strong>
       <span>{team ? "Tonight's board, dressed in your team's colors." : "Every NHL & NFL market, official league data, model projections and sharp price comparison."}</span>
+      {onTour && <button type="button" className="tour-cta" onClick={onTour}>Take the tour — learn the app</button>}
     </div>
   </section>;
 }
@@ -1698,6 +1803,7 @@ export function App(){
     dismiss();
   }, []);
   const [mode, setMode] = useState<Mode>("board");
+  const [tutorialOpen, setTutorialOpen] = useState(false);
 
   const [sport, setSport] = useState<Sport>(() => loadSport());
   const [parlay, setParlay] = useState<ParlayPick[]>([]);
@@ -1728,5 +1834,5 @@ export function App(){
         ["standings", "League"],
         ["watchlist", "Watchlist"],
         ["settings", "Settings"],
-      ] as [Mode, string][]).map(([key, label]) => <button key={key} type="button" className={"mode-shape" + (mode === key ? " active" : "")} onClick={() => setMode(key)} aria-pressed={mode === key} aria-label={label}><span className={"rink " + (key === "jamon" ? "platter" : sport === "nhl" ? "ice" : "turf")} aria-hidden="true"><span className={"shape " + (key === "jamon" ? "plate" : sport === "nhl" ? "puck" : "ball")} /></span>{mode === key && <i className="mode-glow" aria-hidden="true" />}<em>{label}</em></button>)}</nav><TeamThemePicker sport={sport}/></div>{mode==="board"&&<ProView parlay={parlay} setParlay={setParlay} home sport={sport}/>} {mode==="jamon"&&<JamonView sport={sport}/>} {mode==="parlay"&&<ParlayView parlay={parlay} setParlay={setParlay} sport={sport} onGoBoard={()=>setMode("board")}/>} {mode==="matchup"&&<MatchupView sport={sport}/>} {mode==="rosters"&&<RosterView parlay={parlay} setParlay={setParlay} sport={sport} teamFocus={teamFocus}/>} {mode==="streaks"&&<StreaksView sport={sport}/>} {mode==="standings"&&<LeagueView sport={sport}/>} {mode==="watchlist"&&<WatchlistView onViewTeam={viewTeam}/>} {mode==="settings"&&<SiteSettings/>}</main></div>;
+      ] as [Mode, string][]).map(([key, label]) => <button key={key} type="button" className={"mode-shape" + (mode === key ? " active" : "")} onClick={() => setMode(key)} aria-pressed={mode === key} aria-label={label}><span className={"rink " + (key === "jamon" ? "platter" : sport === "nhl" ? "ice" : "turf")} aria-hidden="true"><span className={"shape " + (key === "jamon" ? "plate" : sport === "nhl" ? "puck" : "ball")} /></span>{mode === key && <i className="mode-glow" aria-hidden="true" />}<em>{label}</em></button>)}</nav><TeamThemePicker sport={sport}/><button type="button" className="guide-btn" onClick={() => setTutorialOpen(true)} aria-label="Open the how-to-use tutorial"><span aria-hidden="true">❓</span><em>Guide</em></button></div>{mode==="board"&&<ProView parlay={parlay} setParlay={setParlay} home sport={sport} onTour={() => setTutorialOpen(true)}/>} {mode==="jamon"&&<JamonView sport={sport}/>} {mode==="parlay"&&<ParlayView parlay={parlay} setParlay={setParlay} sport={sport} onGoBoard={()=>setMode("board")}/>} {mode==="matchup"&&<MatchupView sport={sport}/>} {mode==="rosters"&&<RosterView parlay={parlay} setParlay={setParlay} sport={sport} teamFocus={teamFocus}/>} {mode==="streaks"&&<StreaksView sport={sport}/>} {mode==="standings"&&<LeagueView sport={sport}/>} {mode==="watchlist"&&<WatchlistView onViewTeam={viewTeam}/>} {mode==="settings"&&<SiteSettings/>}{tutorialOpen&&<TutorialSheet onClose={() => setTutorialOpen(false)}/>}</main></div>;
 }
