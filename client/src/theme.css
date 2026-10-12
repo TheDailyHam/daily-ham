@@ -1743,18 +1743,18 @@ body[data-sport="nba"] .app-shell {
     var(--paper);
 }
 
-/* Soccer side — night match under the floodlights: deep green pitch tint,
-   faint center circle and halfway line, team color in the air */
+/* Soccer side — night match under the floodlights: rich green pitch,
+   mow stripes, bold center circle and halfway line, team color in the air */
 body[data-sport="soccer"] .app-shell {
   background:
-    radial-gradient(120% 55% at 50% -12%, color-mix(in srgb, #fffbe8 22%, transparent), transparent 58%),
+    radial-gradient(120% 55% at 50% -12%, color-mix(in srgb, #fffbe8 26%, transparent), transparent 58%),
     radial-gradient(90% 50% at 0% 0%, color-mix(in srgb, var(--accent) 38%, transparent), transparent 60%),
     radial-gradient(70% 42% at 100% 6%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 62%),
-    radial-gradient(circle at 50% 14%, transparent 0 64px, color-mix(in srgb, #ffffff 30%, transparent) 64px 67px, transparent 69px),
-    radial-gradient(circle at 50% 14%, color-mix(in srgb, #ffffff 24%, transparent) 0 5px, transparent 7px),
-    linear-gradient(180deg, transparent 13.4%, color-mix(in srgb, #ffffff 22%, transparent) 13.4% 13.7%, transparent 14%),
-    repeating-linear-gradient(90deg, transparent 0 110px, color-mix(in srgb, #ffffff 12%, transparent) 110px 112px),
-    linear-gradient(180deg, color-mix(in srgb, #1f6b3a 16%, var(--paper)), color-mix(in srgb, #1f6b3a 7%, var(--paper)) 460px, var(--paper)),
+    radial-gradient(circle at 50% 15%, transparent 0 78px, color-mix(in srgb, #ffffff 55%, transparent) 78px 82px, transparent 84px),
+    radial-gradient(circle at 50% 15%, color-mix(in srgb, #ffffff 45%, transparent) 0 6px, transparent 8px),
+    linear-gradient(180deg, transparent 14.2%, color-mix(in srgb, #ffffff 45%, transparent) 14.2% 14.6%, transparent 15%),
+    repeating-linear-gradient(90deg, color-mix(in srgb, #1f6b3a 16%, transparent) 0 110px, transparent 110px 220px),
+    linear-gradient(180deg, color-mix(in srgb, #1f6b3a 30%, var(--paper)), color-mix(in srgb, #1f6b3a 14%, var(--paper)) 520px, var(--paper)),
     radial-gradient(90% 45% at 50% 108%, color-mix(in srgb, var(--accent) 26%, transparent), transparent 62%),
     var(--paper);
 }

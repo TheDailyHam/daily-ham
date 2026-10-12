@@ -621,6 +621,16 @@ const TUTORIAL_SLIDES: { icon: string; kicker: string; title: string; points: st
     "Hit My team on the welcome card and pick your squad: the whole app, background included, dresses in your team's colors. Each side shows only its own league's teams.",
     "The tabs below are your cutting board: Board, Jamón Ibérico, Parlay, Matchup, Players, Streaks, League, Watchlist, Settings.",
   ]},
+  { icon: "🏒", kicker: "THE ICE", title: "Hockey, full depth.", points: [
+    "The NHL side runs the full engine: the board, the matchup calculator, rosters, streaks, and league standings.",
+    "Player files track goals, assists, points and goalie stats per game — tap any name for the full file.",
+    "The matchup calculator covers the winner, first goal, first-period and full-game scripts like overtime.",
+  ]},
+  { icon: "🏈", kicker: "THE GRIDIRON", title: "Football, full depth.", points: [
+    "The NFL side runs the full engine: the board, the matchup calculator, rosters, streaks, and AFC/NFC standings.",
+    "Player files track passing, rushing and receiving per game — tap any name for the full file.",
+    "The matchup calculator covers the winner, first score, first-half and full-game scripts like a 14+ blowout or overtime.",
+  ]},
   { icon: "🏀", kicker: "THE HARDWOOD", title: "Basketball, full depth.", points: [
     "The NBA side runs the same engine: the board, the matchup calculator, rosters, streaks, and East/West standings.",
     "Player files track points, rebounds, assists, steals and blocks per game — tap any name for the full file.",
