@@ -1349,7 +1349,10 @@ function UsagePanel({ adminToken }: { adminToken: string }) {
       </div></div>
       <div className="usage-block"><p className="kicker">VIEWS BY SPORT</p><div className="usage-table" role="table">
         <div className="usage-row header" role="row"><span>Sport</span><span>Views</span></div>
-        {stats.data.bySport.map((row) => <div className="usage-row" role="row" key={row.sport}><span>{row.sport.toUpperCase()}</span><span>{row.views.toLocaleString()}</span></div>)}
+        {(Array.isArray(stats.data.bySport)
+          ? stats.data.bySport.map((r) => ({ sport: r.sport, views: typeof r.views === "number" ? r.views : (r.views as { views?: number })?.views ?? 0 }))
+          : Object.entries(stats.data.bySport).map(([sport, v]) => ({ sport, views: typeof v === "number" ? v : (v as { views?: number })?.views ?? 0 }))
+        ).map((row) => <div className="usage-row" role="row" key={row.sport}><span>{row.sport.toUpperCase()}</span><span>{Number(row.views).toLocaleString()}</span></div>)}
       </div></div>
     </>}
   </section>;

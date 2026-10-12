@@ -52,7 +52,7 @@ export type UsageStats = {
   today: { uniques: number; views: number };
   yesterday: { uniques: number; views: number };
   last14: { date: string; uniques: number; views: number }[];
-  bySport: { sport: string; views: number }[];
+  bySport: { sport: string; views: number }[] | Record<string, number>;
 };
 
 // ---------------------------------------------------------------------------
