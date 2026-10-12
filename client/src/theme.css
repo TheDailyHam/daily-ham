@@ -1861,3 +1861,15 @@ body[data-sport="soccer"] .app-shell {
 .usage-row:nth-child(odd):not(.header) { background: rgba(0, 0, 0, .03); }
 .usage-row.header { font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
 .usage-row span:nth-child(n+2) { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* Owner console — private back room, visually distinct from the public app */
+.owner-shell { background: linear-gradient(180deg, #1a1410, #241c14 480px, var(--paper)); }
+.owner-console { max-width: 860px; margin: 0 auto; padding: 20px 16px 64px; display: grid; gap: 18px; }
+.owner-banner { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 22px; border-radius: 18px; color: #f5ead2;
+  background: linear-gradient(135deg, #2b2117, #3d2c18 60%, #241a10); border: 1px solid #6b522f; box-shadow: 0 10px 30px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,235,200,.12); }
+.owner-banner .kicker { color: #d8a94e; }
+.owner-banner h1 { margin: 4px 0 6px; font-size: 24px; letter-spacing: -.01em; }
+.owner-banner p { margin: 0; font-size: 13px; color: #cdbb97; }
+.owner-back { flex: none; align-self: center; padding: 10px 16px; border-radius: 999px; font-size: 13px; font-weight: 700; color: #f5ead2; text-decoration: none;
+  background: rgba(255,235,200,.1); border: 1px solid rgba(255,235,200,.25); }
+.owner-back:active { transform: scale(.97); }

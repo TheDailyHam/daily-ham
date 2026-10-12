@@ -1331,7 +1331,7 @@ function PlatesManager({ adminToken }: { adminToken: string }) {
 }
 
 // Private admin-only usage dashboard. Never rendered for visitors:
-// it only mounts inside the admin-unlocked branch of SettingsView.
+// it only mounts inside the admin-unlocked branch of OwnerConsole.
 function UsagePanel({ adminToken }: { adminToken: string }) {
   const stats = useQuery({ queryKey: ["usage-stats"], queryFn: () => api.getUsageStats({ adminToken }), staleTime: 5 * 60 * 1000, retry: 1 });
   return <section className="credential-card usage-panel" aria-label="Private usage dashboard">
@@ -1358,7 +1358,7 @@ function UsagePanel({ adminToken }: { adminToken: string }) {
   </section>;
 }
 
-function SettingsView() {
+function OwnerConsole() {
   const adminStatus = useQuery({ queryKey: ["admin-status"], queryFn: () => api.getAdminStatus({}), retry: false });
   const [adminToken, setAdminToken] = useState<string | null>(() => {
     try { return sessionStorage.getItem(ADMIN_SESSION_KEY); } catch { return null; }
@@ -1379,7 +1379,10 @@ function SettingsView() {
   }
 
   const gateConfigured = adminStatus.data?.configured ?? false;
-  return <section className="settings-panel">
+  return <div className="owner-console"><div className="owner-banner" role="banner">
+    <div><p className="kicker">PRIVATE · SITE OWNER ONLY</p><h1>The Daily Ham — Owner Console</h1><p>Plates, provider keys and visitor stats. Nothing here is visible to the public.</p></div>
+    <a className="owner-back" href="#/">← Public app</a>
+  </div><section className="settings-panel">
     <div className="settings-heading"><p className="kicker">PROVIDER SETTINGS</p><h1>Sportsbook connection</h1><p>Connect a sportsbook odds provider — SportsGameOdds or The Odds API — to power the complete NHL, NFL, NBA & soccer odds boards. Your keys are used only for hockey, football, basketball and soccer markets.</p></div>
     {adminStatus.isPending && <p className="settings-message">Checking admin access…</p>}
     {adminStatus.data && !gateConfigured && <div className="credential-card"><p className="settings-message" role="status"><strong>Admin access is not set up on this server yet. </strong><span>Add an <code>ADMIN_TOKEN</code> environment variable and redeploy — then only someone with that token can manage provider keys or trigger manual refreshes.</span></p></div>}
@@ -1395,11 +1398,11 @@ function SettingsView() {
     </>}
     {gateConfigured && adminToken && <PlatesManager adminToken={adminToken} />}
     {gateConfigured && adminToken && <UsagePanel adminToken={adminToken} />}
-  </section>;
+  </section></div>;
 }
 
 function SiteSettings() {
-  return <><DisplaySettings /><SettingsView /></>;
+  return <DisplaySettings />;
 }
 
 function InstallCard() {
@@ -2087,6 +2090,12 @@ function TeamDetailSheet({ sport, team, onClose, onViewRoster }: { sport: League
 }
 
 export function App(){
+  const [isOwner, setIsOwner] = useState(() => { try { return window.location.hash.startsWith("#/owner"); } catch { return false; } });
+  useEffect(() => {
+    const onHash = () => { try { setIsOwner(window.location.hash.startsWith("#/owner")); } catch { /* noop */ } };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
   useEffect(() => {
     // Dismiss the branded startup splash once the app has painted, keeping it
     // up long enough for the branding to register.
@@ -2128,7 +2137,8 @@ export function App(){
     setSoccerLeague(next);
     try { localStorage.setItem(SOCCER_LEAGUE_KEY, next); } catch { /* private mode */ }
   }
-  return <div className="app-shell"><SafeAreaTopScrim backgroundColor="var(--paper)"/><ToastHost/><InstallPrompt/><main>{mode==="board"&&<WelcomeBanner sport={sport} onTour={() => setTutorialOpen(true)}/>}<div className="topbar"><div className="sport-switch" role="group" aria-label="League"><button type="button" className={"sport-shape" + (sport === "nhl" ? " active" : "")} onClick={() => chooseSport("nhl")} aria-pressed={sport === "nhl"} aria-label="Hockey side"><span className="shape puck" aria-hidden="true" /><em>NHL</em></button><button type="button" className={"sport-shape" + (sport === "nfl" ? " active" : "")} onClick={() => chooseSport("nfl")} aria-pressed={sport === "nfl"} aria-label="Football side"><span className="shape ball" aria-hidden="true" /><em>NFL</em></button><button type="button" className={"sport-shape" + (sport === "nba" ? " active" : "")} onClick={() => chooseSport("nba")} aria-pressed={sport === "nba"} aria-label="Basketball side"><span className="shape hoop" aria-hidden="true" /><em>NBA</em></button><button type="button" className={"sport-shape" + (sport === "soccer" ? " active" : "")} onClick={() => chooseSport("soccer")} aria-pressed={sport === "soccer"} aria-label="Soccer side"><span className="shape soccerball" aria-hidden="true" /><em>SOC</em></button></div><nav className="mode-tabs shapes" aria-label="Data view">{([
+  return isOwner ? <div className="app-shell owner-shell"><SafeAreaTopScrim backgroundColor="var(--paper)"/><ToastHost/><main><OwnerConsole/></main></div>
+  : <div className="app-shell"><SafeAreaTopScrim backgroundColor="var(--paper)"/><ToastHost/><InstallPrompt/><main>{mode==="board"&&<WelcomeBanner sport={sport} onTour={() => setTutorialOpen(true)}/>}<div className="topbar"><div className="sport-switch" role="group" aria-label="League"><button type="button" className={"sport-shape" + (sport === "nhl" ? " active" : "")} onClick={() => chooseSport("nhl")} aria-pressed={sport === "nhl"} aria-label="Hockey side"><span className="shape puck" aria-hidden="true" /><em>NHL</em></button><button type="button" className={"sport-shape" + (sport === "nfl" ? " active" : "")} onClick={() => chooseSport("nfl")} aria-pressed={sport === "nfl"} aria-label="Football side"><span className="shape ball" aria-hidden="true" /><em>NFL</em></button><button type="button" className={"sport-shape" + (sport === "nba" ? " active" : "")} onClick={() => chooseSport("nba")} aria-pressed={sport === "nba"} aria-label="Basketball side"><span className="shape hoop" aria-hidden="true" /><em>NBA</em></button><button type="button" className={"sport-shape" + (sport === "soccer" ? " active" : "")} onClick={() => chooseSport("soccer")} aria-pressed={sport === "soccer"} aria-label="Soccer side"><span className="shape soccerball" aria-hidden="true" /><em>SOC</em></button></div><nav className="mode-tabs shapes" aria-label="Data view">{([
         ["board", boardLabel],
         ["jamon", "Jamón Ibérico"],
         ["parlay", parlay.length > 0 ? `Parlay (${parlay.length})` : "Parlay"],
