@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 // Local replacement for the platform's SafeAreaTopScrim: a slim bar that
 // occupies the device's top safe-area inset (notch / status bar) so content
 // never slides underneath it.
@@ -7,9 +7,9 @@ function SafeAreaTopScrim({ backgroundColor }: { backgroundColor: string }) {
   return <div aria-hidden="true" style={{ height: "env(safe-area-inset-top)", backgroundColor, position: "sticky", top: 0, zIndex: 60 }} />;
 }
 import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { api, type ApiRequest, type ApiResponse, type KeyInjuries, type KeyInjuryPlayer } from "./api";
+import { api, type ApiRequest, type ApiResponse, type KeyInjuries, type KeyInjuryPlayer, type SoccerColdStreaks, type SoccerGame, type SoccerHotStreaks, type SoccerLeague, type SoccerMatchup, type SoccerPlayer, type SoccerPlayerGameLog, type SoccerStandingRow } from "./api";
 import logo from "./assets/daily-ham-logo.jpg";
-import { LEAGUE_THEMES, NBA_TEAM_THEMES, applyLeagueTheme, loadFavorites, saveFavorite, themeFor, type League, type LeagueFavorites } from "./teams";
+import { EPL_TEAM_THEMES, LEAGUE_THEMES, MLS_TEAM_THEMES, NBA_TEAM_THEMES, SOCCER_LEAGUES, applyLeagueTheme, loadFavorites, saveFavorite, soccerLeagueForTeam, themeFor, type League, type LeagueFavorites } from "./teams";
 import { isWatchedPlayer, isWatchedTeam, loadWatchlist, removeWatchedEntry, toggleWatch, type WatchedEntry, type WatchedPlayer, type WatchedTeam } from "./watchlist";
 
 type Sport = League;
@@ -18,9 +18,20 @@ const SPORT_KEY = "dh-sport";
 function loadSport(): Sport {
   try {
     const raw = localStorage.getItem(SPORT_KEY);
-    return raw === "nfl" ? "nfl" : raw === "nba" ? "nba" : "nhl";
+    return raw === "nfl" ? "nfl" : raw === "nba" ? "nba" : raw === "soccer" ? "soccer" : "nhl";
   } catch {
     return "nhl";
+  }
+}
+// Soccer league picker inside the soccer side (MLS | Premier League),
+// persisted per-device like the sport itself.
+const SOCCER_LEAGUE_KEY = "dh-soccer-league";
+function loadSoccerLeague(): SoccerLeague {
+  try {
+    const raw = localStorage.getItem(SOCCER_LEAGUE_KEY);
+    return raw === "epl" ? "epl" : "mls";
+  } catch {
+    return "mls";
   }
 }
 type PremiumBoard = ApiResponse<typeof api, "getPremiumBoard">;
@@ -86,6 +97,13 @@ type NflTeamCode = ApiRequest<typeof api, "getNflMatchup">["awayTeam"];
 
 const nbaTeams: { code: string; name: string }[] = NBA_TEAM_THEMES.map((theme) => ({ code: theme.code, name: theme.name }));
 type NbaTeamCode = ApiRequest<typeof api, "getNbaMatchup">["awayTeam"];
+
+// Soccer clubs per league; the server leg mirrors ESPN's abbreviations
+// (ESPN usa.1 for MLS, eng.1 for the Premier League).
+const mlsTeams: { code: string; name: string }[] = MLS_TEAM_THEMES.map((theme) => ({ code: theme.code, name: theme.name }));
+const eplTeams: { code: string; name: string }[] = EPL_TEAM_THEMES.map((theme) => ({ code: theme.code, name: theme.name }));
+const soccerTeams: { code: string; name: string }[] = [...mlsTeams, ...eplTeams];
+const soccerTeamsFor = (league: SoccerLeague) => league === "epl" ? eplTeams : mlsTeams;
 
 function dateTime(value: string) { return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(value)); }
 function gameDate(value: string) { return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(`${value}T12:00:00`)); }
@@ -278,9 +296,10 @@ function PlayerStatsSheet({ player, team, onClose }: { player: NhlPlayer; team: 
   </div>;
 }
 
-function RosterView({ parlay, setParlay, sport, teamFocus }: { parlay: ParlayPick[]; setParlay: (next: ParlayPick[]) => void; sport: Sport; teamFocus: { sport: League; team: string; nonce: number } | null }) {
+function RosterView({ parlay, setParlay, sport, soccerLeague, onSoccerLeague, teamFocus }: { parlay: ParlayPick[]; setParlay: (next: ParlayPick[]) => void; sport: Sport; soccerLeague?: SoccerLeague; onSoccerLeague?: (l: SoccerLeague) => void; teamFocus: { sport: League; team: string; nonce: number } | null }) {
   if (sport === "nfl") return <NflRosterView parlay={parlay} setParlay={setParlay} teamFocus={teamFocus} />;
   if (sport === "nba") return <NbaRosterView parlay={parlay} setParlay={setParlay} teamFocus={teamFocus} />;
+  if (sport === "soccer") return <SoccerRosterView league={soccerLeague ?? "mls"} onLeagueChange={onSoccerLeague} parlay={parlay} setParlay={setParlay} teamFocus={teamFocus} />;
   const [team, setTeam] = useState<TeamCode>("WSH");
   useEffect(() => {
     if (teamFocus && teamFocus.sport === "nhl" && (teams as { code: string }[]).some((t) => t.code === teamFocus.team)) setTeam(teamFocus.team as TeamCode);
@@ -459,8 +478,14 @@ function FlipMeter({ sport, market, nhlStandings, nflStandings, nbaStandings }: 
 // Key-injury warnings. The server action is landing in a parallel server
 // leg; until then the query fails quietly and no chips render. Designations
 // are rendered verbatim from the feed — never invented client-side.
-function useKeyInjuries(sport: Sport) {
+function useKeyInjuries(sport: Exclude<Sport, "soccer">) {
   return useQuery({ queryKey: ["key-injuries", sport], queryFn: () => api.getKeyInjuries({ sport }), staleTime: 6 * 60 * 60 * 1000, retry: 1 });
+}
+
+// Soccer injuries ride the parallel server leg; until it lands the query
+// fails quietly and no chips render.
+function useSoccerKeyInjuries(league: SoccerLeague) {
+  return useQuery({ queryKey: ["soccer-key-injuries", league], queryFn: () => api.getSoccerKeyInjuries({ league }), staleTime: 6 * 60 * 60 * 1000, retry: 1 });
 }
 
 function shortDate(value: string | null | undefined): string | null {
@@ -564,7 +589,7 @@ function ParlayView({ parlay, setParlay, sport, onGoBoard }: { parlay: ParlayPic
     { id: "best", label: "Best price" },
   ];
   return <section className="parlay-section">
-    <div className="roster-title"><div><p className="kicker">ODDS & PARLAY CALCULATOR</p><h2>Your slip</h2><p className="roster-intro">Add legs from the {sport === "nfl" ? "gridiron" : sport === "nba" ? "hardwood" : "ice"} board, then price the slip below.</p></div><span>{parlay.length} legs</span></div>
+    <div className="roster-title"><div><p className="kicker">ODDS & PARLAY CALCULATOR</p><h2>Your slip</h2><p className="roster-intro">Add legs from the {sport === "nfl" ? "gridiron" : sport === "nba" ? "hardwood" : sport === "soccer" ? "pitch" : "ice"} board, then price the slip below.</p></div><span>{parlay.length} legs</span></div>
     {parlay.length === 0 ? <div className="history-empty"><strong>Your slip is empty.</strong><span>Head to the board and tap <b>Add</b> on any market — moneylines, spreads, totals — and they'll stack up here with live combined odds.</span><button className="refresh" onClick={onGoBoard}>Open the board →</button></div> :
     <div className="slip-card" aria-label="Parlay builder">
       <div className="slip-head"><div><p className="kicker">PARLAY BUILDER</p><h3>{parlay.length} leg{parlay.length === 1 ? "" : "s"}</h3></div><strong className="slip-combined">{combined}</strong></div>
@@ -579,15 +604,21 @@ function ParlayView({ parlay, setParlay, sport, onGoBoard }: { parlay: ParlayPic
 
 type CodyPlate = ApiResponse<typeof api, "getPublicPlates">["plates"][number];
 
+// Plate league label. Cast to string: the server widens the sport enum as
+// new sides land; unknown values render uppercased rather than crashing.
+function plateLeagueLabel(sport: string): string {
+  return sport === "nhl" ? "NHL" : sport === "nfl" ? "NFL" : sport === "nba" ? "NBA" : sport === "soccer" ? "SOCCER" : sport.toUpperCase();
+}
+
 const TUTORIAL_SLIDES: { icon: string; kicker: string; title: string; points: string[] }[] = [
   { icon: "🍖", kicker: "WELCOME", title: "Fresh cuts, daily.", points: [
-    "The Daily Ham serves NHL, NFL & NBA projections, real sportsbook prices, official league stats, and Cody's personal picks.",
+    "The Daily Ham serves NHL, NFL, NBA & soccer projections, real sportsbook prices, official league stats, and Cody's personal picks.",
     "Anything the model calculates is labeled a model estimate — never confused with a sportsbook line.",
     "Swipe through this guide to learn the whole shop.",
   ]},
-  { icon: "🏒", kicker: "PICK YOUR SIDE", title: "Hockey, football, basketball?", points: [
-    "Tap NHL / NFL / NBA at the top to switch leagues — each side is built to full depth.",
-    "Hit My team on the welcome card and pick your squad: the whole app, background included, dresses in your team's colors. The hockey side shows only NHL teams, the football side only NFL teams, the basketball side only NBA teams.",
+  { icon: "🏒", kicker: "PICK YOUR SIDE", title: "Hockey, football, basketball, soccer?", points: [
+    "Tap NHL / NFL / NBA / SOC at the top to switch leagues — each side is built to full depth.",
+    "Hit My team on the welcome card and pick your squad: the whole app, background included, dresses in your team's colors. Each side shows only its own league's teams.",
     "The tabs below are your cutting board: Board, Jamón Ibérico, Parlay, Matchup, Players, Streaks, League, Watchlist, Settings.",
   ]},
   { icon: "🏀", kicker: "THE HARDWOOD", title: "Basketball, full depth.", points: [
@@ -595,10 +626,15 @@ const TUTORIAL_SLIDES: { icon: string; kicker: string; title: string; points: st
     "Player files track points, rebounds, assists, steals and blocks per game — tap any name for the full file.",
     "The matchup calculator covers the winner, first basket, first-half and full-game scripts like a 15+ blowout or overtime.",
   ]},
+  { icon: "⚽", kicker: "THE PITCH", title: "Soccer, full depth.", points: [
+    "The soccer side covers MLS and the Premier League — toggle between them at the top of any soccer view.",
+    "The matchup calculator is three-way: home win, draw, away win — plus over 2.5 goals and both teams to score, all as model estimates.",
+    "Player files track goals, assists and clean sheets; streaks surface who's scoring and who's gone cold.",
+  ]},
   { icon: "📋", kicker: "THE BOARD", title: "Every game, one card.", points: [
     "Each game card shows the matchup, start time, and the Flip % bar.",
     "Flip % is the model's win estimate from each team's actual record — e.g. 58% vs 42%.",
-    "Under it sit the two likely scorers: season leaders by goals (NHL), TDs (NFL) or points (NBA). A stat, not a prop.",
+    "Under it sit the two likely scorers: season leaders by goals (NHL), TDs (NFL), points (NBA) or goals (soccer). A stat, not a prop.",
   ]},
   { icon: "💲", kicker: "READING THE ODDS", title: "Best · DraftKings · FanDuel · BetMGM", points: [
     "Every moneyline card lists the best price plus DraftKings, FanDuel and BetMGM.",
@@ -759,7 +795,7 @@ function JamonView({ sport }: { sport: Sport }) {
       <div className="history-empty jamon-empty"><strong>No picks plated yet.</strong><span>{adminToken ? "Add your first plate in Settings → My plates." : "Check back soon — Cody's personal picks land here."}</span></div>
     ) : (
       <div className="jamon-spread">{visible.map((plate) => <article className="jamon-plate large" key={plate.id}>
-        <div className="plate-top"><span className="plate-league">{plate.sport === "nhl" ? "NHL" : plate.sport === "nfl" ? "NFL" : "NBA"}</span>{!plate.isPublic && <em className="plate-private">Private</em>}</div>
+        <div className="plate-top"><span className="plate-league">{plateLeagueLabel(plate.sport as string)}</span>{!plate.isPublic && <em className="plate-private">Private</em>}</div>
         <small className="plate-matchup">{plate.matchup}</small>
         <strong className="plate-pick">{plate.pick}</strong>
         {plate.note ? <p className="plate-note">{plate.note}</p> : null}
@@ -769,7 +805,8 @@ function JamonView({ sport }: { sport: Sport }) {
   </section>;
 }
 
-function ProView({ parlay, setParlay, home = false, sport }: { parlay: ParlayPick[]; setParlay: (next: ParlayPick[]) => void; home?: boolean; sport: Sport }) {
+function ProView({ parlay, setParlay, home = false, sport, soccerLeague, onSoccerLeague }: { parlay: ParlayPick[]; setParlay: (next: ParlayPick[]) => void; home?: boolean; sport: Sport; soccerLeague?: SoccerLeague; onSoccerLeague?: (l: SoccerLeague) => void }) {
+  if (sport === "soccer") return <SoccerBoardView league={soccerLeague ?? "mls"} onLeagueChange={onSoccerLeague} parlay={parlay} setParlay={setParlay} home={home} />;
   const board = useQuery({ queryKey: ["premium-board", sport], queryFn: () => api.getPremiumBoard({ sport }), retry: false });
   const overview = useQuery({ queryKey: ["nhl-overview"], queryFn: () => api.getNhlOverview({}), staleTime: 15 * 60 * 1000, retry: 1, enabled: sport === "nhl" });
   const nflOverview = useQuery({ queryKey: ["nfl-overview", "current"], queryFn: () => api.getNflOverview({}), staleTime: 15 * 60 * 1000, retry: 1, enabled: sport === "nfl" });
@@ -816,9 +853,10 @@ function GoalieIndicator({ label, goalie }: { label: string; goalie: NhlOverview
   return <div className={`goalie-indicator ${goalie.status}`}><span>{label}</span><strong>{goalie.names.length ? goalie.names.join(" / ") : "Starter not posted"}</strong><small>{goalie.status === "confirmed" ? "Confirmed starter" : goalie.status === "watch" ? "Official NHL goalie watch · not confirmed" : "Awaiting official lineup data"}</small></div>;
 }
 
-function ScheduleStrip({ compact = false, sport }: { compact?: boolean; sport: Sport }) {
+function ScheduleStrip({ compact = false, sport, soccerLeague }: { compact?: boolean; sport: Sport; soccerLeague?: SoccerLeague }) {
   if (sport === "nfl") return <NflScheduleStrip compact={compact} />;
   if (sport === "nba") return <NbaScheduleStrip compact={compact} />;
+  if (sport === "soccer") return <SoccerScheduleStrip compact={compact} league={soccerLeague ?? "mls"} />;
   return <NhlScheduleStrip compact={compact} />;
 }
 
@@ -831,9 +869,10 @@ function NhlScheduleStrip({ compact = false }: { compact?: boolean }) {
   return <section className="slate-section"><div className="section-heading"><div><p className="kicker">OFFICIAL NHL SCHEDULE</p><h3>{compact ? "Tonight on the ice" : "Scores & schedule"}</h3></div><span>Updated {dateTime(overview.data.fetchedAt)}</span></div>{games.length ? <div className="slate-grid">{games.map((game) => <article className="game-tile" key={game.id}><div className="game-time"><span>{gameDate(game.date)}</span><b>{game.state === "FINAL" || game.state === "OFF" ? "Final" : dateTime(game.startsAt)}</b></div><div className="score-team"><strong>{game.away.name}</strong><TeamWatchStar sport="nhl" team={game.away.abbrev} name={game.away.name} /><b>{game.away.score ?? "—"}</b></div><div className="score-team"><strong>{game.home.name}</strong><TeamWatchStar sport="nhl" team={game.home.abbrev} name={game.home.name} /><b>{game.home.score ?? "—"}</b></div><div className="goalie-grid"><GoalieIndicator label={game.away.abbrev} goalie={game.away.goalie}/><GoalieIndicator label={game.home.abbrev} goalie={game.home.goalie}/></div><InjuryChips sport="nhl" awayCode={game.away.abbrev} homeCode={game.home.abbrev} injuries={injuries.data ?? null} />{game.broadcasts.length > 0 && <small className="broadcasts">{game.broadcasts.join(" · ")}</small>}</article>)}</div> : <div className="history-empty"><strong>No games on today’s official slate.</strong><span>Future games will appear when the NHL schedule posts them.</span></div>}<div className="source-box"><span>Source</span><a href={overview.data.scheduleSourceUrl} target="_blank" rel="noreferrer">NHL official schedule ↗</a><small>Starter labels appear only when official game data supports them.</small></div></section>;
 }
 
-function LeagueView({ sport }: { sport: Sport }) {
+function LeagueView({ sport, soccerLeague, onSoccerLeague }: { sport: Sport; soccerLeague?: SoccerLeague; onSoccerLeague?: (l: SoccerLeague) => void }) {
   if (sport === "nfl") return <NflLeagueView />;
   if (sport === "nba") return <NbaLeagueView />;
+  if (sport === "soccer") return <SoccerLeagueView league={soccerLeague ?? "mls"} onLeagueChange={onSoccerLeague} />;
   const overview = useQuery({ queryKey: ["nhl-overview"], queryFn: () => api.getNhlOverview({}), staleTime: 15 * 60 * 1000, retry: 1 });
   const [conference, setConference] = useState("All");
   if (overview.isPending) return <div className="loading"><span />Loading NHL schedule and standings…</div>;
@@ -846,9 +885,10 @@ function hotPlayerRef(row: HotStreaks["players"][number] | NhlColdStreaks["playe
   return { id: row.playerId, name: row.name, number: null, position: row.position, shoots: null, height: null, weight: null, games: null, goals: null, assists: null, points: null, shots: null, toiSeconds: null, savePct: null, gaa: null, wins: null, losses: null, shotsAgainst: null, saves: null };
 }
 
-function HotStreaksView({ sport }: { sport: Sport }) {
+function HotStreaksView({ sport, soccerLeague, onSoccerLeague }: { sport: Sport; soccerLeague?: SoccerLeague; onSoccerLeague?: (l: SoccerLeague) => void }) {
   if (sport === "nfl") return <NflHotStreaksView />;
   if (sport === "nba") return <NbaHotStreaksView />;
+  if (sport === "soccer") return <SoccerHotStreaksView league={soccerLeague ?? "mls"} onLeagueChange={onSoccerLeague} />;
   const [category, setCategory] = useState("Heat index");
   const [selected, setSelected] = useState<{ player: NhlPlayer; team: TeamCode } | null>(null);
   const hot = useQuery({ queryKey: ["nhl-hot-streaks"], queryFn: () => api.getHotStreaks({ force: false }), staleTime: 12 * 60 * 60 * 1000, retry: 1 });
@@ -864,20 +904,21 @@ function HotStreaksView({ sport }: { sport: Sport }) {
   return <section className="hot-section"><div className="roster-title"><div><p className="kicker">HOT STREAKS</p><h2>Who’s cooking right now</h2><p className="roster-intro">Every qualifying streak is calculated from official recent NHL boxscores. Tap a player for the full stat file.</p></div>{hot.data && <div className="roster-update"><span>Updated {dateTime(hot.data.fetchedAt)}</span><button className="refresh" onClick={() => refresh.mutate()} disabled={refresh.isPending}>{refresh.isPending ? "Refreshing…" : "Refresh streaks"}</button></div>}</div><div className="metric-tabs hot-tabs">{["Heat index","Point streak","Goal streak","Last-5 points","Last-5 goals","Goalies"].map((name) => <button key={name} className={category === name ? "active" : ""} onClick={() => setCategory(name)}>{name}</button>)}</div>{hot.isPending ? <div className="loading"><span />Reading recent NHL boxscores…</div> : hot.isError ? <div className="error-state"><h2>Streak board unavailable.</h2><p>The official boxscore feed did not answer.</p><button onClick={() => hot.refetch()}>Retry</button></div> : players.length === 0 ? <div className="history-empty"><strong>No qualifying streaks in the official window.</strong><span>Only real players with at least two recent appearances and a qualifying hot signal are shown.</span></div> : <div className="hot-list">{players.map((row, index) => <div className="hot-row-wrap" key={row.playerId}><button className="hot-row" onClick={() => setSelected({ player: hotPlayerRef(row), team: row.team })} aria-label={`Open ${row.name} full stat file`}><span className="hot-rank">#{index + 1}</span><span className="hot-player"><strong>{row.name}</strong><small>{row.team} · {row.position}</small></span><span className="streak-badges">{row.pointStreak >= 2 && <b>{row.pointStreak}G point streak</b>}{row.goalStreak >= 2 && <b>{row.goalStreak}G goal streak</b>}{row.lastFiveSavePct !== null && <b>{(row.lastFiveSavePct * 100).toFixed(1)} SV%</b>}</span><span className="hot-totals"><b>{row.lastFivePoints} PTS</b><small>{row.lastFiveGoals} G · last {row.games.length}</small></span><span className="spark-games">{row.games.map((game) => <i key={game.gameId} title={`${game.date} vs ${game.opponent}`}>{row.position === "G" ? `${game.saves ?? "—"} SV` : `${game.goals}G ${game.assists}A`}</i>)}</span></button><PlayerWatchStar sport="nhl" playerId={row.playerId} team={row.team} name={row.name} position={row.position} /></div>)}</div>}{hot.data && <div className="source-box"><span>Source</span><a href={hot.data.sourceUrl} target="_blank" rel="noreferrer">NHL official boxscores ↗</a><small>{gameDate(hot.data.windowStart)}–{gameDate(hot.data.windowEnd)} · refreshed daily without sportsbook quota</small></div>}{selected && <PlayerStatsSheet player={selected.player} team={selected.team} onClose={() => setSelected(null)}/>}</section>;
 }
 
-function CuttingBoardView({ sport }: { sport: Sport }) {
+function CuttingBoardView({ sport, soccerLeague, onSoccerLeague }: { sport: Sport; soccerLeague?: SoccerLeague; onSoccerLeague?: (l: SoccerLeague) => void }) {
   if (sport === "nfl") return <NflCuttingBoard />;
   if (sport === "nba") return <NbaCuttingBoard />;
+  if (sport === "soccer") return <SoccerCuttingBoard league={soccerLeague ?? "mls"} onLeagueChange={onSoccerLeague} />;
   return <NhlCuttingBoard />;
 }
 
-function StreaksView({ sport, initialSide }: { sport: Sport; initialSide?: "hot" | "cold" }) {
+function StreaksView({ sport, initialSide, soccerLeague, onSoccerLeague }: { sport: Sport; initialSide?: "hot" | "cold"; soccerLeague?: SoccerLeague; onSoccerLeague?: (l: SoccerLeague) => void }) {
   const [side, setSide] = useState<"hot" | "cold">(initialSide ?? "hot");
   return <section className="streaks-wrap">
     <div className="streaks-toggle" role="tablist" aria-label="Streak direction">
       <button role="tab" aria-selected={side === "hot"} className={side === "hot" ? "active hot" : ""} onClick={() => setSide("hot")}>🔥 Hot streaks</button>
       <button role="tab" aria-selected={side === "cold"} className={side === "cold" ? "active cold" : ""} onClick={() => setSide("cold")}>🧊 Cutting board</button>
     </div>
-    {side === "hot" ? <HotStreaksView sport={sport} /> : <CuttingBoardView sport={sport} />}
+    {side === "hot" ? <HotStreaksView sport={sport} soccerLeague={soccerLeague} onSoccerLeague={onSoccerLeague} /> : <CuttingBoardView sport={sport} soccerLeague={soccerLeague} onSoccerLeague={onSoccerLeague} />}
   </section>;
 }
 
@@ -899,9 +940,10 @@ function NhlCuttingBoard() {
 
 function percentage(value: number | null): string { return value === null ? "—" : `${Math.round(value * 100)}%`; }
 
-function MatchupView({ sport }: { sport: Sport }) {
+function MatchupView({ sport, soccerLeague, onSoccerLeague }: { sport: Sport; soccerLeague?: SoccerLeague; onSoccerLeague?: (l: SoccerLeague) => void }) {
   if (sport === "nfl") return <NflMatchupCalculator />;
   if (sport === "nba") return <NbaMatchupCalculator />;
+  if (sport === "soccer") return <SoccerMatchupCalculator league={soccerLeague ?? "mls"} onLeagueChange={onSoccerLeague} />;
   return <MatchupCalculator />;
 }
 
@@ -1223,11 +1265,13 @@ function PlatesManager({ adminToken }: { adminToken: string }) {
     setSport("nhl"); setMatchup(""); setPlay(""); setNote(""); setIsPublic(true); setEditing(null);
   }
   function startEdit(plate: CodyPlate) {
-    setEditing(plate); setSport(plate.sport); setMatchup(plate.matchup); setPlay(plate.pick); setNote(plate.note ?? ""); setIsPublic(plate.isPublic);
+    setEditing(plate); setSport(plate.sport as Sport); setMatchup(plate.matchup); setPlay(plate.pick); setNote(plate.note ?? ""); setIsPublic(plate.isPublic);
     setMessage(null);
   }
   const save = useMutation({
-    mutationFn: () => api.savePlate({ adminToken, plate: { id: editing?.id, sport, matchup: matchup.trim(), pick: play.trim(), note: note.trim(), isPublic } }),
+    // The server widens the plate sport enum as new sides land; cast for the
+    // parallel soccer leg (fails gracefully server-side until then).
+    mutationFn: () => api.savePlate({ adminToken, plate: { id: editing?.id, sport: sport as "nhl", matchup: matchup.trim(), pick: play.trim(), note: note.trim(), isPublic } }),
     onSuccess: () => { setMessage(editing ? "Plate updated." : "Plate added — it's live."); reset(); plates.refetch(); },
     onError: (error) => setMessage(error instanceof Error ? error.message : "Could not save the plate."),
   });
@@ -1242,7 +1286,7 @@ function PlatesManager({ adminToken }: { adminToken: string }) {
     <div className="credential-status"><span className="status-dot configured" /><div><small>JAMÓN IBÉRICO</small><strong>My plates</strong><span>Unlimited — public plates show on the board, private plates are only visible to you.</span></div></div>
     <form onSubmit={(event) => { event.preventDefault(); if (valid && !save.isPending) save.mutate(); }}>
       <div className="plate-form-grid">
-        <label>Sport<select value={sport} onChange={(event) => setSport(event.target.value as Sport)}><option value="nhl">NHL</option><option value="nfl">NFL</option></select></label>
+        <label>Sport<select value={sport} onChange={(event) => setSport(event.target.value as Sport)}><option value="nhl">NHL</option><option value="nfl">NFL</option><option value="nba">NBA</option><option value="soccer">Soccer</option></select></label>
         <label>Matchup<input value={matchup} onChange={(event) => setMatchup(event.target.value)} placeholder="WSH @ NYR" maxLength={120} /></label>
       </div>
       <label>The pick<input value={play} onChange={(event) => setPlay(event.target.value)} placeholder="Capitals ML" maxLength={120} /></label>
@@ -1318,7 +1362,7 @@ function SettingsView() {
 
   const gateConfigured = adminStatus.data?.configured ?? false;
   return <section className="settings-panel">
-    <div className="settings-heading"><p className="kicker">PROVIDER SETTINGS</p><h1>Sportsbook connection</h1><p>Connect a sportsbook odds provider — SportsGameOdds or The Odds API — to power the complete NHL, NFL & NBA odds boards. Your keys are used only for hockey, football and basketball markets.</p></div>
+    <div className="settings-heading"><p className="kicker">PROVIDER SETTINGS</p><h1>Sportsbook connection</h1><p>Connect a sportsbook odds provider — SportsGameOdds or The Odds API — to power the complete NHL, NFL, NBA & soccer odds boards. Your keys are used only for hockey, football, basketball and soccer markets.</p></div>
     {adminStatus.isPending && <p className="settings-message">Checking admin access…</p>}
     {adminStatus.data && !gateConfigured && <div className="credential-card"><p className="settings-message" role="status"><strong>Admin access is not set up on this server yet. </strong><span>Add an <code>ADMIN_TOKEN</code> environment variable and redeploy — then only someone with that token can manage provider keys or trigger manual refreshes.</span></p></div>}
     {gateConfigured && !adminToken && <form className="credential-card" onSubmit={unlock}>
@@ -1391,7 +1435,7 @@ function WelcomeBanner({ sport, onTour }: { sport: Sport; onTour?: () => void })
     <div>
       <p className="welcome-kicker">{team ? <>Welcome, {team.name} fan <b className="welcome-team-badge">{team.code}</b></> : "Welcome to the Daily Ham"}</p>
       <strong>Fresh Cuts Daily</strong>
-      <span>{team ? "Tonight's board, dressed in your team's colors." : "Every NHL, NFL & NBA market, official league data, model projections and sharp price comparison."}</span>
+      <span>{team ? "Tonight's board, dressed in your team's colors." : "Every NHL, NFL, NBA & soccer market, official league data, model projections and sharp price comparison."}</span>
       <div className="welcome-actions">
         <TeamThemePicker sport={sport}/>
         {onTour && <button type="button" className="tour-cta" onClick={onTour}>Take the tour — learn the app</button>}
@@ -1472,6 +1516,7 @@ function ToastHost() {  const [message, setMessage] = useState<string | null>(nu
 function TeamThemePicker({ sport }: { sport: Sport }) {
   const [open, setOpen] = useState(false);
   const [favs, setFavs] = useState<LeagueFavorites>(() => loadFavorites());
+  const [pickerSoccerLeague, setPickerSoccerLeague] = useState<SoccerLeague>("mls");
   useEffect(() => {
     const onChange = () => setFavs(loadFavorites());
     window.addEventListener("dh-team-change", onChange);
@@ -1494,11 +1539,12 @@ function TeamThemePicker({ sport }: { sport: Sport }) {
     {open && <div className="team-modal-backdrop" onClick={() => setOpen(false)}>
       <div className="team-modal" role="dialog" aria-modal="true" aria-label="Pick your favorite teams" onClick={(e) => e.stopPropagation()}>
         <div className="team-modal-head"><h3>Your team, your colors</h3><button type="button" className="team-modal-close" onClick={() => setOpen(false)} aria-label="Close">×</button></div>
-        <p>Pick your favorite {sport === "nhl" ? "NHL" : sport === "nfl" ? "NFL" : "NBA"} team — this side of the site dresses in its colors. Switch to another side to pick a team there. Saved on this device.</p>
+        <p>Pick your favorite {sport === "nhl" ? "NHL" : sport === "nfl" ? "NFL" : sport === "nba" ? "NBA" : "soccer"} club — this side of the site dresses in its colors. Switch to another side to pick a team there. Saved on this device.</p>
         <div>
-          <p className="team-league-label">{sport === "nhl" ? "NHL" : sport === "nfl" ? "NFL" : "NBA"}</p>
+          <p className="team-league-label">{sport === "nhl" ? "NHL" : sport === "nfl" ? "NFL" : sport === "nba" ? "NBA" : "SOCCER"}</p>
+          {sport === "soccer" && <div className="metric-tabs" role="tablist" aria-label="Soccer league">{SOCCER_LEAGUES.map((l) => <button key={l.code} type="button" role="tab" aria-selected={pickerSoccerLeague === l.code} className={pickerSoccerLeague === l.code ? "active" : ""} onClick={() => setPickerSoccerLeague(l.code)}>{l.name}</button>)}</div>}
           <div className="team-grid">
-            {LEAGUE_THEMES[sport].map((t) => <button key={`${sport}-${t.code}`} type="button" className={"team-cell" + (favs[sport] === t.code ? " sel" : "")} onClick={() => pick(sport, t.code)} aria-pressed={favs[sport] === t.code}>
+            {(sport === "soccer" ? (pickerSoccerLeague === "epl" ? EPL_TEAM_THEMES : MLS_TEAM_THEMES) : LEAGUE_THEMES[sport]).map((t) => <button key={`${sport}-${t.code}`} type="button" className={"team-cell" + (favs[sport] === t.code ? " sel" : "")} onClick={() => pick(sport, t.code)} aria-pressed={favs[sport] === t.code}>
               <span className="team-swatch" style={{ background: `linear-gradient(135deg, ${t.color} 50%, ${t.secondary} 50%)` }} aria-hidden="true" />
               <b>{t.code}</b><small>{t.name}</small>
             </button>)}
@@ -1829,6 +1875,8 @@ function WatchlistView({ onViewTeam }: { onViewTeam: (sport: League, team: strin
       setSelected({ sport: "nfl", player: { id: entry.playerId, name: entry.name, position: entry.position, team: entry.team } });
     } else if (entry.sport === "nba") {
       setSelected({ sport: "nba", player: { id: entry.playerId, name: entry.name, position: entry.position, team: entry.team } });
+    } else if (entry.sport === "soccer") {
+      setSelected({ sport: "soccer", player: { id: entry.playerId, name: entry.name, position: entry.position, team: entry.team } });
     } else {
       setNhlPlayer({ team: entry.team, id: entry.playerId });
     }
@@ -1836,8 +1884,8 @@ function WatchlistView({ onViewTeam }: { onViewTeam: (sport: League, team: strin
   const themeOf = (entry: WatchedEntry) => themeFor(entry.sport, entry.team);
   const teamName = (entry: WatchedTeam) => themeFor(entry.sport, entry.team)?.name ?? entry.name;
   return <section className="watchlist-section">
-    <div className="roster-title"><div><p className="kicker">YOUR WATCHLIST</p><h2>Players & teams you're tracking</h2><p className="roster-intro">Star any player or team across all three leagues and they'll live here. Tap a player for the full stat file, tap a team to open its roster.</p></div><span>{list.length} watched</span></div>
-    {list.length === 0 ? <div className="history-empty"><strong>Nothing watched yet.</strong><span>Hit the ★ on any player or team — NHL, NFL or NBA — and they'll show up here.</span></div> :
+    <div className="roster-title"><div><p className="kicker">YOUR WATCHLIST</p><h2>Players & teams you're tracking</h2><p className="roster-intro">Star any player or team across all four leagues and they'll live here. Tap a player for the full stat file, tap a team to open its roster.</p></div><span>{list.length} watched</span></div>
+    {list.length === 0 ? <div className="history-empty"><strong>Nothing watched yet.</strong><span>Hit the ★ on any player or team — NHL, NFL, NBA or soccer — and they'll show up here.</span></div> :
     <div className="watchlist-grid">{list.map((entry) => {
       const theme = themeOf(entry);
       const key = entry.kind === "player" ? `player-${entry.sport}-${entry.playerId}` : `team-${entry.sport}-${entry.team}`;
@@ -1847,13 +1895,14 @@ function WatchlistView({ onViewTeam }: { onViewTeam: (sport: League, team: strin
         <button className="watch-open" onClick={() => entry.kind === "player" ? openPlayer(entry) : setTeamSheet({ sport: entry.sport, team: entry.team })} aria-label={entry.kind === "player" ? `Open ${entry.name} stat file` : `Open ${label} team file`}>
           <span className="watch-team-bar" aria-hidden="true" />
           <span className="watch-player"><strong>{label}</strong><small>{sub}</small></span>
-          <span className="watch-league">{entry.kind === "team" ? "TEAM" : entry.sport === "nfl" ? "NFL" : entry.sport === "nba" ? "NBA" : "NHL"}</span>
+          <span className="watch-league">{entry.kind === "team" ? "TEAM" : entry.sport === "nfl" ? "NFL" : entry.sport === "nba" ? "NBA" : entry.sport === "soccer" ? (soccerLeagueForTeam(entry.team) === "epl" ? "EPL" : "MLS") : "NHL"}</span>
         </button>
         <button type="button" className="watch-remove" onClick={() => removeWatchedEntry(entry)} aria-label={`Remove ${label} from watchlist`}>×</button>
       </article>;
     })}</div>}
     {selected?.sport === "nfl" && <NflPlayerStatsSheet player={{ id: selected.player.id, name: selected.player.name, jersey: null, position: selected.player.position, group: "offense", games: null, passYards: null, passTds: null, interceptions: null, rushYards: null, rushTds: null, receptions: null, recYards: null, recTds: null }} team={selected.player.team as NflTeamCode} onClose={() => setSelected(null)} />}
     {selected?.sport === "nba" && <NbaPlayerSheet player={{ id: selected.player.id, name: selected.player.name, jersey: null, position: selected.player.position, group: nbaGroupFor(selected.player.position), games: null, points: null, rebounds: null, assists: null, steals: null, blocks: null, turnovers: null, minutes: null }} team={selected.player.team as NbaTeamCode} onClose={() => setSelected(null)} />}
+    {selected?.sport === "soccer" && <SoccerPlayerSheet league={soccerLeagueForTeam(selected.player.team)} player={{ id: selected.player.id, name: selected.player.name, jersey: null, position: selected.player.position, games: null, goals: null, assists: null }} team={selected.player.team} onClose={() => setSelected(null)} />}
     {selected?.sport === "nhl" && nhlRoster.data && (() => {
       const found = nhlRoster.data.players.find((p) => p.id === selected.player.id);
       return found ? <PlayerStatsSheet player={found} team={nhlPlayer?.team as TeamCode} onClose={() => { setSelected(null); setNhlPlayer(null); }} /> : null;
@@ -1885,19 +1934,25 @@ function TeamDetailSheet({ sport, team, onClose, onViewRoster }: { sport: League
   const [selectedNfl, setSelectedNfl] = useState<NflPlayer | null>(null);
   const [selectedNhl, setSelectedNhl] = useState<NhlPlayer | null>(null);
   const [selectedNba, setSelectedNba] = useState<NbaPlayer | null>(null);
+  const [selectedSoccer, setSelectedSoccer] = useState<SoccerPlayer | null>(null);
   const theme = themeFor(sport, team);
   const teamName = theme?.name ?? team;
+  // Soccer clubs carry their league in the code (no MLS/EPL collisions).
+  const teamSoccerLeague: SoccerLeague = soccerLeagueForTeam(team);
 
   const nflRoster = useQuery({ queryKey: ["nfl-roster", team], queryFn: () => api.getNflRoster({ team: team as NflTeamCode }), enabled: sport === "nfl", retry: 1 });
   const nhlRoster = useQuery({ queryKey: ["nhl-roster", team], queryFn: () => api.getNhlRoster({ team: team as TeamCode }), enabled: sport === "nhl", retry: 1 });
   const nbaRoster = useQuery({ queryKey: ["nba-roster", team], queryFn: () => api.getNbaRoster({ team: nbaServerTeam(team) as NbaTeamCode }), enabled: sport === "nba", retry: 1 });
+  const soccerRoster = useQuery({ queryKey: ["soccer-roster", teamSoccerLeague, team], queryFn: () => api.getSoccerRoster({ league: teamSoccerLeague, team }), enabled: sport === "soccer", retry: 1 });
   const nflOverview = useQuery({ queryKey: ["nfl-overview"], queryFn: () => api.getNflOverview({}), enabled: sport === "nfl", staleTime: 15 * 60 * 1000, retry: 1 });
   const nhlOverview = useQuery({ queryKey: ["nhl-overview"], queryFn: () => api.getNhlOverview({}), enabled: sport === "nhl", staleTime: 15 * 60 * 1000, retry: 1 });
   const nbaOverview = useQuery({ queryKey: ["nba-overview"], queryFn: () => api.getNbaOverview({}), enabled: sport === "nba", staleTime: 15 * 60 * 1000, retry: 1 });
+  const soccerOverview = useQuery({ queryKey: ["soccer-overview", teamSoccerLeague], queryFn: () => api.getSoccerOverview({ league: teamSoccerLeague }), enabled: sport === "soccer", staleTime: 15 * 60 * 1000, retry: 1 });
 
   const nflStanding = nflOverview.data?.standings.find((row) => row.team === team);
   const nhlStanding = nhlOverview.data?.standings.find((row) => row.team === team);
   const nbaStanding = nbaOverview.data?.standings.find((row) => row.team === team);
+  const soccerStanding = soccerOverview.data?.standings.find((row) => row.team === team);
 
   const nflGroups = useMemo(() => {
     const players = nflRoster.data?.players ?? [];
@@ -1924,16 +1979,25 @@ function TeamDetailSheet({ sport, team, onClose, onViewRoster }: { sport: League
       { title: "Goalies", players: goalies },
     ].filter((group) => group.players.length > 0);
   }, [nhlRoster.data]);
+  const soccerGroups = useMemo(() => {
+    const players = soccerRoster.data?.players ?? [];
+    return SOCCER_DEPTH_GROUPS.map((group) => ({
+      title: group.title,
+      players: players.filter((p) => group.positions.includes(p.position)).sort((a, b) => ((b.goals ?? 0) + (b.assists ?? 0)) - ((a.goals ?? 0) + (a.assists ?? 0)) || a.name.localeCompare(b.name)),
+    })).filter((group) => group.players.length > 0);
+  }, [soccerRoster.data]);
 
-  const loading = sport === "nba" ? nbaRoster.isPending : sport === "nfl" ? nflRoster.isPending : nhlRoster.isPending;
-  const groups = sport === "nba" ? nbaGroups : sport === "nfl" ? nflGroups : nhlGroups;
+  const loading = sport === "soccer" ? soccerRoster.isPending : sport === "nba" ? nbaRoster.isPending : sport === "nfl" ? nflRoster.isPending : nhlRoster.isPending;
+  const groups = sport === "soccer" ? soccerGroups : sport === "nba" ? nbaGroups : sport === "nfl" ? nflGroups : nhlGroups;
 
-  const recordLine = sport === "nba"
+  const recordLine = sport === "soccer"
+    ? soccerStanding ? `${soccerStanding.wins}–${soccerStanding.draws}–${soccerStanding.losses} · ${soccerStanding.points} pts` : "—"
+    : sport === "nba"
     ? nbaStanding ? `${nbaStanding.wins}–${nbaStanding.losses}` : "—"
     : sport === "nfl"
     ? nflStanding ? `${nflStanding.wins}–${nflStanding.losses}${nflStanding.ties ? `–${nflStanding.ties}` : ""}` : "—"
     : nhlStanding ? `${nhlStanding.wins}–${nhlStanding.losses}–${nhlStanding.otLosses}` : "—";
-  const division = (sport === "nba" ? nbaStanding?.division : sport === "nfl" ? nflStanding?.division : nhlStanding?.division) ?? "";
+  const division = (sport === "soccer" ? "" : sport === "nba" ? nbaStanding?.division : sport === "nfl" ? nflStanding?.division : nhlStanding?.division) ?? "";
 
   return <div className="sheet-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
     <section className="sheet team-sheet" role="dialog" aria-modal="true" aria-labelledby="team-detail-title" style={theme ? ({ "--team-color": theme.color } as CSSProperties) : undefined}>
@@ -1956,7 +2020,7 @@ function TeamDetailSheet({ sport, team, onClose, onViewRoster }: { sport: League
           {groups.map((group) => <details className="depth-group" key={group.title} open={groups.length <= 4}>
             <summary>{group.title} <span>{group.players.length}</span></summary>
             <div className="depth-players">
-              {group.players.map((player) => <div className="depth-player-wrap" key={player.id}><button className="depth-player" onClick={() => sport === "nba" ? setSelectedNba(player as NbaPlayer) : sport === "nfl" ? setSelectedNfl(player as NflPlayer) : setSelectedNhl(player as NhlPlayer)}>
+              {group.players.map((player) => <div className="depth-player-wrap" key={player.id}><button className="depth-player" onClick={() => sport === "soccer" ? setSelectedSoccer(player as SoccerPlayer) : sport === "nba" ? setSelectedNba(player as NbaPlayer) : sport === "nfl" ? setSelectedNfl(player as NflPlayer) : setSelectedNhl(player as NhlPlayer)}>
                 <b>{(player as { jersey?: string | null }).jersey ? `#${(player as { jersey?: string | null }).jersey} ` : ""}{(player as { number?: number | null }).number ? `#${(player as { number?: number | null }).number} ` : ""}{player.name}</b>
                 <small>{player.position}{sport === "nhl" && (player as NhlPlayer).points !== undefined && (player as NhlPlayer).position !== "G" ? ` · ${(player as NhlPlayer).points} PTS` : ""}</small>
                 <span className="depth-tap">›</span>
@@ -1965,7 +2029,14 @@ function TeamDetailSheet({ sport, team, onClose, onViewRoster }: { sport: League
           </details>)}
         </div>)}
       {tab === "stats" && <div className="team-stats-grid">
-        {sport === "nba" && nbaStanding ? <>
+        {sport === "soccer" && soccerStanding ? <>
+          <div><span>Record</span><strong>{soccerStanding.wins}–{soccerStanding.draws}–{soccerStanding.losses}</strong></div>
+          <div><span>Points</span><strong>{soccerStanding.points}</strong></div>
+          <div><span>Goals for</span><strong>{soccerStanding.goalsFor}</strong></div>
+          <div><span>Goals against</span><strong>{soccerStanding.goalsAgainst}</strong></div>
+          <div><span>Differential</span><strong className={soccerStanding.goalsFor - soccerStanding.goalsAgainst > 0 ? "positive" : ""}>{soccerStanding.goalsFor - soccerStanding.goalsAgainst > 0 ? "+" : ""}{soccerStanding.goalsFor - soccerStanding.goalsAgainst}</strong></div>
+          <div><span>League</span><strong>{teamSoccerLeague === "epl" ? "Premier League" : "MLS"}</strong></div>
+        </> : sport === "nba" && nbaStanding ? <>
           <div><span>Record</span><strong>{nbaStanding.wins}–{nbaStanding.losses}</strong></div>
           <div><span>Points for</span><strong>{nbaStanding.pointsFor}</strong></div>
           <div><span>Points against</span><strong>{nbaStanding.pointsAgainst}</strong></div>
@@ -1993,6 +2064,7 @@ function TeamDetailSheet({ sport, team, onClose, onViewRoster }: { sport: League
     {selectedNfl && <NflPlayerStatsSheet player={{ id: selectedNfl.id, name: selectedNfl.name, jersey: selectedNfl.jersey, position: selectedNfl.position, group: selectedNfl.group, games: null, passYards: null, passTds: null, interceptions: null, rushYards: null, rushTds: null, receptions: null, recYards: null, recTds: null }} team={team as NflTeamCode} onClose={() => setSelectedNfl(null)} />}
     {selectedNba && <NbaPlayerSheet player={{ id: selectedNba.id, name: selectedNba.name, jersey: selectedNba.jersey, position: selectedNba.position, group: selectedNba.group, games: null, points: null, rebounds: null, assists: null, steals: null, blocks: null, turnovers: null, minutes: null }} team={team as NbaTeamCode} onClose={() => setSelectedNba(null)} />}
     {selectedNhl && <PlayerStatsSheet player={selectedNhl} team={team as TeamCode} onClose={() => setSelectedNhl(null)} />}
+    {selectedSoccer && <SoccerPlayerSheet league={teamSoccerLeague} player={selectedSoccer} team={team} onClose={() => setSelectedSoccer(null)} />}
   </div>;
 }
 
@@ -2032,8 +2104,13 @@ export function App(){
     setTeamFocus({ sport: targetSport, team, nonce: Date.now() });
     setMode("rosters");
   }
-  const boardLabel = sport === "nfl" ? "Gridiron" : sport === "nba" ? "Hardwood" : "Ice board";
-  return <div className="app-shell"><SafeAreaTopScrim backgroundColor="var(--paper)"/><ToastHost/><InstallPrompt/><main>{mode==="board"&&<WelcomeBanner sport={sport} onTour={() => setTutorialOpen(true)}/>}<div className="topbar"><div className="sport-switch" role="group" aria-label="League"><button type="button" className={"sport-shape" + (sport === "nhl" ? " active" : "")} onClick={() => chooseSport("nhl")} aria-pressed={sport === "nhl"} aria-label="Hockey side"><span className="shape puck" aria-hidden="true" /><em>NHL</em></button><button type="button" className={"sport-shape" + (sport === "nfl" ? " active" : "")} onClick={() => chooseSport("nfl")} aria-pressed={sport === "nfl"} aria-label="Football side"><span className="shape ball" aria-hidden="true" /><em>NFL</em></button><button type="button" className={"sport-shape" + (sport === "nba" ? " active" : "")} onClick={() => chooseSport("nba")} aria-pressed={sport === "nba"} aria-label="Basketball side"><span className="shape hoop" aria-hidden="true" /><em>NBA</em></button></div><nav className="mode-tabs shapes" aria-label="Data view">{([
+  const boardLabel = sport === "nfl" ? "Gridiron" : sport === "nba" ? "Hardwood" : sport === "soccer" ? "Pitch" : "Ice board";
+  const [soccerLeague, setSoccerLeague] = useState<SoccerLeague>(() => loadSoccerLeague());
+  function chooseSoccerLeague(next: SoccerLeague) {
+    setSoccerLeague(next);
+    try { localStorage.setItem(SOCCER_LEAGUE_KEY, next); } catch { /* private mode */ }
+  }
+  return <div className="app-shell"><SafeAreaTopScrim backgroundColor="var(--paper)"/><ToastHost/><InstallPrompt/><main>{mode==="board"&&<WelcomeBanner sport={sport} onTour={() => setTutorialOpen(true)}/>}<div className="topbar"><div className="sport-switch" role="group" aria-label="League"><button type="button" className={"sport-shape" + (sport === "nhl" ? " active" : "")} onClick={() => chooseSport("nhl")} aria-pressed={sport === "nhl"} aria-label="Hockey side"><span className="shape puck" aria-hidden="true" /><em>NHL</em></button><button type="button" className={"sport-shape" + (sport === "nfl" ? " active" : "")} onClick={() => chooseSport("nfl")} aria-pressed={sport === "nfl"} aria-label="Football side"><span className="shape ball" aria-hidden="true" /><em>NFL</em></button><button type="button" className={"sport-shape" + (sport === "nba" ? " active" : "")} onClick={() => chooseSport("nba")} aria-pressed={sport === "nba"} aria-label="Basketball side"><span className="shape hoop" aria-hidden="true" /><em>NBA</em></button><button type="button" className={"sport-shape" + (sport === "soccer" ? " active" : "")} onClick={() => chooseSport("soccer")} aria-pressed={sport === "soccer"} aria-label="Soccer side"><span className="shape soccerball" aria-hidden="true" /><em>SOC</em></button></div><nav className="mode-tabs shapes" aria-label="Data view">{([
         ["board", boardLabel],
         ["jamon", "Jamón Ibérico"],
         ["parlay", parlay.length > 0 ? `Parlay (${parlay.length})` : "Parlay"],
@@ -2043,7 +2120,7 @@ export function App(){
         ["standings", "League"],
         ["watchlist", "Watchlist"],
         ["settings", "Settings"],
-      ] as [Mode, string][]).map(([key, label]) => <button key={key} type="button" className={"mode-shape" + (mode === key ? " active" : "")} onClick={() => setMode(key)} aria-pressed={mode === key} aria-label={label}><span className={"rink " + (key === "jamon" ? "platter" : sport === "nhl" ? "ice" : sport === "nfl" ? "turf" : "court")} aria-hidden="true"><span className={"shape " + (key === "jamon" ? "plate" : sport === "nhl" ? "puck" : sport === "nfl" ? "ball" : "hoop")} /></span>{mode === key && <i className="mode-glow" aria-hidden="true" />}<em>{label}</em></button>)}</nav></div>{mode==="board"&&<ProView parlay={parlay} setParlay={setParlay} home sport={sport}/>} {mode==="jamon"&&<JamonView sport={sport}/>} {mode==="parlay"&&<ParlayView parlay={parlay} setParlay={setParlay} sport={sport} onGoBoard={()=>setMode("board")}/>} {mode==="matchup"&&<MatchupView sport={sport}/>} {mode==="rosters"&&<RosterView parlay={parlay} setParlay={setParlay} sport={sport} teamFocus={teamFocus}/>} {mode==="streaks"&&<StreaksView sport={sport}/>} {mode==="standings"&&<LeagueView sport={sport}/>} {mode==="watchlist"&&<WatchlistView onViewTeam={viewTeam}/>} {mode==="settings"&&<SiteSettings/>}{tutorialOpen&&<TutorialSheet onClose={() => setTutorialOpen(false)}/>}</main></div>;
+      ] as [Mode, string][]).map(([key, label]) => <button key={key} type="button" className={"mode-shape" + (mode === key ? " active" : "")} onClick={() => setMode(key)} aria-pressed={mode === key} aria-label={label}><span className={"rink " + (key === "jamon" ? "platter" : sport === "nhl" ? "ice" : sport === "nfl" ? "turf" : sport === "nba" ? "court" : "pitch")} aria-hidden="true"><span className={"shape " + (key === "jamon" ? "plate" : sport === "nhl" ? "puck" : sport === "nfl" ? "ball" : sport === "nba" ? "hoop" : "soccerball")} /></span>{mode === key && <i className="mode-glow" aria-hidden="true" />}<em>{label}</em></button>)}</nav></div>{mode==="board"&&<ProView parlay={parlay} setParlay={setParlay} home sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="jamon"&&<JamonView sport={sport}/>} {mode==="parlay"&&<ParlayView parlay={parlay} setParlay={setParlay} sport={sport} onGoBoard={()=>setMode("board")}/>} {mode==="matchup"&&<MatchupView sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="rosters"&&<RosterView parlay={parlay} setParlay={setParlay} sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague} teamFocus={teamFocus}/>} {mode==="streaks"&&<StreaksView sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="standings"&&<LeagueView sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="watchlist"&&<WatchlistView onViewTeam={viewTeam}/>} {mode==="settings"&&<SiteSettings/>}{tutorialOpen&&<TutorialSheet onClose={() => setTutorialOpen(false)}/>}</main></div>;
 }
 
 // NBA views. Mirror the NFL sections: schedule strip, league, matchup
@@ -2340,4 +2417,568 @@ function NbaCuttingBoard() {
     turnovers: null, minutes: null,
   });
   return <section className="hot-section cutting-board"><div className="roster-title"><div><p className="kicker">THE CUTTING BOARD · NBA</p><h2>Who's gone cold</h2><p className="roster-intro">Every slump is calculated from official recent NBA game data. Tap a player for the full stat file.</p></div>{cold.data && <div className="roster-update"><span>Updated {dateTime(cold.data.fetchedAt)}</span><button className="refresh" onClick={() => refresh.mutate()} disabled={refresh.isPending}>{refresh.isPending ? "Refreshing…" : "Refresh board"}</button></div>}</div><div className="metric-tabs hot-tabs">{["Coldest", "Scoring drought", "Point drought", "Teams"].map((name) => <button key={name} className={category === name ? "active" : ""} onClick={() => setCategory(name)}>{name}</button>)}</div>{cold.isPending ? <div className="loading"><span />Reading recent NBA game data…</div> : cold.isError ? <div className="error-state"><h2>Cutting board unavailable.</h2><p>The ESPN feed did not answer.</p><button onClick={() => cold.refetch()}>Retry</button></div> : showTeams ? (teams.length === 0 ? <div className="history-empty"><strong>No team on a 3+ game slide right now.</strong><span>Every team has won at least one of its last three.</span></div> : <div className="hot-list">{teams.map((row, index) => <div className="hot-row-wrap" key={row.team}><div className="hot-row"><span className="hot-rank">#{index + 1}</span><span className="hot-player"><strong>{row.name}</strong><small>{row.team} · {row.gamesPlayed} GP</small></span><span className="streak-badges cold"><b>{row.streak} skid</b></span></div><TeamWatchStar sport="nba" team={nbaClientTeam(row.team)} name={row.name} /></div>)}</div>) : players.length === 0 ? <div className="history-empty"><strong>No qualifying slumps in the official window.</strong><span>Only real players with at least two recent appearances and a qualifying cold signal are shown.</span></div> : <div className="hot-list">{players.map((row, index) => <div className="hot-row-wrap" key={row.playerId}><button className="hot-row" onClick={() => setSelected({ player: toPlayer(row), team: nbaClientTeam(row.team) as NbaTeamCode })} aria-label={`Open ${row.name} full stat file`}><span className="hot-rank">#{index + 1}</span><span className="hot-player"><strong>{row.name}</strong><small>{row.team} · NBA</small></span><span className="streak-badges cold">{row.scoringDrought >= 2 && <b>{row.scoringDrought}G scoring drought</b>}</span><span className="hot-totals"><b>{row.lastFivePoints} PTS</b><small>last {row.games.length}</small></span><span className="spark-games">{row.games.map((game) => <i key={game.gameId} title={`${nbaGameDate(game.date)} vs ${game.opponent}`}>{game.points} PTS · {game.rebounds} REB · {game.assists} AST</i>)}</span></button><PlayerWatchStar sport="nba" playerId={row.playerId} team={nbaClientTeam(row.team)} name={row.name} position={row.position} /></div>)}</div>}{cold.data && <div className="source-box"><span>Source</span><a href={cold.data.sourceUrl} target="_blank" rel="noreferrer">ESPN NBA game data ↗</a><small>{nbaGameDate(cold.data.windowStart)}–{nbaGameDate(cold.data.windowEnd)} · refreshed daily without sportsbook quota</small></div>}{selected && <NbaPlayerSheet player={selected.player} team={selected.team} onClose={() => setSelected(null)} />}</section>;
+}
+
+// ---------------------------------------------------------------------------
+// Soccer views. Mirror the NBA sections: league picker (MLS | Premier
+// League), schedule strip, league table, matchup calculator (three-way),
+// rosters + player files, hot streaks — all on ESPN keyless feeds.
+// The server leg is landing in parallel: every view below fails gracefully
+// (nothing invented, sections hidden) until the getSoccer* actions resolve.
+// ---------------------------------------------------------------------------
+
+function soccerGameDate(value: string) { return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(`${value}T12:00:00`)); }
+
+const SOCCER_DEPTH_GROUPS: { title: string; positions: string[] }[] = [
+  { title: "Goalkeepers", positions: ["GK"] },
+  { title: "Defenders", positions: ["DF", "D"] },
+  { title: "Midfielders", positions: ["MF", "M"] },
+  { title: "Forwards", positions: ["FW", "F", "ST"] },
+];
+
+function SoccerLeagueTabs({ league, onLeagueChange }: { league: SoccerLeague; onLeagueChange?: (next: SoccerLeague) => void }) {
+  if (!onLeagueChange) return null;
+  return <div className="metric-tabs" role="tablist" aria-label="Soccer league">{SOCCER_LEAGUES.map((l) => <button key={l.code} type="button" role="tab" aria-selected={league === l.code} className={league === l.code ? "active" : ""} onClick={() => onLeagueChange(l.code)}>{l.name}</button>)}</div>;
+}
+
+function soccerStateLabel(game: SoccerGame): string {
+  if (game.state === "post" || game.state === "final") return "Final";
+  if (game.state === "in" || game.state === "live") return game.detail || "Live";
+  return dateTime(game.startsAt);
+}
+
+function SoccerScheduleStrip({ compact = false, league }: { compact?: boolean; league: SoccerLeague }) {
+  const overview = useQuery({ queryKey: ["soccer-overview", league], queryFn: () => api.getSoccerOverview({ league }), staleTime: 15 * 60 * 1000, retry: 1 });
+  const injuries = useSoccerKeyInjuries(league);
+  if (overview.isPending) return <div className="slate-loading">Loading the official soccer slate…</div>;
+  if (overview.isError || !overview.data) return <div className="inline-error slate-error"><strong>Soccer schedule unavailable.</strong><span>The league feed hasn't served this side yet.</span><button onClick={() => overview.refetch()}>Retry</button></div>;
+  const data = overview.data;
+  const live = data.games.filter((g) => g.state === "in" || g.state === "live");
+  const games = compact ? [...live, ...data.games.filter((g) => g.state !== "in" && g.state !== "live")].slice(0, 6) : data.games;
+  const leagueName = league === "epl" ? "Premier League" : "MLS";
+  return <section className="slate-section">
+    <div className="section-heading"><div><p className="kicker">OFFICIAL {leagueName.toUpperCase()} SCHEDULE</p><h3>{compact ? "Tonight on the pitch" : "Scores & schedule"}</h3></div><span>Updated {dateTime(data.fetchedAt)}</span></div>
+    {games.length ? <div className="slate-grid">{games.map((game) => <article className="game-tile" key={game.id}>
+      <div className="game-time"><span>{soccerGameDate(game.date)}</span><b>{soccerStateLabel(game)}</b></div>
+      <div className="score-team"><strong>{game.away.name}</strong><TeamWatchStar sport="soccer" team={game.away.abbrev} name={game.away.name} /><b>{game.away.score ?? "—"}</b></div>
+      <div className="score-team"><strong>{game.home.name}</strong><TeamWatchStar sport="soccer" team={game.home.abbrev} name={game.home.name} /><b>{game.home.score ?? "—"}</b></div><InjuryChips sport="soccer" awayCode={game.away.abbrev} homeCode={game.home.abbrev} injuries={injuries.data ?? null} />
+    </article>)}</div> : <div className="history-empty"><strong>No games on today's official slate.</strong><span>Future games will appear when the {leagueName} schedule posts them.</span></div>}
+    <div className="source-box"><span>Source</span><a href={data.scheduleSourceUrl} target="_blank" rel="noreferrer">ESPN {leagueName} scoreboard ↗</a><small>{String(data.season)} season · keyless feed</small></div>
+  </section>;
+}
+
+function SoccerLeagueView({ league, onLeagueChange }: { league: SoccerLeague; onLeagueChange?: (next: SoccerLeague) => void }) {
+  const overview = useQuery({ queryKey: ["soccer-overview", league], queryFn: () => api.getSoccerOverview({ league }), staleTime: 15 * 60 * 1000, retry: 1 });
+  if (overview.isPending) return <div className="loading"><span />Loading soccer schedule and standings…</div>;
+  if (overview.isError || !overview.data) return <div className="error-state"><h2>League center is between matches.</h2><p>The league feed hasn't served this side yet.</p><button onClick={() => overview.refetch()}>Retry</button></div>;
+  const data = overview.data;
+  const leagueName = league === "epl" ? "Premier League" : "MLS";
+  return <><SoccerScheduleStrip league={league} /><section className="standings-section">
+    <div className="section-heading"><div><p className="kicker">LEAGUE TABLE</p><h3>{leagueName} standings</h3></div><span>{data.standings.length} clubs</span></div>
+    <SoccerLeagueTabs league={league} onLeagueChange={onLeagueChange} />
+    <div className="standings-scroll"><div className="standings-table" role="table">
+      <div className="standings-row header" role="row"><span>Team</span><span>W</span><span>D</span><span>L</span><span>PTS</span><span>GD</span></div>
+      {data.standings.map((row, index) => <div className="standings-row" role="row" key={row.team}><span><b>{index + 1}</b><strong>{row.name}</strong><span className="standings-star"><TeamWatchStar sport="soccer" team={row.team} name={row.name} /></span></span><span><b>{row.wins}</b></span><span>{row.draws}</span><span>{row.losses}</span><span><b>{row.points}</b></span><span className={row.goalsFor - row.goalsAgainst > 0 ? "positive" : ""}>{row.goalsFor - row.goalsAgainst > 0 ? "+" : ""}{row.goalsFor - row.goalsAgainst}</span></div>)}
+    </div></div>
+    <div className="source-box"><span>Source</span><a href={data.standingsSourceUrl} target="_blank" rel="noreferrer">ESPN {leagueName} standings ↗</a><small>Goal difference is computed from the listed official totals.</small></div>
+  </section></>;
+}
+
+// Three-way Flip % for soccer: home / draw / away from the standings.
+// Strength is points-per-game regressed toward the league average (1.37)
+// until 8 games, with a simple home edge; the draw share comes from the two
+// clubs' observed draw rate. Labeled a model estimate everywhere it renders.
+function soccerFlipProbs(homeRow: SoccerStandingRow | null, awayRow: SoccerStandingRow | null): { home: number; draw: number; away: number } | null {
+  if (!homeRow || !awayRow || homeRow.team === awayRow.team) return null;
+  const gp = (r: SoccerStandingRow) => Math.max(1, r.wins + r.draws + r.losses);
+  const strength = (r: SoccerStandingRow) => { const g = gp(r); return ((r.points / g) * Math.min(g, 8) + 1.37 * Math.max(0, 8 - g)) / 8; };
+  const totalGames = gp(homeRow) + gp(awayRow);
+  const drawRate = totalGames > 4 ? Math.min(0.35, Math.max(0.15, (homeRow.draws + awayRow.draws) / totalGames)) : 0.25;
+  const hs = strength(homeRow) * 1.15;
+  const as = strength(awayRow);
+  const split = hs + as;
+  if (split <= 0) return null;
+  return { home: (hs / split) * (1 - drawRate), draw: drawRate, away: (as / split) * (1 - drawRate) };
+}
+
+function SoccerFlipBars({ homeAbbrev, awayAbbrev, probs }: { homeAbbrev: string; awayAbbrev: string; probs: { home: number; draw: number; away: number } }) {
+  const pct = (v: number) => `${Math.round(v * 100)}%`;
+  return <>
+    <div className="winner-track three-way" role="img" aria-label={`Model result probability: ${homeAbbrev} ${pct(probs.home)}, draw ${pct(probs.draw)}, ${awayAbbrev} ${pct(probs.away)}. Model estimate, not a sportsbook line.`}>
+      <i style={{ width: `${probs.home * 100}%` }} /><u style={{ width: `${probs.draw * 100}%` }} /><b style={{ width: `${probs.away * 100}%` }} />
+    </div>
+    <div className="flip-labels three"><span>{homeAbbrev} <b>{pct(probs.home)}</b></span><span>Draw <b>{pct(probs.draw)}</b></span><span><b>{pct(probs.away)}</b> {awayAbbrev}</span></div>
+  </>;
+}
+
+function soccerMarketTeamCodes(market: MarketGroup, standings: SoccerStandingRow[] | null): [string, string] | null {
+  if (!standings || standings.length === 0) return null;
+  const matchupParts = market.matchup.split(/@|vs\.?/i).map((part) => part.trim()).filter(Boolean);
+  const candidates = matchupParts.length >= 2 ? matchupParts : [market.entity];
+  const matchCode = (label: string): string | null => {
+    const needle = label.toLowerCase();
+    const row = standings.find((item) => {
+      const name = (item.name ?? "").toLowerCase();
+      const abbrev = (item.team ?? "").toLowerCase();
+      return name !== "" && (needle === name || needle === abbrev || needle.includes(name) || name.includes(needle));
+    });
+    return row?.team ?? null;
+  };
+  const homeLabel = candidates[candidates.length - 1];
+  const awayLabel = candidates[0];
+  const away = awayLabel ? matchCode(awayLabel) : null;
+  const home = homeLabel ? matchCode(homeLabel) : null;
+  return away && home ? [away, home] : null;
+}
+
+function SoccerSlateFlipCard({ league, awayAbbrev, homeAbbrev, active, onPick }: {
+  league: SoccerLeague; awayAbbrev: string; homeAbbrev: string; active: boolean; onPick: () => void;
+}) {
+  const overview = useQuery({ queryKey: ["soccer-overview", league], queryFn: () => api.getSoccerOverview({ league }), staleTime: 15 * 60 * 1000, retry: 1 });
+  const standings = overview.data?.standings ?? null;
+  const fixture = overview.data?.games.find((g) => g.away.abbrev === awayAbbrev && g.home.abbrev === homeAbbrev);
+  // Prefer the server's Poisson fixture model when available; fall back to the
+  // transparent record-based estimate.
+  const serverProbs = fixture?.modelThreeWay ?? null;
+  const probs = serverProbs ?? soccerFlipProbs(standings?.find((row) => row.team === homeAbbrev) ?? null, standings?.find((row) => row.team === awayAbbrev) ?? null);
+  return <button className={active ? "slate-flip active" : "slate-flip"} onClick={onPick} aria-label={`Load ${awayAbbrev} at ${homeAbbrev} into the calculator`}>
+    <strong>{awayAbbrev} @ {homeAbbrev}</strong>
+    {probs ? <SoccerFlipBars homeAbbrev={homeAbbrev} awayAbbrev={awayAbbrev} probs={probs} /> : <span className="slate-flip-empty">Not enough games yet</span>}
+  </button>;
+}
+
+function SoccerFlipMeter({ league, market }: { league: SoccerLeague; market: MarketGroup }) {
+  const overview = useQuery({ queryKey: ["soccer-overview", league], queryFn: () => api.getSoccerOverview({ league }), staleTime: 15 * 60 * 1000, retry: 1 });
+  const standings = overview.data?.standings ?? null;
+  if (!standings || standings.length === 0) return null;
+  const codes = soccerMarketTeamCodes(market, standings);
+  if (!codes) return null;
+  const homeRow = standings.find((row) => row.team === codes[1]) ?? null;
+  const awayRow = standings.find((row) => row.team === codes[0]) ?? null;
+  const probs = soccerFlipProbs(homeRow, awayRow);
+  if (!probs || !homeRow || !awayRow) return null;
+  return <div className="flip-meter">
+    <div className="flip-head"><span>Flip %</span><em>model estimate</em></div>
+    <SoccerFlipBars homeAbbrev={homeRow.team} awayAbbrev={awayRow.team} probs={probs} />
+  </div>;
+}
+
+function isThreeWayGroup(group: MarketGroup): boolean {
+  const text = `${group.marketName} ${group.stat} ${group.betType}`.toLowerCase();
+  if (/moneyline|h2h|full.?time|match.?result|3.?way|1x2/.test(text)) return true;
+  const sides = group.sides.map((s) => s.side.toLowerCase());
+  return sides.length === 3 && sides.some((s) => s.includes("draw"));
+}
+
+// Split a three-way group's sides into home / draw / away outcomes,
+// matching side labels against club names when the feed uses them.
+function threeWaySides(group: MarketGroup, standings: SoccerStandingRow[] | null): { home: MarketSide | null; draw: MarketSide | null; away: MarketSide | null; homeCode: string | null; awayCode: string | null } {
+  const codes = soccerMarketTeamCodes(group, standings);
+  const homeName = codes ? standings?.find((r) => r.team === codes[1])?.name.toLowerCase() ?? "" : "";
+  const awayName = codes ? standings?.find((r) => r.team === codes[0])?.name.toLowerCase() ?? "" : "";
+  let home: MarketSide | null = null, draw: MarketSide | null = null, away: MarketSide | null = null;
+  for (const side of group.sides) {
+    const label = side.side.toLowerCase();
+    if (label.includes("draw") || label === "x") { draw = side; continue; }
+    if (homeName && (label === homeName || label.includes(homeName) || homeName.includes(label))) { home = side; continue; }
+    if (awayName && (label === awayName || label.includes(awayName) || awayName.includes(label))) { away = side; continue; }
+    if (["home", "1"].includes(label)) { home = side; continue; }
+    if (["away", "2"].includes(label)) { away = side; continue; }
+  }
+  if (!home || !away) {
+    const ordered = [...group.sides];
+    home = home ?? ordered[0] ?? null;
+    draw = draw ?? ordered[1] ?? null;
+    away = away ?? ordered[ordered.length - 1] ?? null;
+  }
+  return { home, draw, away, homeCode: codes?.[1] ?? null, awayCode: codes?.[0] ?? null };
+}
+
+function topSoccerScorers(scorers: { teams: Record<string, { name: string; team: string; games: number; stat: number; rate: number }[]> }, awayCode: string, homeCode: string) {
+  return [...(scorers.teams[awayCode] ?? []), ...(scorers.teams[homeCode] ?? [])]
+    .sort((a, b) => b.rate - a.rate || b.stat - a.stat || a.name.localeCompare(b.name))
+    .slice(0, 2);
+}
+
+function SoccerScorersStrip({ awayCode, homeCode, scorers }: { awayCode: string | null; homeCode: string | null; scorers: { teams: Record<string, { name: string; team: string; games: number; stat: number; rate: number }[]> } | null }) {
+  if (!awayCode || !homeCode || !scorers) return null;
+  const top = topSoccerScorers(scorers, awayCode, homeCode);
+  if (top.length === 0) return null;
+  return <div className="scorer-strip">
+    <div className="scorer-head"><span>🎯 Likely scorers</span><em>season leaders</em></div>
+    <div className="scorer-names">{top.map((player) => <span key={`${player.team}-${player.name}`}><b>{player.name}</b><i>{player.team} · {player.stat}G</i></span>)}</div>
+    <small className="scorer-note">Most goals per game this season — a stat, not a sportsbook line.</small>
+  </div>;
+}
+
+function SoccerBoardView({ league, onLeagueChange, parlay, setParlay, home = false }: {
+  league: SoccerLeague; onLeagueChange?: (next: SoccerLeague) => void;
+  parlay: ParlayPick[]; setParlay: (next: ParlayPick[]) => void; home?: boolean;
+}) {
+  const board = useQuery({ queryKey: ["soccer-board", league], queryFn: () => api.getSoccerBoard({ league }), retry: false });
+  const overview = useQuery({ queryKey: ["soccer-overview", league], queryFn: () => api.getSoccerOverview({ league }), staleTime: 15 * 60 * 1000, retry: 1 });
+  const scorers = useQuery({ queryKey: ["soccer-likely-scorers", league], queryFn: () => api.getSoccerLikelyScorers({ league }), staleTime: 12 * 60 * 60 * 1000, retry: 1 });
+  const injuries = useSoccerKeyInjuries(league);
+  const [search, setSearch] = useState("");
+  const [category, setCategory] = useState("All");
+  const [selectedMarket, setSelectedMarket] = useState<MarketGroup | null>(null);
+  const [stake, setStake] = useState("10");
+  const [priceMode, setPriceMode] = useState<PriceMode>("draftkings");
+  const groups = useMemo(() => groupPremiumOffers(board.data?.offers ?? []), [board.data]);
+  const leagueName = league === "epl" ? "Premier League" : "MLS";
+  const threeWay = useMemo(() => groups.filter(isThreeWayGroup), [groups]);
+  const categories = useMemo(() => ["All", ...Array.from(new Set(groups.map((g) => offerCategory(g, "soccer")))).sort()], [groups]);
+  const visible = groups.filter((group) => (category === "All" || offerCategory(group, "soccer") === category) && `${group.matchup} ${group.marketName} ${group.stat} ${group.entity} ${group.sides.map((side) => side.side).join(" ")}`.toLowerCase().includes(search.toLowerCase()));
+  const combined = combinedAmerican(parlay, priceMode);
+  const decimal = decimalOdds(combined);
+  const stakeValue = Number(stake);
+  const payout = decimal !== null && Number.isFinite(stakeValue) ? stakeValue * decimal : 0;
+  const toggleParlay = (group: MarketGroup, side: MarketSide) => {
+    const pick: ParlayPick = { id: side.id, groupId: group.id, matchup: group.matchup, entity: group.entity, marketName: group.marketName, side };
+    setParlay(parlay.some((item) => item.id === pick.id) ? parlay.filter((item) => item.id !== pick.id) : [...parlay, pick]);
+  };
+  const outcomeRow = (group: MarketGroup, outcome: MarketSide | null, label: string) => {
+    if (!outcome) return null;
+    const added = parlay.some((item) => item.id === outcome.id);
+    return <div className="soccer-outcome" key={outcome.id}>
+      <strong>{label}</strong>
+      <div className="quote-books"><span>Best <b>{bookName(outcome.best.book)} {formatAmerican(outcome.best.odds)}</b></span><span>DK <b>{formatAmerican(outcome.draftKings?.odds ?? null)}</b></span><span>FD <b>{formatAmerican(outcome.fanDuel?.odds ?? null)}</b></span><span>MGM <b>{formatAmerican(outcome.betMGM?.odds ?? null)}</b></span></div>
+      <button className={added ? "pick-button added" : "pick-button"} onClick={() => toggleParlay(group, outcome)}>{added ? "Remove" : "Add"}</button>
+    </div>;
+  };
+  return <>
+    {home && <><InstallCard/><SoccerScheduleStrip compact league={league} /></>}
+    <div className="section-heading soccer-board-head"><div><p className="kicker">SOCCER BOARD</p><h2>{leagueName}</h2></div><SoccerLeagueTabs league={league} onLeagueChange={onLeagueChange} /></div>
+    <ProviderStatus pending={board.isPending || board.isFetching} error={board.error instanceof Error ? board.error.message : null} onRetry={() => board.refetch()} />
+    {board.data ? <section className="pro-board">
+      <div className="roster-title"><div><p className="kicker">{home ? "TODAY'S COMPLETE BOARD" : "LIVE SPORTSBOOK BOARD"}</p><h2>{groups.length.toLocaleString()} markets · {board.data.offerCount.toLocaleString()} book prices</h2><p className="roster-intro">Three-way results — home, draw, away — paired across books.</p></div><span>{board.data.eventCount} events · {dateTime(board.data.fetchedAt)}</span></div>
+      <div className={board.data.cacheStatus === "fresh" ? "refresh-health fresh" : "refresh-health stale"} role="status"><span className="health-dot"/><div><strong>{board.data.cacheStatus === "fresh" ? "Odds feed healthy" : "Showing last successful update"}</strong><small>{board.data.healthMessage} · Updated {dateTime(board.data.fetchedAt)}</small></div></div>
+      {threeWay.length > 0 && <section className="moneyline-rail" aria-labelledby="soccer-ml-title"><div className="section-heading"><div><p className="kicker">FIRST LOOK</p><h3 id="soccer-ml-title">Match result picks</h3></div><span>Best · DraftKings · FanDuel · BetMGM</span></div><div className="moneyline-grid">{threeWay.map((group) => {
+        const split = threeWaySides(group, overview.data?.standings ?? null);
+        const homeLabel = split.homeCode ?? group.sides[0]?.side ?? "Home";
+        const awayLabel = split.awayCode ?? group.sides[group.sides.length - 1]?.side ?? "Away";
+        return <article className="moneyline-card" key={group.id}><div className="moneyline-open"><small>{group.matchup}</small><h4>{group.entity}</h4>
+          {outcomeRow(group, split.home, `${homeLabel} win`)}
+          {outcomeRow(group, split.draw, "Draw")}
+          {outcomeRow(group, split.away, `${awayLabel} win`)}
+        </div><SoccerFlipMeter league={league} market={group} />
+        <InjuryChips sport="soccer" awayCode={split.awayCode ?? ""} homeCode={split.homeCode ?? ""} injuries={injuries.data ?? null} />
+        <SoccerScorersStrip awayCode={split.awayCode} homeCode={split.homeCode} scorers={scorers.data ?? null} /></article>;
+      })}</div></section>}
+      {parlay.length>0&&<aside className="parlay-panel" aria-label="Parlay builder"><div><p className="kicker">PARLAY BUILDER</p><h3>{parlay.length} legs · {combined}</h3></div><label>Price at<select value={priceMode} onChange={(event)=>setPriceMode(event.target.value as PriceMode)} aria-label="Parlay sportsbook"><option value="draftkings">DraftKings</option><option value="fanduel">FanDuel</option><option value="betmgm">BetMGM</option><option value="best">Best price</option></select></label><label>Stake<input inputMode="decimal" value={stake} onChange={(event)=>setStake(event.target.value)} aria-label="Parlay stake"/></label><div><small>Estimated return</small><strong>${payout.toFixed(2)}</strong></div><button onClick={()=>setParlay([])}>Clear</button><ul>{parlay.map((item)=>{const priced=offerForMode(item.side,priceMode);return <li key={item.id}><span>{item.entity} · {titleCase(item.side.side)} {item.side.line??""}</span><b>{priced ? `${bookName(priced.book)} ${formatAmerican(priced.odds)}` : "Not offered"}</b></li>;})}</ul><p>Planning tool only. Every leg must be offered by the selected sportsbook; unavailable legs are never substituted.</p></aside>}
+      <div className="pro-controls"><input className="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search player, team or market" aria-label="Search live odds"/><select value={category} onChange={(event) => setCategory(event.target.value)} aria-label="Filter market type">{categories.map((name) => <option key={name}>{name}</option>)}</select><button onClick={() => board.refetch()} disabled={board.isFetching}>{board.isFetching ? "Refreshing…" : "Refresh lines"}</button></div>
+      <div className="market-table complete-market-table">{visible.map((market) => { const matchupLine = market.matchup.includes(market.entity) ? `${market.matchup} · ${titleCase(market.period)}` : `${market.entity} · ${market.matchup} · ${titleCase(market.period)}`; return <article className="complete-market" key={market.id}><button className="market-open" onClick={()=>setSelectedMarket(market)} aria-label={`Open ${market.marketName} for ${market.entity}`}><b>{market.marketName}</b><small>{matchupLine}</small></button><div className="side-quotes">{market.sides.map((side) => { const added = parlay.some((item) => item.id === side.id); const openingProbability=impliedProbability(side.best.openingOdds); const currentProbability=impliedProbability(side.best.odds); const move=openingProbability!==null&&currentProbability!==null?(currentProbability-openingProbability)*100:null; return <div className="side-quote" key={side.id}><div className="quote-main"><strong>{titleCase(side.side)} {side.line ?? ""}</strong><div className="quote-books"><span>Best <b>{bookName(side.best.book)} {formatAmerican(side.best.odds)}</b></span><span>DK <b>{formatAmerican(side.draftKings?.odds ?? null)}</b></span><span>FD <b>{formatAmerican(side.fanDuel?.odds ?? null)}</b></span><span>MGM <b>{formatAmerican(side.betMGM?.odds ?? null)}</b></span></div><div className="quote-chips">{side.evPercent !== null && side.evPercent > 0 && <em>+{side.evPercent.toFixed(1)}% EV</em>}{move!==null&&Math.abs(move)>=2&&<em className="steam-chip">Move {move>0?"+":""}{move.toFixed(1)} pts</em>}</div></div><button className={added ? "pick-button added" : "pick-button"} onClick={() => toggleParlay(market, side)}>{added ? "Remove" : "Add"}</button></div>;})}</div></article>;})}</div>
+      {visible.length===0&&<div className="history-empty"><strong>No matching markets.</strong><span>Clear the filters or refresh the provider board.</span></div>}
+    </section> : !board.isPending && <div className="history-empty"><strong>Soccer odds aren't posted yet.</strong><span>The sportsbook feed hasn't served this league. Official scores, standings and models still work below the provider board.</span></div>}
+    {selectedMarket&&<OddsDetailSheet market={selectedMarket} onClose={()=>setSelectedMarket(null)}/>}</>;
+}
+
+function SoccerModelVsBooks({ league, homeCode, awayCode, homeModel, drawModel, awayModel, groups }: {
+  league: SoccerLeague; homeCode: string; awayCode: string;
+  homeModel: number | null; drawModel: number | null; awayModel: number | null;
+  groups: MarketGroup[];
+}) {
+  const homeName = soccerTeamsFor(league).find((t) => t.code === homeCode)?.name ?? homeCode;
+  const awayName = soccerTeamsFor(league).find((t) => t.code === awayCode)?.name ?? awayCode;
+  const threeWay = groups.filter(isThreeWayGroup);
+  const groupFor = (name: string) => threeWay.find((g) =>
+    g.entity.toLowerCase() === name.toLowerCase() ||
+    g.matchup.toLowerCase().includes(name.toLowerCase()) ||
+    g.sides.some((side) => side.side.toLowerCase() === name.toLowerCase()));
+  const outcomeOdds = (name: string, kind: "home" | "draw" | "away"): string | null => {
+    const group = groupFor(name);
+    if (!group) return null;
+    const split = threeWaySides(group, null);
+    const side = kind === "home" ? split.home : kind === "draw" ? split.draw : split.away;
+    return side?.best.odds ?? null;
+  };
+  const homeImplied = impliedProbability(outcomeOdds(homeName, "home") ?? outcomeOdds(homeCode, "home"));
+  const drawImplied = impliedProbability(outcomeOdds("draw", "draw"));
+  const awayImplied = impliedProbability(outcomeOdds(awayName, "away") ?? outcomeOdds(awayCode, "away"));
+  if (homeModel === null || drawModel === null || awayModel === null || homeImplied === null || drawImplied === null || awayImplied === null) return null;
+  const total = homeImplied + drawImplied + awayImplied;
+  if (total <= 0) return null;
+  const book = { home: homeImplied / total, draw: drawImplied / total, away: awayImplied / total };
+  const modelTop = homeModel >= drawModel && homeModel >= awayModel ? "home" : drawModel >= awayModel ? "draw" : "away";
+  const bookTop = book.home >= book.draw && book.home >= book.away ? "home" : book.draw >= book.away ? "draw" : "away";
+  const isFlip = modelTop !== bookTop;
+  const label = (k: string) => k === "home" ? homeCode : k === "draw" ? "Draw" : awayCode;
+  const pct = (v: number) => `${Math.round(v * 100)}%`;
+  return <section className="model-vs-books" aria-label="Model versus sportsbook comparison">
+    <div className="section-heading"><div><p className="kicker">MODEL VS BOOKS</p><h3>Does it flip?</h3></div>
+    <span>{isFlip ? "⚡ Flip alert" : "✓ Aligned"}</span></div>
+    <div className="mvb-rows">
+      <div className="mvb-row"><span>Model</span><div className="winner-track three-way"><i style={{ width: `${homeModel * 100}%` }} /><u style={{ width: `${drawModel * 100}%` }} /><b style={{ width: `${awayModel * 100}%` }} /></div><span>{homeCode} <b>{pct(homeModel)}</b> · D <b>{pct(drawModel)}</b> · {awayCode} <b>{pct(awayModel)}</b></span></div>
+      <div className="mvb-row"><span>Books</span><div className="winner-track books three-way"><i style={{ width: `${book.home * 100}%` }} /><u style={{ width: `${book.draw * 100}%` }} /><b style={{ width: `${book.away * 100}%` }} /></div><span>{homeCode} <b>{pct(book.home)}</b> · D <b>{pct(book.draw)}</b> · {awayCode} <b>{pct(book.away)}</b></span></div>
+    </div>
+    <p className="mvb-note">
+      {isFlip
+        ? `The model flips the books: it leans ${label(modelTop)} while the books lean ${label(bookTop)}.`
+        : `Both lean ${label(modelTop)}.`}
+      {" "}Book percentages are vig-stripped from the best available three-way prices; the model is a statistical estimate, not a pick.
+    </p>
+  </section>;
+}
+
+function SoccerMatchupCalculator({ league, onLeagueChange }: { league: SoccerLeague; onLeagueChange?: (next: SoccerLeague) => void }) {
+  const leagueTeams = soccerTeamsFor(league);
+  const defaults: Record<SoccerLeague, [string, string]> = { mls: ["LAFC", "MIA"], epl: ["ARS", "LIV"] };
+  const [awayTeam, setAwayTeam] = useState(defaults[league][0]);
+  const [homeTeam, setHomeTeam] = useState(defaults[league][1]);
+  const [matchup, setMatchup] = useState<{ away: string; home: string }>({ away: defaults[league][0], home: defaults[league][1] });
+  useEffect(() => {
+    const d = defaults[league];
+    setAwayTeam(d[0]); setHomeTeam(d[1]); setMatchup({ away: d[0], home: d[1] });
+  }, [league]);
+  const overview = useQuery({ queryKey: ["soccer-overview", league], queryFn: () => api.getSoccerOverview({ league }), staleTime: 15 * 60 * 1000, retry: 1 });
+  const board = useQuery({ queryKey: ["soccer-board", league], queryFn: () => api.getSoccerBoard({ league }), retry: false });
+  const boardGroups = useMemo(() => groupPremiumOffers(board.data?.offers ?? []), [board.data]);
+  const result = useQuery({ queryKey: ["soccer-matchup", league, matchup.away, matchup.home], queryFn: () => api.getSoccerMatchup({ league, awayTeam: matchup.away, homeTeam: matchup.home, force: false }), retry: 1 });
+  const scorers = useQuery({ queryKey: ["soccer-likely-scorers", league], queryFn: () => api.getSoccerLikelyScorers({ league }), staleTime: 12 * 60 * 60 * 1000, retry: 1 });
+  const injuries = useSoccerKeyInjuries(league);
+  const refresh = useMutation({ mutationFn: () => api.getSoccerMatchup({ league, awayTeam: matchup.away, homeTeam: matchup.home, force: true }), onSuccess: () => result.refetch() });
+  const data: SoccerMatchup | undefined = result.data;
+  const leagueName = league === "epl" ? "Premier League" : "MLS";
+  const chooseGame = (away: string, home: string) => {
+    if (!leagueTeams.some((t) => t.code === away) || !leagueTeams.some((t) => t.code === home)) return;
+    setAwayTeam(away); setHomeTeam(home); setMatchup({ away, home });
+  };
+  const submit = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); if (awayTeam !== homeTeam) setMatchup({ away: awayTeam, home: homeTeam }); };
+  const modelChart = data ? [
+    { metric: "Over 2.5 goals", probability: Number(((data.over25Probability ?? 0) * 100).toFixed(1)) },
+    { metric: "Both teams score", probability: Number(((data.bttsProbability ?? 0) * 100).toFixed(1)) },
+    { metric: "3+ goal margin", probability: Number(((data.margin3PlusProbability ?? 0) * 100).toFixed(1)) },
+    { metric: "Draw", probability: Number(((data.drawProbability ?? 0) * 100).toFixed(1)) },
+  ] : [];
+  const slateGames = overview.data?.games.filter((g) => g.state !== "post" && g.state !== "final") ?? [];
+  const edgeLabel = !data?.edgeTeam ? "Insufficient sample" : data.edgeTeam.toLowerCase() === "draw" ? `Draw ${percentage(data.edgeProbability)}` : `${data.edgeTeam} to win ${percentage(data.edgeProbability)}`;
+  return <section className="matchup-lab">
+    <div className="matchup-heading"><div><p className="kicker">MATCHUP CALCULATOR · {leagueName.toUpperCase()}</p><h1>Who takes it?</h1><p>Three-way result probabilities — home, draw, away — plus goals markets, from official recent results.</p></div>{data && <button className="refresh" onClick={() => refresh.mutate()} disabled={refresh.isPending}>{refresh.isPending ? "Recalculating…" : "Refresh data"}</button>}</div>
+    <SoccerLeagueTabs league={league} onLeagueChange={onLeagueChange} />
+    {slateGames.length > 0 && <div className="slate-flips" aria-label={`Today's ${leagueName} matchups with model flip percentages`}>{slateGames.slice(0, 12).map((game) => <SoccerSlateFlipCard key={game.id} league={league} awayAbbrev={game.away.abbrev} homeAbbrev={game.home.abbrev} active={matchup.away === game.away.abbrev && matchup.home === game.home.abbrev} onPick={() => chooseGame(game.away.abbrev, game.home.abbrev)} />)}</div>}
+    <form className="matchup-form" onSubmit={submit}>
+      <label>Away team<select value={awayTeam} onChange={(event) => setAwayTeam(event.target.value)}>{leagueTeams.map((team) => <option key={team.code} value={team.code}>{team.name}</option>)}</select></label>
+      <span aria-hidden="true">@</span>
+      <label>Home team<select value={homeTeam} onChange={(event) => setHomeTeam(event.target.value)}>{leagueTeams.map((team) => <option key={team.code} value={team.code}>{team.name}</option>)}</select></label>
+      <button className="primary" type="submit" disabled={awayTeam === homeTeam || result.isFetching}>{result.isFetching ? "Calculating…" : "Calculate matchup"}</button>
+    </form>
+    {awayTeam === homeTeam && <p className="calculator-note error" role="alert">Choose two different clubs.</p>}
+    {result.isPending ? <div className="loading calculator-loading"><span />Reading recent match data…</div> : result.isError ? <div className="error-state calculator-error"><h2>Matchup data is unavailable.</h2><p>The league feed hasn't served this side yet.</p><button onClick={() => result.refetch()}>Retry</button></div> : data ? <>
+      <section className="winner-card">
+        <div className="section-heading"><div><p className="kicker">MATCH RESULT</p><h2>{edgeLabel}</h2></div><span>Model estimate</span></div>
+        <SoccerFlipBars homeAbbrev={data.home.team} awayAbbrev={data.away.team} probs={{ home: data.homeWinProbability ?? 0, draw: data.drawProbability ?? 0, away: data.awayWinProbability ?? 0 }} />
+        <div className="team-sample-grid"><div><strong>{data.away.team}</strong><span>{data.away.wins}W–{data.away.draws}D–{data.away.losses}L recent</span><small>{data.away.goalsFor} scored · {data.away.goalsAgainst} allowed{data.awayExpectedGoals !== null ? ` · xG ${data.awayExpectedGoals.toFixed(2)}` : ""}</small></div><div><strong>{data.home.team}</strong><span>{data.home.wins}W–{data.home.draws}D–{data.home.losses}L recent</span><small>{data.home.goalsFor} scored · {data.home.goalsAgainst} allowed{data.homeExpectedGoals !== null ? ` · xG ${data.homeExpectedGoals.toFixed(2)}` : ""}</small></div></div>
+        <InjuryChips sport="soccer" awayCode={matchup.away} homeCode={matchup.home} injuries={injuries.data ?? null} />
+        <p className="winner-explain">The result model blends each club's recent home/away form with goals scored and allowed, weighting venue splits when the sample allows. Draws are a real outcome here — always price all three. This is a model estimate, not a sportsbook line.</p>
+      </section>
+      <SoccerModelVsBooks league={league} homeCode={data.home.team} awayCode={data.away.team} homeModel={data.homeWinProbability} drawModel={data.drawProbability} awayModel={data.awayWinProbability} groups={boardGroups} />
+      <section className="likely-scorers" aria-label="Likely scorers">
+        <div className="section-heading"><div><p className="kicker">LIKELY SCORERS</p><h3>Who finds the net</h3></div><span>🎯</span></div>
+        {(() => {
+          const top = scorers.data ? topSoccerScorers(scorers.data, data.away.team, data.home.team) : [];
+          if (top.length === 0) return <p className="mvb-note">Scorer data hasn't posted for this league yet.</p>;
+          return <><ol className="scorer-list">{top.map((player, index) => <li key={`${player.team}-${player.name}`}><span className="scorer-rank">#{index + 1}</span><span className="scorer-player"><strong>{player.name}</strong><small>{player.team}</small></span><span className="scorer-stat"><b>{player.stat} G</b><small>{player.games} GP · {player.rate.toFixed(2)}/game</small></span></li>)}</ol>
+          <p className="mvb-note">Ranked by goals per game this season from official stats. A stat, not a sportsbook line or prop.</p></>;
+        })()}
+      </section>
+      <section className="scenario-grid" aria-label="Matchup model estimates">
+        <article><span>Over 2.5 goals</span><strong>{percentage(data.over25Probability)}</strong><small>Three or more total goals</small></article>
+        <article><span>Both teams to score</span><strong>{percentage(data.bttsProbability)}</strong><small>Each side scores at least once</small></article>
+        <article><span>Draw</span><strong>{percentage(data.drawProbability)}</strong><small>Level after 90 minutes</small></article>
+      </section>
+      <section className="matchup-chart-panel"><div className="section-heading"><div><p className="kicker">GAME SCRIPT</p><h3>Matchup probabilities</h3></div><span>Model estimates</span></div><div className="scenario-chart" role="img" aria-label="Bar chart of over 2.5 goals, both teams to score, and draw probabilities"><ResponsiveContainer width="100%" height="100%"><BarChart data={modelChart} layout="vertical" margin={{ top: 4, right: 26, bottom: 4, left: 12 }}><CartesianGrid stroke="var(--rule)" horizontal={false}/><XAxis type="number" domain={[0,100]} tickFormatter={(value) => `${value}%`} axisLine={false} tickLine={false}/><YAxis type="category" dataKey="metric" width={92} axisLine={false} tickLine={false}/><Tooltip formatter={(value) => [`${value}%`, "Model estimate"]}/><Bar dataKey="probability" fill="var(--orange)" radius={[0,4,4,0]}/></BarChart></ResponsiveContainer></div></section>
+      <section className="head-to-head"><div><span>Recent head-to-head</span><strong>{data.headToHead.games ? `${data.away.team} ${data.headToHead.awayWins} · Draws ${data.headToHead.draws} · ${data.home.team} ${data.headToHead.homeWins}` : "No games in sample"}</strong></div><p>{data.sampleNote}</p></section>
+      <div className="source-box"><span>Source</span><a href={data.sourceUrl} target="_blank" rel="noreferrer">ESPN {leagueName} data ↗</a><small>Calculated {dateTime(data.fetchedAt)} · cached 12 hours</small></div>
+    </> : null}
+  </section>;
+}
+
+function SoccerPlayerSheet({ league, player, team, onClose }: { league: SoccerLeague; player: SoccerPlayer; team: string; onClose: () => void }) {
+  const log = useQuery({ queryKey: ["soccer-player-log", league, team, player.id], queryFn: () => api.getSoccerPlayerGameLog({ league, team, playerId: player.id }), retry: false });
+  const goalie = player.position === "G";
+  const metrics = goalie
+    ? [{ id: "cleanSheets", label: "CS" }, { id: "goals", label: "Goals" }, { id: "assists", label: "Assists" }]
+    : [{ id: "goals", label: "Goals" }, { id: "assists", label: "Assists" }];
+  const [metric, setMetric] = useState(goalie ? "cleanSheets" : "goals");
+  const games = log.data?.games ?? [];
+  // Clean sheets are derived from official match logs (an appearance plus
+  // zero conceded) — computed, never invented.
+  const isCleanSheet = (game: SoccerPlayerGameLog["games"][number]) => game.appearances > 0 && game.oppScore === 0 ? 1 : 0;
+  const logCleanSheets = games.reduce((s, g) => s + isCleanSheet(g), 0);
+  const metricValue = (game: SoccerPlayerGameLog["games"][number], id: string): number | null => {
+    if (id === "goals") return game.goals;
+    if (id === "assists") return game.assists;
+    if (id === "cleanSheets") return isCleanSheet(game);
+    return null;
+  };
+  const chartData = games.slice(0, 8).reverse().map((game) => ({
+    date: soccerGameDate(game.gameDate),
+    goals: game.goals, assists: game.assists,
+    cleanSheets: isCleanSheet(game),
+  }));
+  const lastFive = games.slice(0, 5);
+  const seasonAverage = average(games.map((game) => metricValue(game, metric)));
+  const lastFiveAverage = average(lastFive.map((game) => metricValue(game, metric)));
+  const modelProjection = seasonAverage === null ? null : seasonAverage * .5 + (lastFiveAverage ?? seasonAverage) * .5;
+  const metricLabel = metrics.find((item) => item.id === metric)?.label ?? "Stat";
+  const totals = (fn: (g: SoccerPlayerGameLog["games"][number]) => number | null) => lastFive.reduce((s, g) => s + (fn(g) ?? 0), 0);
+  const [sheetTab, setSheetTab] = useState<"overview" | "trend" | "last5" | "log">("overview");
+  const perGame = (total: number | null) => player.games ? ((total ?? 0) / player.games).toFixed(2) : "—";
+  const leagueName = league === "epl" ? "Premier League" : "MLS";
+
+  return <div className="sheet-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <section className="sheet player-sheet" role="dialog" aria-modal="true" aria-labelledby="soccer-player-stats-title">
+      <button className="close" onClick={onClose} aria-label="Close player stats">×</button>
+      <p className="kicker">{team} PLAYER FILE · {leagueName.toUpperCase()}</p>
+      <div className="sheet-title-row"><h2 id="soccer-player-stats-title">{player.name}</h2><PlayerWatchStar sport="soccer" playerId={player.id} team={team} name={player.name} position={player.position} /></div>
+      <p className="matchup">{player.jersey ? `#${player.jersey} · ` : ""}{player.position} · {String(leagueName)} season</p>
+      <div className="player-season-line">
+        <div><span>Apps</span><strong>{player.games ?? "—"}</strong></div>
+        <div><span>Goals</span><strong>{player.goals ?? "—"}</strong></div>
+        <div><span>Assists</span><strong>{player.assists ?? "—"}</strong></div>
+        {goalie && <div><span>Clean sheets</span><strong>{log.isPending ? "—" : logCleanSheets}</strong></div>}
+        {!goalie && <div><span>G/app*</span><strong>{perGame(player.goals)}</strong></div>}
+      </div>
+      <div className="sheet-tabs" role="tablist" aria-label="Player stat sections">
+        {(["overview", "trend", "last5", "log"] as const).map((tab) => <button key={tab} role="tab" aria-selected={sheetTab === tab} className={sheetTab === tab ? "active" : ""} onClick={() => setSheetTab(tab)}>{tab === "overview" ? "Overview" : tab === "trend" ? "Trend" : tab === "last5" ? "Last 5" : "Match log"}</button>)}
+      </div>
+      {log.isPending ? <div className="player-log-loading"><span />Loading match-by-match stats…</div> : log.isError ? <div className="inline-log-error"><strong>Match log unavailable.</strong><span>The league feed hasn't served this player yet.</span><button onClick={() => log.refetch()}>Retry</button></div> : games.length === 0 ? <div className="history-empty"><strong>No matches logged yet.</strong><span>The graph, projection and last-five record will populate after official match data posts.</span></div> : <>
+        {sheetTab === "overview" && <section className="model-panel">
+          <div><p className="kicker">DAILY HAM MODEL</p><h3>{metricLabel} projection</h3><span>Statistical projection — not a market lean</span></div>
+          <strong>{modelProjection === null ? "—" : modelProjection.toFixed(2)}</strong>
+          <div className="model-inputs"><span>Season <b>{seasonAverage?.toFixed(2) ?? "—"}</b></span><span>Last 5 <b>{lastFiveAverage?.toFixed(2) ?? "—"}</b></span></div>
+          <p>Weighted from official season and last-5 match logs. Missing context stays neutral.</p>
+        </section>}
+        {sheetTab === "trend" && <section className="trend-section">
+          <div className="section-heading"><div><p className="kicker">RECENT TREND</p><h3>Last {Math.min(8, games.length)} matches</h3></div><span>{metricLabel}</span></div>
+          <div className="metric-tabs" aria-label="Chart stat">{metrics.map((item) => <button key={item.id} className={metric === item.id ? "active" : ""} onClick={() => setMetric(item.id)}>{item.label}</button>)}</div>
+          <div className="player-trend-chart" role="img" aria-label={`${player.name} ${metricLabel} over the last ${Math.min(8, games.length)} matches`}><ResponsiveContainer width="100%" height="100%"><LineChart data={chartData} margin={{ top: 14, right: 10, bottom: 0, left: -22 }}><CartesianGrid stroke="var(--rule)" vertical={false}/><XAxis dataKey="date" axisLine={false} tickLine={false}/><YAxis domain={[0, "auto"]} axisLine={false} tickLine={false}/><Tooltip formatter={(value) => [value, metricLabel]}/><Line type="monotone" dataKey={metric} stroke="var(--green)" strokeWidth={3} dot={{ r: 4, fill: "var(--paper)", strokeWidth: 2 }} connectNulls /></LineChart></ResponsiveContainer></div>
+        </section>}
+        {sheetTab === "last5" && <section className="last-five-section">
+          <div className="section-heading"><div><p className="kicker">FORM CHECK</p><h3>Last five</h3></div><span>{lastFive.length} official matches</span></div>
+          <div className="last-five-summary"><div><span>GOALS</span><strong>{totals((g) => g.goals)}</strong></div><div><span>ASSISTS</span><strong>{totals((g) => g.assists)}</strong></div>{goalie && <div><span>CLEAN SHEETS</span><strong>{lastFive.reduce((s, g) => s + isCleanSheet(g), 0)}</strong></div>}</div>
+          <div className="game-card-list">{lastFive.map((game) => <article className="game-card" key={game.gameId}><div className="game-card-head"><div><strong>{game.homeRoad === "away" ? "@" : "vs"} {game.opponent}</strong><span>{soccerGameDate(game.gameDate)} · {game.result} {game.teamScore ?? "—"}-{game.oppScore ?? "—"}</span></div></div><div className="game-stat-grid"><div><span>Goals</span><b>{game.goals}</b></div><div><span>Assists</span><b>{game.assists}</b></div><div><span>App</span><b>{game.appearances > 0 ? "✓" : "—"}</b></div>{goalie && <div><span>CS</span><b>{game.appearances > 0 && game.oppScore === 0 ? "Yes" : "No"}</b></div>}</div></article>)}</div>
+        </section>}
+        {sheetTab === "log" && <details className="full-log" open><summary>Full season match log <span>{games.length} matches</span></summary><div className="game-card-list compact">{games.map((game) => <article className="game-card" key={`full-${game.gameId}`}><div className="game-card-head"><div><strong>{game.homeRoad === "away" ? "@" : "vs"} {game.opponent}</strong><span>{soccerGameDate(game.gameDate)} · {game.result} {game.teamScore ?? "—"}-{game.oppScore ?? "—"}</span></div></div><div className="game-stat-grid"><div><span>G</span><b>{game.goals}</b></div><div><span>A</span><b>{game.assists}</b></div><div><span>App</span><b>{game.appearances > 0 ? "✓" : "—"}</b></div>{goalie && <div><span>CS</span><b>{game.appearances > 0 && game.oppScore === 0 ? "Yes" : "No"}</b></div>}</div></article>)}</div></details>}
+        <div className="source-box"><span>Source</span><a href={log.data?.sourceUrl} target="_blank" rel="noreferrer">ESPN {leagueName} match data ↗</a><small>Fetched {log.data ? dateTime(log.data.fetchedAt) : "—"}</small></div>
+      </>}
+    </section>
+  </div>;
+}
+
+function SoccerRosterView({ league, onLeagueChange, parlay, setParlay, teamFocus }: {
+  league: SoccerLeague; onLeagueChange?: (next: SoccerLeague) => void;
+  parlay: ParlayPick[]; setParlay: (next: ParlayPick[]) => void;
+  teamFocus: { sport: League; team: string; nonce: number } | null;
+}) {
+  const [team, setTeam] = useState<string>(() => defaultsFor(league)[0] ?? "LAFC");
+  function defaultsFor(l: SoccerLeague): string[] { return soccerTeamsFor(l).map((t) => t.code); }
+  useEffect(() => {
+    if (teamFocus && teamFocus.sport === "soccer" && soccerTeams.some((t) => t.code === teamFocus.team)) {
+      setTeam(teamFocus.team);
+      onLeagueChange?.(soccerLeagueForTeam(teamFocus.team));
+    }
+  }, [teamFocus]);
+  useEffect(() => { setTeam(defaultsFor(league)[0] ?? "LAFC"); }, [league]);
+  const [selectedPlayer, setSelectedPlayer] = useState<SoccerPlayer | null>(null);
+  const [watched, setWatched] = useState(0);
+  const teamLeague = soccerLeagueForTeam(team);
+  const roster = useQuery({ queryKey: ["soccer-roster", teamLeague, team], queryFn: () => api.getSoccerRoster({ league: teamLeague, team }) });
+  const teamBoard = useQuery({ queryKey: ["soccer-board", teamLeague], queryFn: () => api.getSoccerBoard({ league: teamLeague }), retry: false });
+  const selectedTeamName = soccerTeams.find((item) => item.code === team)?.name ?? team;
+  const teamThreeWay = useMemo(() => groupPremiumOffers(teamBoard.data?.offers ?? []).filter(isThreeWayGroup).filter((group) => group.matchup.includes(selectedTeamName)), [teamBoard.data, selectedTeamName]);
+  useEffect(() => {
+    const onChange = () => setWatched((w) => w + 1);
+    window.addEventListener("dh-watchlist-change", onChange);
+    return () => window.removeEventListener("dh-watchlist-change", onChange);
+  }, []);
+  void watched;
+  const leagueName = teamLeague === "epl" ? "Premier League" : "MLS";
+
+  return (
+    <>
+    <section className="roster-panel">
+      <div className="roster-title"><div><p className="kicker">OFFICIAL {leagueName.toUpperCase()} SQUADS</p><h2>Team stats & player trends</h2><p className="roster-intro">Tap any player to open graphs, last-five form and the complete match log. Star a player to add them to your Watchlist.</p></div>{roster.data && <span>Updated {dateTime(roster.data.fetchedAt)}</span>}</div>
+      <SoccerLeagueTabs league={league} onLeagueChange={onLeagueChange} />
+      <label className="select-label" htmlFor="soccer-team">Club</label>
+      <select id="soccer-team" value={team} onChange={(e) => { setTeam(e.target.value); setSelectedPlayer(null); }}>{soccerTeamsFor(league).map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select>
+      {teamThreeWay.length > 0 && <section className="team-moneyline"><div className="section-heading"><div><p className="kicker">NEXT MATCH</p><h3>Result board</h3></div><span>Best · DraftKings · FanDuel · BetMGM</span></div><div className="moneyline-grid">{teamThreeWay.map((group) => { const split = threeWaySides(group, null); const outcomes: [string, MarketSide | null][] = [["Home", split.home], ["Draw", split.draw], ["Away", split.away]]; return <article className="moneyline-card" key={group.id}><div className="moneyline-open"><small>{group.matchup}</small><h4>{group.entity}</h4>{outcomes.map(([label, side]) => { if (!side) return null; const added = parlay.some((item) => item.id === side.id); const pick: ParlayPick = { id: side.id, groupId: group.id, matchup: group.matchup, entity: group.entity, marketName: group.marketName, side }; return <div className="soccer-outcome" key={side.id}><strong>{label}</strong><span>Best <b>{bookName(side.best.book)} {formatAmerican(side.best.odds)}</b></span><button className={added ? "pick-button added" : "pick-button"} onClick={() => setParlay(added ? parlay.filter((item) => item.id !== side.id) : [...parlay, pick])}>{added ? "Remove" : "Add"}</button></div>; })}</div></article>;})}</div></section>}
+      {roster.isPending ? (
+        <div className="loading"><span />Loading official squad…</div>
+      ) : roster.isError ? (
+        <div className="inline-error">Official squad data is temporarily unavailable — the league feed hasn't served this side yet. <button onClick={() => roster.refetch()}>Retry</button></div>
+      ) : roster.data ? (
+        <>
+          <div className="roster-summary"><div><b>{roster.data.players.length}</b><span>players</span></div><div><b>{roster.data.players.filter((p) => p.position === "G").length}</b><span>keepers</span></div><div><b>{roster.data.players.filter((p) => ["DF", "D"].includes(p.position)).length}</b><span>defenders</span></div><div><b>{roster.data.players.filter((p) => ["MF", "M"].includes(p.position)).length}</b><span>midfield</span></div><div><b>{roster.data.players.filter((p) => ["FW", "F", "ST"].includes(p.position)).length}</b><span>forwards</span></div></div>
+          <div className="table-scroll"><div className="roster-table" role="table">
+            <div className="roster-header" role="row"><span>Player</span><span>Apps</span><span>G</span><span>A</span><span>CS</span></div>
+            {roster.data.players.map((player) => {
+              const starredEntry = { playerId: player.id, team, name: player.name, position: player.position };
+              const stats: [string, string][] = [
+                ["Apps", `${player.games ?? "—"}`],
+                ["G", `${player.goals ?? "—"}`],
+                ["A", `${player.assists ?? "—"}`],
+                ["CS", "–"],
+              ];
+              return <div className="roster-card" key={player.id}>
+                <button className="roster-card-main" onClick={() => setSelectedPlayer(player)} aria-label={`Open ${player.name} match log and charts`}>
+                  <span className="roster-card-head"><b>{player.jersey ? `#${player.jersey} ` : ""}{player.name}</b><small>{player.position}</small></span>
+                  <span className="roster-stat-grid">{stats.map(([label, value]) => <span key={label} className="roster-stat"><small>{label}</small><b>{value}</b></span>)}</span>
+                </button>
+                <PlayerWatchStar sport="soccer" playerId={starredEntry.playerId} team={starredEntry.team} name={starredEntry.name} position={starredEntry.position} />
+              </div>;
+            })}
+          </div></div>
+          <div className="source-box"><span>Source</span><a href={roster.data.sourceUrl} target="_blank" rel="noreferrer">ESPN {leagueName} data ↗</a><small>{String(leagueName)} season · aggregated from official match logs</small></div>
+        </>
+      ) : null}
+    </section>
+    {selectedPlayer && <SoccerPlayerSheet key={selectedPlayer.id} league={teamLeague} player={selectedPlayer} team={team} onClose={() => setSelectedPlayer(null)} />}
+    </>
+  );
+}
+
+function SoccerHotStreaksView({ league, onLeagueChange }: { league: SoccerLeague; onLeagueChange?: (next: SoccerLeague) => void }) {
+  const [tab, setTab] = useState("Scorers");
+  const [selected, setSelected] = useState<{ player: SoccerPlayer; team: string } | null>(null);
+  const hot = useQuery({ queryKey: ["soccer-hot-streaks", league], queryFn: () => api.getSoccerHotStreaks({ league, force: false }), staleTime: 12 * 60 * 60 * 1000, retry: 1 });
+  const refresh = useMutation({ mutationFn: () => api.getSoccerHotStreaks({ league, force: true }), onSuccess: () => hot.refetch() });
+  const players = [...(hot.data?.players ?? [])].sort((a, b) => b.goals - a.goals || b.braces - a.braces || a.name.localeCompare(b.name));
+  const leagueName = league === "epl" ? "Premier League" : "MLS";
+  // Resolve full player records (for stat files + watch stars) from each
+  // represented club's roster, matched by name. Official data only.
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, "");
+  const teamCodes = useMemo(() => [...new Set(players.map((row) => row.team))], [players]);
+  const rosterQueries = useQueries({ queries: teamCodes.map((code) => ({ queryKey: ["soccer-roster", league, code], queryFn: () => api.getSoccerRoster({ league, team: code }), staleTime: 24 * 60 * 60 * 1000, retry: 1 })) });
+  const resolved = useMemo(() => {
+    const map = new Map<string, { player: SoccerPlayer; team: string }>();
+    rosterQueries.forEach((q, i) => q.data?.players.forEach((pl) => { if (!map.has(norm(pl.name))) map.set(norm(pl.name), { player: pl, team: teamCodes[i] ?? "" }); }));
+    return map;
+  }, [rosterQueries, teamCodes]);
+  const openPlayer = (row: SoccerHotStreaks["players"][number]) => {
+    const hit = resolved.get(norm(row.name));
+    if (hit) setSelected({ player: hit.player, team: hit.team });
+  };
+  return <section className="hot-section"><div className="roster-title"><div><p className="kicker">HOT STREAKS · {leagueName.toUpperCase()}</p><h2>Who's scoring right now</h2><p className="roster-intro">Ranked by goals in the recent official window. Tap a player for the full stat file.</p></div>{hot.data && <div className="roster-update"><span>Updated {dateTime(hot.data.fetchedAt)}</span><button className="refresh" onClick={() => refresh.mutate()} disabled={refresh.isPending}>{refresh.isPending ? "Refreshing…" : "Refresh streaks"}</button></div>}</div><SoccerLeagueTabs league={league} onLeagueChange={onLeagueChange} /><div className="metric-tabs hot-tabs">{["Scorers", "Teams"].map((name) => <button key={name} className={tab === name ? "active" : ""} onClick={() => setTab(name)}>{name}</button>)}</div>{hot.isPending ? <div className="loading"><span />Reading recent match data…</div> : hot.isError ? <div className="error-state"><h2>Streak board unavailable.</h2><p>The league feed hasn't served this side yet.</p><button onClick={() => hot.refetch()}>Retry</button></div> : tab === "Teams" ? (hot.data?.teams.length ? <div className="hot-list">{hot.data.teams.map((t, index) => <div className="hot-row-wrap" key={t.team}><div className="hot-row"><span className="hot-rank">#{index + 1}</span><span className="hot-player"><strong>{t.name}</strong><small>{leagueName}</small></span><span className="streak-badges">{t.streak && <b>{t.streak}</b>}</span><span className="hot-totals"><b>{t.points} pts</b><small>in the window</small></span></div><TeamWatchStar sport="soccer" team={t.team} name={t.name} /></div>)}</div> : <div className="history-empty"><strong>No hot teams in the official window.</strong></div>) : players.length === 0 ? <div className="history-empty"><strong>No qualifying streaks in the official window.</strong><span>Only real scorers from official match data are shown.</span></div> : <div className="hot-list">{players.map((row, index) => { const hit = resolved.get(norm(row.name)); return <div className="hot-row-wrap" key={`${row.team}-${row.name}`}><button className="hot-row" onClick={() => openPlayer(row)} aria-label={hit ? `Open ${row.name} full stat file` : `${row.name} stat file unavailable`} disabled={!hit}><span className="hot-rank">#{index + 1}</span><span className="hot-player"><strong>{row.name}</strong><small>{row.team}{row.position ? ` · ${row.position}` : ""} · {leagueName}</small></span><span className="streak-badges">{row.braces > 0 && <b>{row.braces} multi-goal {row.braces === 1 ? "game" : "games"}</b>}</span><span className="hot-totals"><b>{row.goals} G</b><small>{row.games} apps</small></span></button>{hit && <PlayerWatchStar sport="soccer" playerId={hit.player.id} team={hit.team} name={hit.player.name} position={hit.player.position} />}</div>; })}</div>}{hot.data && <div className="source-box"><span>Source</span><a href={hot.data.sourceUrl} target="_blank" rel="noreferrer">ESPN {leagueName} match data ↗</a><small>{soccerGameDate(hot.data.windowStart)}–{soccerGameDate(hot.data.windowEnd)} · refreshed daily without sportsbook quota</small></div>}{selected && <SoccerPlayerSheet league={soccerLeagueForTeam(selected.team)} player={selected.player} team={selected.team} onClose={() => setSelected(null)} />}</section>;
+}
+function SoccerCuttingBoard({ league, onLeagueChange }: { league: SoccerLeague; onLeagueChange?: (next: SoccerLeague) => void }) {
+  const [tab, setTab] = useState("Cold players");
+  const [selected, setSelected] = useState<{ player: SoccerPlayer; team: string } | null>(null);
+  const cold = useQuery({ queryKey: ["soccer-cold-streaks", league], queryFn: () => api.getSoccerColdStreaks({ league, force: false }), staleTime: 12 * 60 * 60 * 1000, retry: 1 });
+  const refresh = useMutation({ mutationFn: () => api.getSoccerColdStreaks({ league, force: true }), onSuccess: () => cold.refetch() });
+  const players = [...(cold.data?.players ?? [])].sort((a, b) => a.seasonGoals - b.seasonGoals || b.appearances - a.appearances);
+  const leagueName = league === "epl" ? "Premier League" : "MLS";
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, "");
+  const teamCodes = useMemo(() => [...new Set(players.map((row) => row.team))], [players]);
+  const rosterQueries = useQueries({ queries: teamCodes.map((code) => ({ queryKey: ["soccer-roster", league, code], queryFn: () => api.getSoccerRoster({ league, team: code }), staleTime: 24 * 60 * 60 * 1000, retry: 1 })) });
+  const resolved = useMemo(() => {
+    const map = new Map<string, { player: SoccerPlayer; team: string }>();
+    rosterQueries.forEach((q, i) => q.data?.players.forEach((pl) => { if (!map.has(norm(pl.name))) map.set(norm(pl.name), { player: pl, team: teamCodes[i] ?? "" }); }));
+    return map;
+  }, [rosterQueries, teamCodes]);
+  const openPlayer = (row: SoccerColdStreaks["players"][number]) => {
+    const hit = resolved.get(norm(row.name));
+    if (hit) setSelected({ player: hit.player, team: hit.team });
+  };
+  return <section className="hot-section cutting-board"><div className="roster-title"><div><p className="kicker">THE CUTTING BOARD · {leagueName.toUpperCase()}</p><h2>Slumps, officially</h2><p className="roster-intro">Scoreless stretches and skidding clubs from official match data. Tap a player for the full stat file.</p></div>{cold.data && <div className="roster-update"><span>Updated {dateTime(cold.data.fetchedAt)}</span><button className="refresh" onClick={() => refresh.mutate()} disabled={refresh.isPending}>{refresh.isPending ? "Refreshing…" : "Refresh board"}</button></div>}</div><SoccerLeagueTabs league={league} onLeagueChange={onLeagueChange} /><div className="metric-tabs hot-tabs">{["Cold players", "Teams"].map((name) => <button key={name} className={tab === name ? "active" : ""} onClick={() => setTab(name)}>{name}</button>)}</div>{cold.isPending ? <div className="loading"><span />Reading recent match data…</div> : cold.isError ? <div className="error-state"><h2>Cutting board unavailable.</h2><p>The league feed hasn't served this side yet.</p><button onClick={() => cold.refetch()}>Retry</button></div> : tab === "Teams" ? (cold.data?.teams.length ? <div className="hot-list">{cold.data.teams.map((t, index) => <div className="hot-row-wrap" key={t.team}><div className="hot-row"><span className="hot-rank">#{index + 1}</span><span className="hot-player"><strong>{t.name}</strong><small>{leagueName}</small></span><span className="streak-badges">{t.streak && <b>{t.streak}</b>}</span><span className="hot-totals"><b>{t.points} pts</b><small>in the window</small></span></div><TeamWatchStar sport="soccer" team={t.team} name={t.name} /></div>)}</div> : <div className="history-empty"><strong>No skidding clubs in the official window.</strong></div>) : players.length === 0 ? <div className="history-empty"><strong>Nobody on the board.</strong><span>Only real contributors with scoreless stretches from official match data are shown.</span></div> : <div className="hot-list">{players.map((row, index) => { const hit = resolved.get(norm(row.name)); return <div className="hot-row-wrap" key={`${row.team}-${row.name}`}><button className="hot-row" onClick={() => openPlayer(row)} aria-label={hit ? `Open ${row.name} full stat file` : `${row.name} stat file unavailable`} disabled={!hit}><span className="hot-rank">#{index + 1}</span><span className="hot-player"><strong>{row.name}</strong><small>{row.team} · {leagueName}</small></span><span className="streak-badges">{row.seasonGoals === 0 && <b>scoreless season</b>}</span><span className="hot-totals"><b>{row.seasonGoals} G</b><small>{row.appearances} apps</small></span></button>{hit && <PlayerWatchStar sport="soccer" playerId={hit.player.id} team={hit.team} name={hit.player.name} position={hit.player.position} />}</div>; })}</div>}{cold.data && <div className="source-box"><span>Source</span><a href={cold.data.sourceUrl} target="_blank" rel="noreferrer">ESPN {leagueName} match data ↗</a><small>{soccerGameDate(cold.data.windowStart)}–{soccerGameDate(cold.data.windowEnd)} · refreshed daily without sportsbook quota</small></div>}{selected && <SoccerPlayerSheet league={soccerLeagueForTeam(selected.team)} player={selected.player} team={selected.team} onClose={() => setSelected(null)} />}</section>;
 }

@@ -29,13 +29,16 @@ const WATCHLIST_KEY = "dh-watchlist";
 function normalizeEntry(item: unknown): WatchedEntry | null {
   if (!item || typeof item !== "object") return null;
   const row = item as Record<string, unknown>;
-  const sport = row.sport === "nfl" ? "nfl" : row.sport === "nhl" ? "nhl" : null;
+  const sport = row.sport === "nfl" ? "nfl" : row.sport === "nhl" ? "nhl" : row.sport === "nba" ? "nba" : row.sport === "soccer" ? "soccer" : null;
   const team = typeof row.team === "string" ? row.team : null;
   const name = typeof row.name === "string" ? row.name : null;
   if (!sport || !team || !name) return null;
   if (row.kind === "team") return { kind: "team", sport, team, name };
-  // Legacy entries (and explicit players) carry a playerId.
-  const playerId = typeof row.playerId === "number" ? row.playerId : null;
+  // Legacy entries (and explicit players) carry a playerId. ESPN ids
+  // sometimes arrive as numeric strings — coerce those.
+  const playerId = typeof row.playerId === "number" ? row.playerId
+    : typeof row.playerId === "string" && row.playerId.trim() !== "" && Number.isFinite(Number(row.playerId)) ? Number(row.playerId)
+    : null;
   if (playerId === null) return null;
   return {
     kind: "player",

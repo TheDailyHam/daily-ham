@@ -32,7 +32,7 @@ function defineAction<Req extends z.ZodTypeAny, Res extends z.ZodTypeAny>(opts: 
   return opts;
 }
 import { fetchSportsGameOddsEvents, validateSportsGameOddsKey } from "./provider.js";
-import { fetchOddsApiEvents, parseOddsApiPayload, validateOddsApiKey } from "./oddsapi.js";
+import { fetchOddsApiEvents, fetchOddsApiSoccerEvents, parseOddsApiPayload, validateOddsApiKey } from "./oddsapi.js";
 import {
   NFL_SEASON, NFL_TEAM_CODES, enrichFirstScores, fetchNflGameSummary, fetchNflRoster,
   fetchNflScoreboard, fetchNflStandings, fetchNflTeamGames, nflDivision, nflTeamMeta,
@@ -43,11 +43,21 @@ import {
   fetchNbaScoreboard, fetchNbaStandings, fetchNbaTeamGames, nbaTeamMeta,
   type NbaTeamGame,
 } from "./nba.js";
+import {
+  SOCCER_SEASON, fetchSoccerGameSummary, fetchSoccerRoster,
+  fetchSoccerScoreboard, fetchSoccerTeamGames, fetchSoccerTeamLeaders, fetchSoccerTeamRecord,
+  regressedRate, soccerLeagueLabel, soccerMatchProbabilities, soccerSportsGameOddsLeague,
+  soccerTeamMeta, soccerTeams,
+  type SoccerGame, type SoccerStanding, type SoccerTeamGame,
+} from "./soccer.js";
 import { and, desc, eq, gte, lt, sql } from "drizzle-orm";
 import * as schema from "./schema.js";
 
-const sports = ["nhl", "nfl", "nba"] as const;
+const sports = ["nhl", "nfl", "nba", "soccer"] as const;
 type Sport = (typeof sports)[number];
+// Soccer leagues bundled under the "soccer" sport (verified 2026-10-11).
+const soccerLeagues = ["mls", "epl"] as const;
+type SoccerLeagueParam = (typeof soccerLeagues)[number];
 const teamCodes = ["ANA", "BOS", "BUF", "CAR", "CBJ", "CGY", "CHI", "COL", "DAL", "DET", "EDM", "FLA", "LAK", "MIN", "MTL", "NJD", "NSH", "NYI", "NYR", "OTT", "PHI", "PIT", "SEA", "SJS", "STL", "TBL", "TOR", "UTA", "VAN", "VGK", "WPG", "WSH"] as const;
 // ESPN NFL abbreviations (verified 2026-10-08). Note BUF/DAL/PIT collide
 // with NHL codes — the two sports never share a schema or action.
@@ -104,6 +114,9 @@ async function refresh(ctx: Ctx) {
   let insertedCount = 0; let failures = 0;
 
   for (const sport of sports) {
+    // The Flash Props sample feed carries no soccer markets; the soccer
+    // board is built from the sportsbook odds providers instead.
+    if (sport === "soccer") { sourceNotes.push("SOCCER: via sportsbook odds providers"); continue; }
     try {
       const response = await fetch(`${SOURCE_URL}?sport=${sport}`, { headers: { Accept: "application/json" } });
       if (!response.ok) { failures += 1; sourceNotes.push(`${sport.toUpperCase()}: source returned ${response.status}`); continue; }
@@ -211,6 +224,9 @@ const premiumOfferSchema = z.object({
   eventId: z.string(), matchup: z.string(), startsAt: z.string().nullable(), oddId: z.string(),
   stat: z.string(), marketName: z.string(), entity: z.string(), entityType: z.enum(["player", "team", "event"]), period: z.string(), betType: z.string(), side: z.string(),
   book: z.string(), odds: z.string().nullable(), fairOdds: z.string().nullable(), line: z.string().nullable(), openingOdds: z.string().nullable(), openingLine: z.string().nullable(),
+  // Which soccer league this offer belongs to ("mls" | "epl"); null for the
+  // single-league sports. Lets the client split the soccer board per league.
+  league: z.string().nullable().default(null),
 });
 const premiumResponse = z.object({ sport: z.enum(sports), fetchedAt: z.string(), eventCount: z.number(), marketCount: z.number(), offerCount: z.number(), offers: z.array(premiumOfferSchema), cacheStatus: z.enum(["fresh", "stale"]), healthMessage: z.string() });
 const premiumRefreshResponse = z.object({ status: z.enum(["success", "partial", "failed"]), refreshedAt: z.string(), refreshedSports: z.number(), message: z.string() });
@@ -311,7 +327,7 @@ function parsePremiumPayload(sport: Sport, raw: unknown, fetchedAt: Date): z.inf
         if (value.available === false) continue;
         const line = textValue(value.overUnder) ?? textValue(value.spread) ?? textValue(odd.bookOverUnder) ?? textValue(odd.bookSpread);
         const openingLine = textValue(value.openOverUnder) ?? textValue(value.openingOverUnder) ?? textValue(value.openSpread) ?? textValue(value.openingSpread);
-        offers.push({ eventId, matchup: eventMatchup(event), startsAt, oddId: textValue(odd.oddID) ?? oddKey, stat: textValue(odd.statID) ?? "market", marketName: textValue(odd.marketName) ?? textValue(odd.statID) ?? "Market", entity: eventEntity(event, odd), entityType: textValue(odd.playerID) ? "player" : textValue(odd.statEntityID) === "home" || textValue(odd.statEntityID) === "away" ? "team" : "event", period: textValue(odd.periodID) ?? "game", betType: textValue(odd.betTypeID) ?? "—", side: textValue(odd.sideID) ?? "—", book, odds: textValue(value.odds) ?? textValue(odd.bookOdds), fairOdds: textValue(odd.fairOdds), line, openingOdds: textValue(value.openOdds) ?? textValue(value.openingOdds), openingLine });
+        offers.push({ eventId, matchup: eventMatchup(event), startsAt, oddId: textValue(odd.oddID) ?? oddKey, stat: textValue(odd.statID) ?? "market", marketName: textValue(odd.marketName) ?? textValue(odd.statID) ?? "Market", entity: eventEntity(event, odd), entityType: textValue(odd.playerID) ? "player" : textValue(odd.statEntityID) === "home" || textValue(odd.statEntityID) === "away" ? "team" : "event", period: textValue(odd.periodID) ?? "game", betType: textValue(odd.betTypeID) ?? "—", side: textValue(odd.sideID) ?? "—", book, odds: textValue(value.odds) ?? textValue(odd.bookOdds), fairOdds: textValue(odd.fairOdds), line, openingOdds: textValue(value.openOdds) ?? textValue(value.openingOdds), openingLine, league: null });
       }
     }
   }
@@ -331,16 +347,59 @@ async function loadOddsProvider(ctx: Ctx): Promise<OddsProvider> {
   return { name: "sportsgameodds", apiKey };
 }
 
+// Soccer odds cover two leagues (MLS + EPL): one provider request per
+// league per refresh (~2/day total), merged into a single "soccer" board
+// with each offer tagged by league so the client can split the view.
+async function fetchSoccerPremiumAndCache(provider: OddsProvider, fetchedAt: Date): Promise<z.infer<typeof premiumResponse>> {
+  const offers: z.infer<typeof premiumOfferSchema>[] = [];
+  let eventCount = 0;
+  let marketCount = 0;
+  const notes: string[] = [];
+  for (const league of soccerLeagues) {
+    try {
+      if (provider.name === "theoddsapi") {
+        const result = await fetchOddsApiSoccerEvents({ apiKey: provider.apiKey, league });
+        if (!result.ok) throw providerError(result, "theoddsapi");
+        const mapped = parseOddsApiPayload(result.payload.data, { marketNames: result.payload.marketNames });
+        eventCount += mapped.eventCount;
+        marketCount += mapped.marketCount;
+        for (const o of mapped.offers) offers.push({ ...o, league });
+      } else {
+        const sgLeague = soccerSportsGameOddsLeague(league);
+        let result = await fetchSportsGameOddsEvents({ apiKey: provider.apiKey, league: sgLeague });
+        if (!result.ok && result.reason === "provider_error") result = await fetchSportsGameOddsEvents({ apiKey: provider.apiKey, league: sgLeague });
+        if (!result.ok) throw providerError(result);
+        const parsed = parsePremiumPayload("soccer", result.payload, fetchedAt);
+        eventCount += parsed.eventCount;
+        marketCount += parsed.marketCount;
+        for (const o of parsed.offers) offers.push({ ...o, league });
+      }
+      notes.push(soccerLeagueLabel(league));
+    } catch (error) {
+      notes.push(`${soccerLeagueLabel(league)}: ${error instanceof Error ? error.message : "refresh failed"}`);
+    }
+  }
+  const providerLabel = provider.name === "theoddsapi" ? "The Odds API" : "SportsGameOdds";
+  return {
+    sport: "soccer", fetchedAt: fetchedAt.toISOString(),
+    eventCount, marketCount, offerCount: offers.length, offers,
+    cacheStatus: "fresh",
+    healthMessage: `Odds updated successfully (${providerLabel} · ${notes.join(" + ")})`,
+  };
+}
+
 async function fetchPremiumAndCache(ctx: Ctx, sport: Sport, provider: OddsProvider): Promise<z.infer<typeof premiumResponse>> {
   const fetchedAt = new Date();
   let parsed: z.infer<typeof premiumResponse>;
-  if (provider.name === "theoddsapi") {
+  if (sport === "soccer") {
+    parsed = await fetchSoccerPremiumAndCache(provider, fetchedAt);
+  } else if (provider.name === "theoddsapi") {
     // One request carries every game, market and bookmaker.
     const result = await fetchOddsApiEvents({ apiKey: provider.apiKey, sport });
     if (!result.ok) throw providerError(result, "theoddsapi");
     const mapped = parseOddsApiPayload(result.payload.data, { sport, marketNames: result.payload.marketNames });
     const leagueLabel = sport === "nfl" ? "NFL" : sport === "nba" ? "NBA" : "NHL";
-    parsed = { sport, fetchedAt: fetchedAt.toISOString(), eventCount: mapped.eventCount, marketCount: mapped.marketCount, offerCount: mapped.offerCount, offers: mapped.offers, cacheStatus: "fresh", healthMessage: `Odds updated successfully (The Odds API · ${leagueLabel})` };
+    parsed = { sport, fetchedAt: fetchedAt.toISOString(), eventCount: mapped.eventCount, marketCount: mapped.marketCount, offerCount: mapped.offerCount, offers: mapped.offers.map((o) => ({ ...o, league: null as string | null })), cacheStatus: "fresh", healthMessage: `Odds updated successfully (The Odds API · ${leagueLabel})` };
   } else {
     const league = sport === "nfl" ? "NFL" as const : sport === "nba" ? "NBA" as const : "NHL" as const;
     let result = await fetchSportsGameOddsEvents({ apiKey: provider.apiKey, league });
@@ -1688,6 +1747,577 @@ async function loadNbaPlayerGameLog(ctx: Ctx, team: (typeof nbaTeamCodes)[number
   };
 }
 
+// ---------------------------------------------------------------------------
+// SOCCER leg — two leagues (MLS + EPL) bundled under one "soccer" sport.
+//
+// Every action takes { league: "mls" | "epl" }. Draws are first-class: the
+// model is a three-way Poisson goal model (home/draw/away), never binary.
+// All data is keyless ESPN; only sportsbook odds touch the quota providers.
+// ---------------------------------------------------------------------------
+
+const soccerGameSideSchema = z.object({ abbrev: z.string(), name: z.string(), score: z.number().nullable(), winner: z.boolean() });
+const soccerThreeWaySchema = z.object({ home: z.number(), draw: z.number(), away: z.number() });
+const soccerGameSchema = z.object({
+  id: z.number(), date: z.string(), startsAt: z.string(), state: z.string(), detail: z.string(),
+  shortName: z.string(), away: soccerGameSideSchema, home: soccerGameSideSchema,
+  // Model three-way for this fixture (Poisson goal model, regressed).
+  // Null when either side's sample is too thin. Always a model estimate.
+  modelThreeWay: soccerThreeWaySchema.nullable(),
+});
+const soccerStandingSchema = z.object({
+  team: z.string(), name: z.string(),
+  played: z.number(), wins: z.number(), draws: z.number(), losses: z.number(), points: z.number(),
+  goalsFor: z.number(), goalsAgainst: z.number(), goalDifference: z.number(),
+  streak: z.string().nullable(),
+  // Regressed goals for/against per game — the model's team ratings.
+  attackRating: z.number().nullable(), defenseRating: z.number().nullable(),
+  // The club's three-way split vs a league-average opponent at a neutral
+  // venue: a like-for-like "Flip %" for soccer. Null when thin.
+  modelHome: z.number().nullable(), modelDraw: z.number().nullable(), modelAway: z.number().nullable(),
+});
+const soccerOverviewResponse = z.object({
+  league: z.enum(soccerLeagues), season: z.number(), fetchedAt: z.string(),
+  scheduleSourceUrl: z.string(), standingsSourceUrl: z.string(),
+  games: z.array(soccerGameSchema), standings: z.array(soccerStandingSchema),
+});
+
+const SOCCER_STANDINGS_TTL_MS = 24 * 60 * 60 * 1000;
+async function loadSoccerStandings(ctx: Ctx, league: SoccerLeagueParam): Promise<{ standings: SoccerStanding[]; fetchedAt: string; sourceUrl: string }> {
+  const cacheKey = `soccer-standings-${league}`;
+  try {
+    const rows = await ctx.db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey)).limit(1);
+    const row = rows[0];
+    if (row && row.expiresAt.getTime() > Date.now()) {
+      return JSON.parse(row.payloadJson) as { standings: SoccerStanding[]; fetchedAt: string; sourceUrl: string };
+    }
+  } catch { /* fall through to live fetch */ }
+  const teams = soccerTeams(league);
+  // 50 keyless record requests at concurrency 8; one club never breaks it.
+  const records = await pool(teams, 8, async (t) => {
+    try { return await fetchSoccerTeamRecord(league, t.abbr); }
+    catch { return null; }
+  });
+  const standings = records.filter((r): r is SoccerStanding => r !== null);
+  standings.sort((a, b) => b.points - a.points || b.goalDifference - a.goalDifference || b.goalsFor - a.goalsFor);
+  const payload = { standings, fetchedAt: new Date().toISOString(), sourceUrl: `${siteBasePublic(league)}/standings` };
+  try {
+    await ctx.db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey));
+    await ctx.db.insert(schema.nhlInsightCache).values({
+      key: cacheKey, payloadJson: JSON.stringify(payload),
+      fetchedAt: new Date(payload.fetchedAt), expiresAt: new Date(Date.now() + SOCCER_STANDINGS_TTL_MS),
+    });
+  } catch { /* cache is best-effort */ }
+  return payload;
+}
+function siteBasePublic(league: SoccerLeagueParam): string {
+  return `https://site.api.espn.com/apis/site/v2/sports/soccer/${league === "mls" ? "usa.1" : "eng.1"}`;
+}
+
+// League scoring context for the Poisson model, derived from the standings.
+function soccerLeagueContext(standings: SoccerStanding[]): { avgGoals: number; avgHome: number; avgAway: number } {
+  let gf = 0, played = 0;
+  for (const s of standings) { gf += s.goalsFor; played += s.played; }
+  const avgGoals = played > 0 ? gf / played : 1.35;
+  // Home/away split: home sides outscore away sides by ~35% across world
+  // football; fixed factors keep the model honest about the assumption.
+  return { avgGoals, avgHome: avgGoals * 1.175, avgAway: avgGoals * 0.825 };
+}
+
+function soccerRatings(s: SoccerStanding, avgGoals: number): { attack: number; defense: number } {
+  return {
+    attack: regressedRate(s.goalsFor, s.played, avgGoals),
+    defense: regressedRate(s.goalsAgainst, s.played, avgGoals),
+  };
+}
+
+async function loadSoccerOverview(ctx: Ctx, league: SoccerLeagueParam): Promise<z.infer<typeof soccerOverviewResponse>> {
+  const board = await fetchSoccerScoreboard(league);
+  let standings: SoccerStanding[] = [];
+  try {
+    const data = await loadSoccerStandings(ctx, league);
+    standings = data.standings;
+  } catch { /* schedule still renders without standings */ }
+  const ratingsByTeam = new Map<string, { attack: number; defense: number }>();
+  let leagueCtx = { avgGoals: 1.35, avgHome: 1.35 * 1.175, avgAway: 1.35 * 0.825 };
+  if (standings.length >= 10) {
+    leagueCtx = soccerLeagueContext(standings);
+    for (const s of standings) ratingsByTeam.set(s.team, soccerRatings(s, leagueCtx.avgGoals));
+  }
+  const games = board.games.map((g) => {
+    const homeR = ratingsByTeam.get(g.home.abbr);
+    const awayR = ratingsByTeam.get(g.away.abbr);
+    let modelThreeWay: z.infer<typeof soccerThreeWaySchema> | null = null;
+    if (homeR && awayR) {
+      const probs = soccerMatchProbabilities(homeR.attack, homeR.defense, awayR.attack, awayR.defense, leagueCtx.avgHome, leagueCtx.avgAway);
+      modelThreeWay = { home: probs.home, draw: probs.draw, away: probs.away };
+    }
+    return {
+      id: g.id, date: g.date.slice(0, 10), startsAt: g.date, state: g.state, detail: g.detail,
+      shortName: g.shortName,
+      away: { abbrev: g.away.abbr, name: g.away.name, score: g.away.score, winner: g.away.winner },
+      home: { abbrev: g.home.abbr, name: g.home.name, score: g.home.score, winner: g.home.winner },
+      modelThreeWay,
+    };
+  });
+  const standingRows = standings.map((s) => {
+    const r = soccerRatings(s, leagueCtx.avgGoals);
+    // Three-way vs a league-average opponent at a neutral venue.
+    const probs = soccerMatchProbabilities(r.attack, r.defense, leagueCtx.avgGoals, leagueCtx.avgGoals, leagueCtx.avgGoals, leagueCtx.avgGoals);
+    const thin = s.played < 2;
+    return {
+      ...s,
+      attackRating: thin ? null : Math.round(r.attack * 1000) / 1000,
+      defenseRating: thin ? null : Math.round(r.defense * 1000) / 1000,
+      modelHome: thin ? null : probs.home, modelDraw: thin ? null : probs.draw, modelAway: thin ? null : probs.away,
+    };
+  });
+  return {
+    league, season: board.season, fetchedAt: new Date().toISOString(),
+    scheduleSourceUrl: `${siteBasePublic(league)}/scoreboard`,
+    standingsSourceUrl: `${siteBasePublic(league)}/standings`,
+    games, standings: standingRows,
+  };
+}
+
+const soccerMatchupTeamSchema = z.object({
+  team: z.string(), games: z.number(),
+  wins: z.number(), draws: z.number(), losses: z.number(),
+  venueGames: z.number(), venueWins: z.number(), venueDraws: z.number(), venueLosses: z.number(),
+  goalsFor: z.number(), goalsAgainst: z.number(),
+  avgGoalsFor: z.number().nullable(), avgGoalsAgainst: z.number().nullable(),
+  venueGoalsFor: z.number(), venueGoalsAgainst: z.number(),
+  cleanSheets: z.number(), failedToScore: z.number(),
+  form: z.string().nullable(), // last-5 as e.g. "W D W L D"
+});
+const soccerMatchupResponse = z.object({
+  league: z.enum(soccerLeagues),
+  away: soccerMatchupTeamSchema, home: soccerMatchupTeamSchema,
+  // Three-way model probabilities (Poisson goal model, regressed, venue-aware).
+  homeWinProbability: z.number().nullable(), drawProbability: z.number().nullable(), awayWinProbability: z.number().nullable(),
+  edgeTeam: z.string().nullable(), edgeProbability: z.number().nullable(),
+  over25Probability: z.number().nullable(), bttsProbability: z.number().nullable(), margin3PlusProbability: z.number().nullable(),
+  homeExpectedGoals: z.number().nullable(), awayExpectedGoals: z.number().nullable(),
+  headToHead: z.object({ games: z.number(), homeWins: z.number(), draws: z.number(), awayWins: z.number() }),
+  fetchedAt: z.string(), sourceUrl: z.string(), sampleNote: z.string(),
+});
+
+function soccerMatchupTeamStats(team: string, venue: "away" | "home", games: SoccerTeamGame[]): z.infer<typeof soccerMatchupTeamSchema> {
+  const venueGames = games.filter((g) => g.homeAway === venue);
+  const wins = games.filter((g) => g.result === "W").length;
+  const draws = games.filter((g) => g.result === "D").length;
+  const losses = games.filter((g) => g.result === "L").length;
+  const venueWins = venueGames.filter((g) => g.result === "W").length;
+  const venueDraws = venueGames.filter((g) => g.result === "D").length;
+  const venueLosses = venueGames.filter((g) => g.result === "L").length;
+  const goalsFor = games.reduce((s, g) => s + g.teamScore, 0);
+  const goalsAgainst = games.reduce((s, g) => s + g.oppScore, 0);
+  const venueGoalsFor = venueGames.reduce((s, g) => s + g.teamScore, 0);
+  const venueGoalsAgainst = venueGames.reduce((s, g) => s + g.oppScore, 0);
+  const form = games.slice(0, 5).map((g) => g.result).join(" ");
+  return {
+    team, games: games.length, wins, draws, losses,
+    venueGames: venueGames.length, venueWins, venueDraws, venueLosses,
+    goalsFor, goalsAgainst,
+    avgGoalsFor: games.length ? Math.round((goalsFor / games.length) * 100) / 100 : null,
+    avgGoalsAgainst: games.length ? Math.round((goalsAgainst / games.length) * 100) / 100 : null,
+    venueGoalsFor, venueGoalsAgainst,
+    cleanSheets: games.filter((g) => g.oppScore === 0).length,
+    failedToScore: games.filter((g) => g.teamScore === 0).length,
+    form: form || null,
+  };
+}
+
+async function loadSoccerMatchup(ctx: Ctx, league: SoccerLeagueParam, awayTeam: string, homeTeam: string, force: boolean): Promise<z.infer<typeof soccerMatchupResponse>> {
+  const cacheKey = `soccer-matchup:${league}:${awayTeam}:${homeTeam}`;
+  const db = ctx.db;
+  if (!force) {
+    try {
+      const rows = await db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey)).limit(1);
+      const row = rows[0];
+      if (row && row.expiresAt.getTime() > Date.now()) return soccerMatchupResponse.parse(JSON.parse(row.payloadJson));
+    } catch { /* fall through to live compute */ }
+  }
+  const [awayData, homeData, standingsData] = await Promise.all([
+    fetchSoccerTeamGames(league, awayTeam, 30),
+    fetchSoccerTeamGames(league, homeTeam, 30),
+    loadSoccerStandings(ctx, league).catch(() => null),
+  ]);
+  // Form/venue stats use the last 12; head-to-head scans the full season.
+  const awayRecent = { ...awayData, games: awayData.games.slice(0, 12) };
+  const homeRecent = { ...homeData, games: homeData.games.slice(0, 12) };
+  const away = soccerMatchupTeamStats(awayTeam, "away", awayRecent.games);
+  const home = soccerMatchupTeamStats(homeTeam, "home", homeRecent.games);
+  // Head-to-head from both clubs' recent schedules, deduped by game id.
+  const h2hSeen = new Set<number>();
+  let h2hGames = 0, h2hHomeWins = 0, h2hDraws = 0, h2hAwayWins = 0;
+  for (const g of [...homeData.games, ...awayData.games]) {
+    const involves =
+      (g.opponent === awayTeam && homeData.games.includes(g)) ||
+      (g.opponent === homeTeam && awayData.games.includes(g));
+    if (!involves || h2hSeen.has(g.gameId)) continue;
+    h2hSeen.add(g.gameId);
+    h2hGames += 1;
+    // Normalize to the current home/away perspective: g is from the
+    // perspective of the team whose schedule it came from.
+    const isHomeSchedule = homeData.games.includes(g);
+    const homeScore = isHomeSchedule ? g.teamScore : g.oppScore;
+    const awayScore = isHomeSchedule ? g.oppScore : g.teamScore;
+    if (homeScore > awayScore) h2hHomeWins += 1;
+    else if (homeScore === awayScore) h2hDraws += 1;
+    else h2hAwayWins += 1;
+  }
+  // Model: regressed attack/defense ratings blended with venue scoring.
+  let probs: ReturnType<typeof soccerMatchProbabilities> | null = null;
+  let leagueCtx = { avgGoals: 1.35, avgHome: 1.35 * 1.175, avgAway: 1.35 * 0.825 };
+  if (standingsData && standingsData.standings.length >= 10) {
+    leagueCtx = soccerLeagueContext(standingsData.standings);
+    const find = (t: string) => standingsData.standings.find((s) => s.team === t) ?? null;
+    const hs = find(homeTeam);
+    const as = find(awayTeam);
+    if (hs && as && hs.played >= 2 && as.played >= 2) {
+      const hr = soccerRatings(hs, leagueCtx.avgGoals);
+      const ar = soccerRatings(as, leagueCtx.avgGoals);
+      // Blend season ratings with venue scoring (60/40) when 3+ venue games.
+      const venueBlend = (season: number, venueFor: number, venueAgainst: number, venueGames: number, isAttack: boolean) => {
+        if (venueGames < 3) return season;
+        const venueRate = isAttack ? venueFor / venueGames : venueAgainst / venueGames;
+        return 0.6 * season + 0.4 * regressedRate(venueRate * venueGames, venueGames, leagueCtx.avgGoals);
+      };
+      const homeAttack = venueBlend(hr.attack, home.venueGoalsFor, home.venueGoalsAgainst, home.venueGames, true);
+      const homeDefense = venueBlend(hr.defense, home.venueGoalsFor, home.venueGoalsAgainst, home.venueGames, false);
+      const awayAttack = venueBlend(ar.attack, away.venueGoalsFor, away.venueGoalsAgainst, away.venueGames, true);
+      const awayDefense = venueBlend(ar.defense, away.venueGoalsFor, away.venueGoalsAgainst, away.venueGames, false);
+      probs = soccerMatchProbabilities(homeAttack, homeDefense, awayAttack, awayDefense, leagueCtx.avgHome, leagueCtx.avgAway);
+    }
+  }
+  const p = probs ?? { home: 0, draw: 0, away: 0 };
+  const edgeOptions: [string, number, string][] = [["home", p.home, homeTeam], ["draw", p.draw, "Draw"], ["away", p.away, awayTeam]];
+  edgeOptions.sort((a, b) => b[1] - a[1]);
+  const edge = probs ? edgeOptions[0]! : null;
+  const response: z.infer<typeof soccerMatchupResponse> = {
+    league, away, home,
+    homeWinProbability: probs?.home ?? null, drawProbability: probs?.draw ?? null, awayWinProbability: probs?.away ?? null,
+    edgeTeam: edge?.[2] === "Draw" ? null : edge?.[2] ?? null, edgeProbability: edge?.[1] ?? null,
+    over25Probability: probs?.over25 ?? null, bttsProbability: probs?.btts ?? null, margin3PlusProbability: probs?.margin3Plus ?? null,
+    homeExpectedGoals: probs?.homeXg ?? null, awayExpectedGoals: probs?.awayXg ?? null,
+    headToHead: { games: h2hGames, homeWins: h2hHomeWins, draws: h2hDraws, awayWins: h2hAwayWins },
+    fetchedAt: new Date().toISOString(), sourceUrl: siteBasePublic(league),
+    sampleNote: "Model estimate from official scoring data — not a sportsbook price. Draws are modeled explicitly via a Poisson goal model.",
+  };
+  try {
+    await db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey));
+    await db.insert(schema.nhlInsightCache).values({
+      key: cacheKey, payloadJson: JSON.stringify(response),
+      fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(Date.now() + 12 * 60 * 60 * 1000),
+    });
+  } catch { /* cache is best-effort */ }
+  return response;
+}
+
+const soccerStreakPlayerSchema = z.object({
+  name: z.string(), team: z.string(), position: z.string().nullable(),
+  goals: z.number(), games: z.number(), braces: z.number(),
+});
+const soccerHotStreaksResponse = z.object({
+  league: z.enum(soccerLeagues), fetchedAt: z.string(), sourceUrl: z.string(),
+  windowStart: z.string(), windowEnd: z.string(),
+  players: z.array(soccerStreakPlayerSchema),
+  teams: z.array(z.object({ team: z.string(), name: z.string(), streak: z.string(), points: z.number() })),
+});
+const soccerColdStreaksResponse = z.object({
+  league: z.enum(soccerLeagues), fetchedAt: z.string(), sourceUrl: z.string(),
+  windowStart: z.string(), windowEnd: z.string(),
+  players: z.array(z.object({
+    name: z.string(), team: z.string(), seasonGoals: z.number(), appearances: z.number(),
+  })),
+  teams: z.array(z.object({ team: z.string(), name: z.string(), streak: z.string(), points: z.number() })),
+});
+
+const SOCCER_STREAK_TTL_MS = 24 * 60 * 60 * 1000;
+const STREAK_WINDOW_DAYS = 7;
+function yyyymmdd(t: number): string {
+  const d = new Date(t);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}`;
+}
+
+// Trailing-7-day completed games league-wide (bounded; one slate per day).
+async function soccerStreakWindowGames(league: SoccerLeagueParam): Promise<{ games: SoccerGame[]; windowStart: string; windowEnd: string }> {
+  const now = Date.now();
+  const dayMs = 24 * 60 * 60 * 1000;
+  const boards = await pool([7, 6, 5, 4, 3, 2, 1], 4, async (offset) => {
+    try { return await fetchSoccerScoreboard(league, yyyymmdd(now - offset * dayMs)); }
+    catch { return null; }
+  });
+  const seen = new Set<number>();
+  const games: SoccerGame[] = [];
+  for (const board of boards) {
+    if (!board) continue;
+    for (const g of board.games) {
+      if (g.state !== "final" || seen.has(g.id)) continue;
+      seen.add(g.id);
+      games.push(g);
+    }
+  }
+  return {
+    games: games.slice(0, 40),
+    windowStart: new Date(now - STREAK_WINDOW_DAYS * dayMs).toISOString().slice(0, 10),
+    windowEnd: new Date(now - dayMs).toISOString().slice(0, 10),
+  };
+}
+
+async function fetchSoccerHotStreaks(ctx: Ctx, league: SoccerLeagueParam, force: boolean): Promise<z.infer<typeof soccerHotStreaksResponse>> {
+  const cacheKey = `soccer-hot-${league}`;
+  if (!force) {
+    try {
+      const rows = await ctx.db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey)).limit(1);
+      const row = rows[0];
+      if (row && row.expiresAt.getTime() > Date.now()) return soccerHotStreaksResponse.parse(JSON.parse(row.payloadJson));
+    } catch { /* fall through to live compute */ }
+  }
+  const { games, windowStart, windowEnd } = await soccerStreakWindowGames(league);
+  const summaries = await pool(games, 4, async (g) => {
+    try { return await fetchSoccerGameSummary(league, g.id); }
+    catch { return null; }
+  });
+  // goals per player across the window
+  const byPlayer = new Map<string, { name: string; team: string; goals: number; gameIds: Set<number>; braces: number }>();
+  const goalsByGame = new Map<number, Map<string, number>>();
+  summaries.forEach((summary, i) => {
+    if (!summary) return;
+    const gameId = games[i]!.id;
+    for (const goal of summary.goals) {
+      const key = `${goal.teamAbbr}|${goal.scorer}`;
+      const entry = byPlayer.get(key) ?? { name: goal.scorer, team: goal.teamAbbr, goals: 0, gameIds: new Set<number>(), braces: 0 };
+      entry.goals += 1;
+      entry.gameIds.add(gameId);
+      byPlayer.set(key, entry);
+      const gm = goalsByGame.get(gameId) ?? new Map<string, number>();
+      gm.set(key, (gm.get(key) ?? 0) + 1);
+      goalsByGame.set(gameId, gm);
+    }
+  });
+  for (const gm of goalsByGame.values()) {
+    for (const [key, n] of gm) {
+      if (n >= 2) { const e = byPlayer.get(key); if (e) e.braces += 1; }
+    }
+  }
+  const players = [...byPlayer.values()]
+    .filter((p) => p.goals >= 2)
+    .map((p) => ({ name: p.name, team: p.team, position: null, goals: p.goals, games: p.gameIds.size, braces: p.braces }))
+    .sort((a, b) => b.goals - a.goals || b.braces - a.braces || a.name.localeCompare(b.name))
+    .slice(0, 15);
+  // In-form clubs: computed from the window's games (points, then GD).
+  // The record endpoint's streak field is unreliable; this is transparent.
+  const table = new Map<string, { team: string; name: string; p: number; w: number; d: number; l: number; gf: number; ga: number }>();
+  for (const g of games) {
+    for (const [side, opp] of [["home", g.away], ["away", g.home]] as const) {
+      const t = side === "home" ? g.home : g.away;
+      const o = opp;
+      if (t.score === null || o.score === null) continue;
+      const row = table.get(t.abbr) ?? { team: t.abbr, name: t.name, p: 0, w: 0, d: 0, l: 0, gf: 0, ga: 0 };
+      row.p += 1; row.gf += t.score; row.ga += o.score;
+      if (t.score > o.score) row.w += 1;
+      else if (t.score === o.score) row.d += 1;
+      else row.l += 1;
+      table.set(t.abbr, row);
+    }
+  }
+  const formTeams: z.infer<typeof soccerHotStreaksResponse>["teams"] = [...table.values()]
+    .filter((r) => r.p >= 2 && r.w >= 2)
+    .sort((a, b) => (b.w * 3 + b.d) - (a.w * 3 + a.d) || (b.gf - b.ga) - (a.gf - a.ga))
+    .slice(0, 8)
+    .map((r) => ({ team: r.team, name: r.name, streak: `${r.w}W-${r.d}D-${r.l}L in window`, points: r.w * 3 + r.d }));
+  const response: z.infer<typeof soccerHotStreaksResponse> = {
+    league, fetchedAt: new Date().toISOString(), sourceUrl: siteBasePublic(league),
+    windowStart, windowEnd, players, teams: formTeams,
+  };
+  try {
+    await ctx.db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey));
+    await ctx.db.insert(schema.nhlInsightCache).values({
+      key: cacheKey, payloadJson: JSON.stringify(response),
+      fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(Date.now() + SOCCER_STREAK_TTL_MS),
+    });
+  } catch { /* cache is best-effort */ }
+  return response;
+}
+
+async function fetchSoccerColdStreaks(ctx: Ctx, league: SoccerLeagueParam, force: boolean): Promise<z.infer<typeof soccerColdStreaksResponse>> {
+  const cacheKey = `soccer-cold-${league}`;
+  if (!force) {
+    try {
+      const rows = await ctx.db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey)).limit(1);
+      const row = rows[0];
+      if (row && row.expiresAt.getTime() > Date.now()) return soccerColdStreaksResponse.parse(JSON.parse(row.payloadJson));
+    } catch { /* fall through to live compute */ }
+  }
+  const { games, windowStart, windowEnd } = await soccerStreakWindowGames(league);
+  const windowTeams = [...new Set(games.flatMap((g) => [g.home.abbr, g.away.abbr]))].slice(0, 14);
+  // Proven scorers (3+ season goals) gone quiet in the window.
+  const scorersInWindow = new Set<string>();
+  const summaries = await pool(games.slice(0, 30), 4, async (g) => {
+    try { return await fetchSoccerGameSummary(league, g.id); }
+    catch { return null; }
+  });
+  for (const summary of summaries) {
+    if (!summary) continue;
+    for (const goal of summary.goals) scorersInWindow.add(`${goal.teamAbbr}|${goal.scorer}`);
+  }
+  const leaderLists = await pool(windowTeams, 4, async (team) => {
+    try { return await fetchSoccerTeamLeaders(league, team); }
+    catch { return null; }
+  });
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, "");
+  const scoredInWindow = (team: string, name: string): boolean => {
+    const target = norm(name);
+    for (const k of scorersInWindow) {
+      const pipe = k.indexOf("|");
+      if (pipe < 0) continue;
+      if (k.slice(0, pipe) !== team) continue;
+      if (norm(k.slice(pipe + 1)) === target) return true;
+    }
+    return false;
+  };
+  const players = leaderLists.flatMap((list) => {
+    if (!list) return [];
+    return list.leaders
+      .filter((l) => l.goals >= 3 && l.appearances >= 2 && l.name)
+      .filter((l) => !scoredInWindow(list.team, l.name ?? ""))
+      .map((l) => ({ name: l.name ?? "Unknown", team: list.team, seasonGoals: l.goals, appearances: l.appearances }));
+  }).sort((a, b) => b.seasonGoals - a.seasonGoals || a.name.localeCompare(b.name)).slice(0, 15);
+  // Clubs gone cold: winless across 2+ games in the window.
+  const table = new Map<string, { team: string; name: string; p: number; w: number; d: number; l: number; gf: number; ga: number }>();
+  for (const g of games) {
+    for (const [side, opp] of [["home", g.away], ["away", g.home]] as const) {
+      const t = side === "home" ? g.home : g.away;
+      const o = opp;
+      if (t.score === null || o.score === null) continue;
+      const row = table.get(t.abbr) ?? { team: t.abbr, name: t.name, p: 0, w: 0, d: 0, l: 0, gf: 0, ga: 0 };
+      row.p += 1; row.gf += t.score; row.ga += o.score;
+      if (t.score > o.score) row.w += 1;
+      else if (t.score === o.score) row.d += 1;
+      else row.l += 1;
+      table.set(t.abbr, row);
+    }
+  }
+  const coldTeams: z.infer<typeof soccerColdStreaksResponse>["teams"] = [...table.values()]
+    .filter((r) => r.p >= 2 && r.w === 0)
+    .sort((a, b) => (a.d - b.d) || (a.gf - a.ga) - (b.gf - b.ga))
+    .slice(0, 8)
+    .map((r) => ({ team: r.team, name: r.name, streak: `${r.l}L-${r.d}D winless in window`, points: r.d }));
+  const response: z.infer<typeof soccerColdStreaksResponse> = {
+    league, fetchedAt: new Date().toISOString(), sourceUrl: siteBasePublic(league),
+    windowStart, windowEnd, players, teams: coldTeams,
+  };
+  try {
+    await ctx.db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey));
+    await ctx.db.insert(schema.nhlInsightCache).values({
+      key: cacheKey, payloadJson: JSON.stringify(response),
+      fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(Date.now() + SOCCER_STREAK_TTL_MS),
+    });
+  } catch { /* cache is best-effort */ }
+  return response;
+}
+
+const soccerRosterPlayerSchema = z.object({
+  id: z.number(), name: z.string(), jersey: z.string().nullable(), position: z.string(),
+  games: z.number().nullable(), goals: z.number().nullable(), assists: z.number().nullable(),
+});
+const soccerRosterResponse = z.object({
+  league: z.enum(soccerLeagues), team: z.string(), season: z.number(),
+  fetchedAt: z.string(), sourceUrl: z.string(),
+  players: z.array(soccerRosterPlayerSchema),
+});
+
+async function loadSoccerRoster(ctx: Ctx, league: SoccerLeagueParam, team: string): Promise<z.infer<typeof soccerRosterResponse>> {
+  const [roster, leaders] = await Promise.all([
+    fetchSoccerRoster(league, team),
+    fetchSoccerTeamLeaders(league, team).catch(() => null),
+  ]);
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, "");
+  const leaderByName = new Map<string, { goals: number; appearances: number }>();
+  if (leaders) {
+    for (const l of leaders.leaders) {
+      if (l.name) leaderByName.set(norm(l.name), { goals: l.goals, appearances: l.appearances });
+    }
+  }
+  void ctx;
+  return {
+    league, team, season: SOCCER_SEASON, fetchedAt: roster.fetchedAt, sourceUrl: roster.sourceUrl,
+    players: roster.players.map((p) => {
+      const hit = leaderByName.get(norm(p.name));
+      return {
+        id: p.id, name: p.name, jersey: p.jersey, position: p.position,
+        games: hit?.appearances ?? null, goals: hit?.goals ?? null, assists: null,
+      };
+    }),
+  };
+}
+
+const soccerGameLogRowSchema = z.object({
+  gameId: z.number(), gameDate: z.string(), opponent: z.string(), homeRoad: z.enum(["home", "away"]),
+  result: z.enum(["W", "D", "L"]), teamScore: z.number(), oppScore: z.number(),
+  goals: z.number(), assists: z.number(), appearances: z.number(),
+});
+const soccerGameLogResponse = z.object({
+  league: z.enum(soccerLeagues), playerId: z.number(), playerName: z.string().nullable(),
+  team: z.string(), season: z.number(), fetchedAt: z.string(), sourceUrl: z.string(),
+  games: z.array(soccerGameLogRowSchema),
+});
+
+async function loadSoccerPlayerGameLog(ctx: Ctx, league: SoccerLeagueParam, team: string, playerId: number): Promise<z.infer<typeof soccerGameLogResponse>> {
+  const cacheKey = `soccer-gamelog:${league}:${team}:${playerId}`;
+  if (true) {
+    try {
+      const rows = await ctx.db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey)).limit(1);
+      const row = rows[0];
+      if (row && row.expiresAt.getTime() > Date.now()) return soccerGameLogResponse.parse(JSON.parse(row.payloadJson));
+    } catch { /* fall through to live compute */ }
+  }
+  const [roster, schedule] = await Promise.all([
+    fetchSoccerRoster(league, team).catch(() => null),
+    fetchSoccerTeamGames(league, team, 12),
+  ]);
+  const rosterPlayer = roster?.players.find((p) => p.id === playerId) ?? null;
+  const playerName = rosterPlayer?.name ?? null;
+  const summaries = await pool(schedule.games, 4, async (g) => {
+    try { return { game: g, summary: await fetchSoccerGameSummary(league, g.gameId) }; }
+    catch { return { game: g, summary: null }; }
+  });
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, "");
+  const rows: z.infer<typeof soccerGameLogRowSchema>[] = [];
+  for (const { game, summary } of summaries) {
+    if (!summary) continue;
+    const match = summary.players.find((p) =>
+      p.athleteId === playerId || (playerName !== null && norm(p.name) === norm(playerName)));
+    if (!match) continue;
+    rows.push({
+      gameId: game.gameId, gameDate: game.date, opponent: game.opponent, homeRoad: game.homeAway,
+      result: game.result, teamScore: game.teamScore, oppScore: game.oppScore,
+      // ESPN soccer summary stat keys: "totalGoals" and "goalAssists"
+      // (verified 2026-10-11); fall back to generic keys if they change.
+      goals: Math.trunc(match.stats["totalGoals"] ?? match.stats["goals"] ?? 0),
+      assists: Math.trunc(match.stats["goalAssists"] ?? match.stats["assists"] ?? 0),
+      appearances: Math.trunc(match.stats["appearances"] ?? 1),
+    });
+  }
+  if (!rows.length && !playerName) throw new Error("No game log found for this player yet this season.");
+  rows.sort((a, b) => b.gameDate.localeCompare(a.gameDate) || b.gameId - a.gameId);
+  const response: z.infer<typeof soccerGameLogResponse> = {
+    league, playerId, playerName, team, season: SOCCER_SEASON,
+    fetchedAt: new Date().toISOString(), sourceUrl: `${siteBasePublic(league)}/summary`,
+    games: rows,
+  };
+  try {
+    await ctx.db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey));
+    await ctx.db.insert(schema.nhlInsightCache).values({
+      key: cacheKey, payloadJson: JSON.stringify(response),
+      fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(Date.now() + SOCCER_STREAK_TTL_MS),
+    });
+  } catch { /* cache is best-effort */ }
+  return response;
+}
+
 type NbaSeasonRec = { wins: number; losses: number } | null;
 function nbaTeamMatchupStats(team: (typeof nbaTeamCodes)[number], venue: "away" | "home", games: NbaTeamGame[], season: NbaSeasonRec): z.infer<typeof nbaMatchupTeamSchema> {
   const venueGames = games.filter((g) => g.homeAway === venue);
@@ -1952,9 +2582,9 @@ const likelyScorersResponse = z.object({
 });
 type ClubStatSkater = StatPlayer & { firstName?: unknown; lastName?: unknown };
 
-async function fetchLikelyScorers(ctx: Ctx, sport: (typeof sports)[number], force: boolean): Promise<z.infer<typeof likelyScorersResponse>> {
+async function fetchLikelyScorers(ctx: Ctx, sport: (typeof sports)[number], force: boolean, league?: SoccerLeagueParam): Promise<z.infer<typeof likelyScorersResponse>> {
   const db = ctx.db;
-  const key = `likely-scorers-${sport}`;
+  const key = sport === "soccer" ? `likely-scorers-soccer-${league ?? "mls"}` : `likely-scorers-${sport}`;
   const cachedRows = await db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, key)).limit(1);
   const cached = cachedRows[0];
   if (!force && cached && cached.expiresAt.getTime() > Date.now()) return likelyScorersResponse.parse(JSON.parse(cached.payloadJson));
@@ -2000,7 +2630,7 @@ async function fetchLikelyScorers(ctx: Ctx, sport: (typeof sports)[number], forc
       }));
       for (const row of rows) if (row && row.ranked.length > 0) teams[row.team] = row.ranked;
     }
-  } else {
+  } else if (sport === "nba") {
     // NBA: top scorers by points per game (min 2 GP) from official boxscores.
     const codes = [...nbaTeamCodes];
     for (let index = 0; index < codes.length; index += 4) {
@@ -2014,6 +2644,26 @@ async function fetchLikelyScorers(ctx: Ctx, sport: (typeof sports)[number], forc
             const games = player.games.length;
             if (points <= 0 || games < 2 || !player.name) return [];
             return [{ name: player.name, team, stat: points, games, rate: points / games }];
+          }).sort((a, b) => b.rate - a.rate || b.stat - a.stat || a.name.localeCompare(b.name)).slice(0, 4);
+          return { team, ranked };
+        } catch { return null; }
+      }));
+      for (const row of rows) if (row && row.ranked.length > 0) teams[row.team] = row.ranked;
+    }
+  }
+  if (sport === "soccer") {
+    // Soccer: top scorers by goals per game (min 2 apps) from the official
+    // team leaders feed. One request per club + athlete name lookups.
+    const lg = league ?? "mls";
+    const codes = soccerTeams(lg).map((t) => t.abbr);
+    for (let index = 0; index < codes.length; index += 5) {
+      const batch = codes.slice(index, index + 5);
+      const rows = await Promise.all(batch.map(async (team) => {
+        try {
+          const data = await fetchSoccerTeamLeaders(lg, team);
+          const ranked = data.leaders.flatMap((l) => {
+            if (!l.name || l.goals <= 0 || l.appearances < 2) return [];
+            return [{ name: l.name, team, stat: l.goals, games: l.appearances, rate: l.goals / l.appearances }];
           }).sort((a, b) => b.rate - a.rate || b.stat - a.stat || a.name.localeCompare(b.name)).slice(0, 4);
           return { team, ranked };
         } catch { return null; }
@@ -2065,18 +2715,23 @@ const injuryPlayerSchema = z.object({
 });
 const injuryTeamSchema = z.object({ team: z.string(), players: z.array(injuryPlayerSchema) });
 const keyInjuriesResponse = z.object({
-  sport: z.enum(["nhl", "nfl", "nba"]),
+  sport: z.enum(sports),
+  league: z.string().nullable().default(null),
   fetchedAt: z.string(),
   teams: z.array(injuryTeamSchema),
 });
 
 const INJURY_TTL_MS = 12 * 60 * 60 * 1000;
 const ESPN_CORE_BASE = "https://sports.core.api.espn.com/v2/sports";
-const INJURY_LEAGUE_PATH: Record<Sport, string> = {
+const INJURY_LEAGUE_PATH: Record<Exclude<Sport, "soccer">, string> = {
   nhl: "hockey/leagues/nhl",
   nfl: "football/leagues/nfl",
   nba: "basketball/leagues/nba",
 };
+function injuryLeaguePath(sport: Sport, league?: SoccerLeagueParam): string {
+  if (sport === "soccer") return `soccer/leagues/${league === "epl" ? "eng.1" : "usa.1"}`;
+  return INJURY_LEAGUE_PATH[sport];
+}
 
 async function espnCoreJson(url: string): Promise<unknown> {
   // Defensive timeout: a hanging upstream must never wedge the action.
@@ -2148,9 +2803,10 @@ async function nhlEspnIdMap(ctx: Ctx): Promise<Record<string, number>> {
   return map;
 }
 
-function espnTeamId(sport: Sport, abbr: string, nhlIds: Record<string, number>): number | null {
+function espnTeamId(sport: Sport, abbr: string, nhlIds: Record<string, number>, league?: SoccerLeagueParam): number | null {
   if (sport === "nfl") return nflTeamMeta(abbr)?.id ?? null;
   if (sport === "nba") return nbaTeamMeta(abbr)?.id ?? null;
+  if (sport === "soccer") return soccerTeamMeta(league ?? "mls", abbr)?.id ?? null;
   return nhlIds[abbr] ?? null;
 }
 
@@ -2162,8 +2818,27 @@ function startsWithin48h(iso: string): boolean {
 }
 
 // Clubs with a game tipping off / kicking off in the next 48 hours.
-async function upcomingInjuryTeams(sport: Sport): Promise<string[]> {
+async function upcomingInjuryTeams(sport: Sport, league?: SoccerLeagueParam): Promise<string[]> {
   const seen = new Set<string>();
+  if (sport === "soccer") {
+    // The soccer scoreboard takes a single YYYYMMDD; fetch the next three
+    // calendar days and let the 48h filter pick precisely.
+    const now = Date.now();
+    const dayMs = 24 * 60 * 60 * 1000;
+    const boards = await pool([0, 1, 2], 3, async (offset) => {
+      try { return await fetchSoccerScoreboard(league ?? "mls", yyyymmdd(now + offset * dayMs)); }
+      catch { return null; }
+    });
+    for (const board of boards) {
+      if (!board) continue;
+      for (const g of board.games) {
+        if (!startsWithin48h(g.date)) continue;
+        seen.add(g.away.abbr); seen.add(g.home.abbr);
+      }
+    }
+    const valid = new Set(soccerTeams(league ?? "mls").map((t) => t.abbr));
+    return [...seen].filter((abbr) => valid.has(abbr));
+  }
   if (sport === "nfl") {
     const board = await fetchNflScoreboard();
     for (const g of board.games) {
@@ -2238,9 +2913,11 @@ function injuryIsKey(status: string, note: string): boolean {
 }
 
 const NFL_KEY_POSITIONS = new Set(["QB", "RB", "WR", "TE"]);
+// Soccer: forwards, attacking midfielders, and goalkeepers move matches.
+const SOCCER_KEY_POSITIONS = new Set(["F", "M", "G"]);
 
-async function fetchTeamKeyInjuries(sport: Sport, espnId: number): Promise<z.infer<typeof injuryPlayerSchema>[]> {
-  const listUrl = `${ESPN_CORE_BASE}/${INJURY_LEAGUE_PATH[sport]}/teams/${espnId}/injuries?lang=en&region=us`;
+async function fetchTeamKeyInjuries(sport: Sport, espnId: number, league?: SoccerLeagueParam): Promise<z.infer<typeof injuryPlayerSchema>[]> {
+  const listUrl = `${ESPN_CORE_BASE}/${injuryLeaguePath(sport, league)}/teams/${espnId}/injuries?lang=en&region=us`;
   const payload = await espnCoreJson(listUrl);
   const root = objectValue(payload);
   const items = arrayValue(root?.items).slice(0, 50);
@@ -2280,36 +2957,37 @@ async function fetchTeamKeyInjuries(sport: Sport, espnId: number): Promise<z.inf
     const name = textValue(athlete?.displayName) ?? textValue(athlete?.fullName) ?? "Unknown";
     const position = textValue(objectValue(athlete?.position)?.abbreviation) ?? "";
     if (sport === "nfl" && !NFL_KEY_POSITIONS.has(position.toUpperCase())) return;
+    if (sport === "soccer" && !SOCCER_KEY_POSITIONS.has(position.toUpperCase())) return;
     kept.push({ name, position, status, note });
   });
   return kept;
 }
 
-async function fetchKeyInjuries(ctx: Ctx, sport: Sport, force: boolean): Promise<z.infer<typeof keyInjuriesResponse>> {
-  const cacheKey = `key-injuries-${sport}`;
+async function fetchKeyInjuries(ctx: Ctx, sport: Sport, force: boolean, league?: SoccerLeagueParam): Promise<z.infer<typeof keyInjuriesResponse>> {
+  const cacheKey = sport === "soccer" ? `key-injuries-soccer-${league ?? "mls"}` : `key-injuries-${sport}`;
   if (!force) {
     try {
       const rows = await ctx.db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey)).limit(1);
       const row = rows[0];
       if (row && row.expiresAt.getTime() > Date.now()) {
         const teams = JSON.parse(row.payloadJson) as z.infer<typeof injuryTeamSchema>[];
-        return { sport, fetchedAt: row.fetchedAt.toISOString(), teams };
+        return { sport, league: sport === "soccer" ? (league ?? "mls") : null, fetchedAt: row.fetchedAt.toISOString(), teams };
       }
     } catch { /* fall through to live fetch */ }
   }
-  const abbrs = await upcomingInjuryTeams(sport);
+  const abbrs = await upcomingInjuryTeams(sport, league);
   const nhlIds = sport === "nhl" ? await nhlEspnIdMap(ctx).catch(() => ({} as Record<string, number>)) : {};
   const teams: z.infer<typeof injuryTeamSchema>[] = [];
   await pool(abbrs, 4, async (abbr) => {
-    const id = espnTeamId(sport, abbr, nhlIds);
+    const id = espnTeamId(sport, abbr, nhlIds, league);
     if (!id) return;
     try {
-      const players = await fetchTeamKeyInjuries(sport, id);
+      const players = await fetchTeamKeyInjuries(sport, id, league);
       if (players.length) teams.push({ team: abbr, players });
     } catch { /* one club never breaks the report */ }
   });
   teams.sort((a, b) => a.team.localeCompare(b.team));
-  const response = { sport, fetchedAt: new Date().toISOString(), teams };
+  const response = { sport, league: sport === "soccer" ? (league ?? "mls") : null, fetchedAt: new Date().toISOString(), teams };
   try {
     await ctx.db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey));
     await ctx.db.insert(schema.nhlInsightCache).values({
@@ -2382,7 +3060,7 @@ async function loadUsageStats(ctx: Ctx): Promise<z.infer<typeof usageStatsRespon
 
 export const Actions = {
   getDashboard: defineAction({ request: z.object({ sport: z.enum(sports).default("nhl") }), response: dashboardResponse, async handler(ctx, args) { return loadDashboard(ctx, args.sport); } }),
-  refreshDaily: defineAction({ request: z.object({}), response: z.object({ status: z.enum(["success", "partial", "failed"]), message: z.string(), rowCount: z.number(), snapshotDate: z.string() }), async handler(ctx) { const result = await refresh(ctx); try { await fetchHotStreaks(ctx, true); } catch { /* Keep odds refresh independent of free NHL insight refresh. */ } try { await fetchNflHotStreaks(ctx, true); } catch { /* Same for the NFL leg. */ } try { await fetchColdStreaks(ctx, true); } catch { /* Cold streaks refresh with the same daily job. */ } try { await fetchNflColdStreaks(ctx, true); } catch { /* Same for the NFL leg. */ } try { await fetchNbaHotStreaks(ctx, true); } catch { /* Same for the NBA leg. */ } try { await fetchNbaColdStreaks(ctx, true); } catch { /* Same for the NBA leg. */ } try { await fetchLikelyScorers(ctx, "nhl", true); } catch { /* Likely scorers warm with the same daily job. */ } try { await fetchLikelyScorers(ctx, "nfl", true); } catch { /* Same for the NFL leg. */ } try { await fetchLikelyScorers(ctx, "nba", true); } catch { /* Same for the NBA leg. */ } try { await warmNflForm(ctx); } catch { /* Flip % v2 form warms with the same daily job. */ } try { await warmNbaForm(ctx); } catch { /* Same for the NBA leg. */ } try { await fetchKeyInjuries(ctx, "nfl", true); } catch { /* Injury warnings warm with the same daily job. */ } try { await fetchKeyInjuries(ctx, "nba", true); } catch { /* Same for the NBA leg. */ } try { await fetchKeyInjuries(ctx, "nhl", true); } catch { /* Same for the NHL leg. */ } return result; } }),
+  refreshDaily: defineAction({ request: z.object({}), response: z.object({ status: z.enum(["success", "partial", "failed"]), message: z.string(), rowCount: z.number(), snapshotDate: z.string() }), async handler(ctx) { const result = await refresh(ctx); try { await fetchHotStreaks(ctx, true); } catch { /* Keep odds refresh independent of free NHL insight refresh. */ } try { await fetchNflHotStreaks(ctx, true); } catch { /* Same for the NFL leg. */ } try { await fetchColdStreaks(ctx, true); } catch { /* Cold streaks refresh with the same daily job. */ } try { await fetchNflColdStreaks(ctx, true); } catch { /* Same for the NFL leg. */ } try { await fetchNbaHotStreaks(ctx, true); } catch { /* Same for the NBA leg. */ } try { await fetchNbaColdStreaks(ctx, true); } catch { /* Same for the NBA leg. */ } try { await fetchLikelyScorers(ctx, "nhl", true); } catch { /* Likely scorers warm with the same daily job. */ } try { await fetchLikelyScorers(ctx, "nfl", true); } catch { /* Same for the NFL leg. */ } try { await fetchLikelyScorers(ctx, "nba", true); } catch { /* Same for the NBA leg. */ } try { await warmNflForm(ctx); } catch { /* Flip % v2 form warms with the same daily job. */ } try { await warmNbaForm(ctx); } catch { /* Same for the NBA leg. */ } try { await fetchKeyInjuries(ctx, "nfl", true); } catch { /* Injury warnings warm with the same daily job. */ } try { await fetchKeyInjuries(ctx, "nba", true); } catch { /* Same for the NBA leg. */ } try { await fetchKeyInjuries(ctx, "nhl", true); } catch { /* Same for the NHL leg. */ } try { await fetchKeyInjuries(ctx, "soccer", true, "mls"); } catch { /* Same for the MLS leg. */ } try { await fetchKeyInjuries(ctx, "soccer", true, "epl"); } catch { /* Same for the EPL leg. */ } try { await fetchLikelyScorers(ctx, "soccer", true, "mls"); } catch { /* Same for the MLS leg. */ } try { await fetchLikelyScorers(ctx, "soccer", true, "epl"); } catch { /* Same for the EPL leg. */ } try { await fetchSoccerHotStreaks(ctx, "mls", true); } catch { /* Same for the MLS leg. */ } try { await fetchSoccerHotStreaks(ctx, "epl", true); } catch { /* Same for the EPL leg. */ } try { await fetchSoccerColdStreaks(ctx, "mls", true); } catch { /* Same for the MLS leg. */ } try { await fetchSoccerColdStreaks(ctx, "epl", true); } catch { /* Same for the EPL leg. */ } try { await loadSoccerStandings(ctx, "mls"); } catch { /* Standings warm with the same daily job. */ } try { await loadSoccerStandings(ctx, "epl"); } catch { /* Same for the EPL leg. */ } return result; } }),
   getNhlOverview: defineAction({ request: z.object({}), response: nhlOverviewResponse, async handler() { return loadNhlOverview(); } }),
   getFirstGoalMatchup: defineAction({ request: z.object({ awayTeam: z.enum(teamCodes), homeTeam: z.enum(teamCodes), force: z.boolean().default(false) }).refine((value) => value.awayTeam !== value.homeTeam, { message: "Choose two different teams" }), response: firstGoalMatchupResponse, async handler(ctx, args) { return loadFirstGoalMatchup(ctx, args.awayTeam, args.homeTeam, args.force); } }),
   getHotStreaks: defineAction({ request: z.object({ force: z.boolean().default(false) }), response: hotStreaksResponse, async handler(ctx, args) { return fetchHotStreaks(ctx, args.force); } }),
@@ -2394,11 +3072,11 @@ export const Actions = {
   getColdStreaks: defineAction({ request: z.object({ force: z.boolean().default(false) }), response: coldStreaksResponse, async handler(ctx, args) { return fetchColdStreaks(ctx, args.force); } }),
   getNflColdStreaks: defineAction({ request: z.object({ force: z.boolean().default(false) }), response: nflColdStreaksResponse, async handler(ctx, args) { return fetchNflColdStreaks(ctx, args.force); } }),
   getNbaOverview: defineAction({ request: z.object({}), response: nbaOverviewResponse, async handler(ctx) { return loadNbaOverview(ctx); } }),
-  getKeyInjuries: defineAction({ request: z.object({ sport: z.enum(["nhl", "nfl", "nba"]) }), response: keyInjuriesResponse, async handler(ctx, args) { return fetchKeyInjuries(ctx, args.sport, false); } }),
+  getKeyInjuries: defineAction({ request: z.object({ sport: z.enum(sports), league: z.enum(soccerLeagues).optional() }), response: keyInjuriesResponse, async handler(ctx, args) { return fetchKeyInjuries(ctx, args.sport, false, args.league); } }),
   getNbaMatchup: defineAction({ request: z.object({ awayTeam: z.enum(nbaTeamCodes), homeTeam: z.enum(nbaTeamCodes), force: z.boolean().default(false) }).refine((value) => value.awayTeam !== value.homeTeam, { message: "Choose two different teams" }), response: nbaMatchupResponse, async handler(ctx, args) { return loadNbaMatchup(ctx, args.awayTeam, args.homeTeam, args.force); } }),
   getNbaHotStreaks: defineAction({ request: z.object({ force: z.boolean().default(false) }), response: nbaHotStreaksResponse, async handler(ctx, args) { return fetchNbaHotStreaks(ctx, args.force); } }),
   getNbaColdStreaks: defineAction({ request: z.object({ force: z.boolean().default(false) }), response: nbaColdStreaksResponse, async handler(ctx, args) { return fetchNbaColdStreaks(ctx, args.force); } }),
-  getLikelyScorers: defineAction({ request: z.object({ sport: z.enum(sports), force: z.boolean().default(false) }), response: likelyScorersResponse, async handler(ctx, args) { return fetchLikelyScorers(ctx, args.sport, args.force); } }),
+  getLikelyScorers: defineAction({ request: z.object({ sport: z.enum(sports), league: z.enum(soccerLeagues).optional(), force: z.boolean().default(false) }), response: likelyScorersResponse, async handler(ctx, args) { return fetchLikelyScorers(ctx, args.sport, args.force, args.league); } }),
   getPublicPlates: defineAction({ request: z.object({}), response: platesResponse, async handler(ctx) { return listPlates(ctx, true); } }),
   getMyPlates: defineAction({ request: z.object({ adminToken: adminTokenSchema }), response: platesResponse, async handler(ctx, args) { requireAdmin(args); return listPlates(ctx, false); } }),
   savePlate: defineAction({
@@ -2433,6 +3111,12 @@ export const Actions = {
   getNflPlayerGameLog: defineAction({ request: z.object({ team: z.enum(nflTeamCodes), playerId: z.number().int().positive() }), response: nflGameLogResponse, async handler(ctx, args) { return loadNflPlayerGameLog(ctx, args.team, args.playerId); } }),
   getNbaRoster: defineAction({ request: z.object({ team: z.enum(nbaTeamCodes) }), response: nbaRosterResponse, async handler(ctx, args) { return loadNbaRoster(ctx, args.team); } }),
   getNbaPlayerGameLog: defineAction({ request: z.object({ team: z.enum(nbaTeamCodes), playerId: z.number().int().positive() }), response: nbaGameLogResponse, async handler(ctx, args) { return loadNbaPlayerGameLog(ctx, args.team, args.playerId); } }),
+  getSoccerOverview: defineAction({ request: z.object({ league: z.enum(soccerLeagues) }), response: soccerOverviewResponse, async handler(ctx, args) { return loadSoccerOverview(ctx, args.league); } }),
+  getSoccerMatchup: defineAction({ request: z.object({ league: z.enum(soccerLeagues), awayTeam: z.string(), homeTeam: z.string(), force: z.boolean().default(false) }).refine((value) => value.awayTeam !== value.homeTeam, { message: "Choose two different teams" }), response: soccerMatchupResponse, async handler(ctx, args) { return loadSoccerMatchup(ctx, args.league, args.awayTeam, args.homeTeam, args.force); } }),
+  getSoccerHotStreaks: defineAction({ request: z.object({ league: z.enum(soccerLeagues), force: z.boolean().default(false) }), response: soccerHotStreaksResponse, async handler(ctx, args) { return fetchSoccerHotStreaks(ctx, args.league, args.force); } }),
+  getSoccerColdStreaks: defineAction({ request: z.object({ league: z.enum(soccerLeagues), force: z.boolean().default(false) }), response: soccerColdStreaksResponse, async handler(ctx, args) { return fetchSoccerColdStreaks(ctx, args.league, args.force); } }),
+  getSoccerRoster: defineAction({ request: z.object({ league: z.enum(soccerLeagues), team: z.string() }), response: soccerRosterResponse, async handler(ctx, args) { return loadSoccerRoster(ctx, args.league, args.team); } }),
+  getSoccerPlayerGameLog: defineAction({ request: z.object({ league: z.enum(soccerLeagues), team: z.string(), playerId: z.number().int().positive() }), response: soccerGameLogResponse, async handler(ctx, args) { return loadSoccerPlayerGameLog(ctx, args.league, args.team, args.playerId); } }),
   getPremiumBoard: defineAction({ request: z.object({ sport: z.enum(sports) }), response: premiumResponse, async handler(ctx, args) { return loadPremium(ctx, args.sport); } }),
   getAdminStatus: defineAction({ request: z.object({}), response: z.object({ configured: z.boolean() }), async handler() { return { configured: !!process.env.ADMIN_TOKEN?.trim() }; } }),
   getUsageStats: defineAction({ request: z.object({ adminToken: adminTokenSchema }), response: usageStatsResponse, async handler(ctx, args) { requireAdmin(args); return loadUsageStats(ctx); } }),

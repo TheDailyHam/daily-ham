@@ -115,53 +115,131 @@ export const NBA_TEAM_THEMES: TeamTheme[] = [
   { code: "WSH", name: "Washington Wizards", color: "#002B5C", secondary: "#E31837" },
 ];
 
-export type League = "nhl" | "nfl" | "nba";
-export const LEAGUE_THEMES: Record<League, TeamTheme[]> = { nhl: TEAM_THEMES, nfl: NFL_TEAM_THEMES, nba: NBA_TEAM_THEMES };
+// 30 MLS clubs (ESPN usa.1) + 20 Premier League clubs (ESPN eng.1).
+// Colors are ESPN's official club colors, curated where the primary is too
+// dark or too light to work as a UI accent. Codes are unique across the two
+// leagues, so one combined list serves themeFor("soccer", code).
+export type SoccerLeague = "mls" | "epl";
+export const SOCCER_LEAGUES: { code: SoccerLeague; name: string }[] = [
+  { code: "mls", name: "MLS" },
+  { code: "epl", name: "Premier League" },
+];
+
+export const MLS_TEAM_THEMES: TeamTheme[] = [
+  { code: "ATL", name: "Atlanta United FC", color: "#9d2235", secondary: "#aa9767" },
+  { code: "ATX", name: "Austin FC", color: "#00b140", secondary: "#000000" },
+  { code: "MTL", name: "CF Montréal", color: "#003da6", secondary: "#c1c5c8" },
+  { code: "CLT", name: "Charlotte FC", color: "#0085ca", secondary: "#000000" },
+  { code: "CHI", name: "Chicago Fire FC", color: "#d71e2b", secondary: "#7ccdef" },
+  { code: "COL", name: "Colorado Rapids", color: "#8a2432", secondary: "#8ab7e9" },
+  { code: "CLB", name: "Columbus Crew", color: "#fedd00", secondary: "#000000" },
+  { code: "DC", name: "D.C. United", color: "#d61018", secondary: "#000000" },
+  { code: "CIN", name: "FC Cincinnati", color: "#003087", secondary: "#fe5000" },
+  { code: "DAL", name: "FC Dallas", color: "#c6093b", secondary: "#001f5b" },
+  { code: "HOU", name: "Houston Dynamo FC", color: "#ff6b00", secondary: "#101820" },
+  { code: "MIA", name: "Inter Miami CF", color: "#f7b5cd", secondary: "#231f20" },
+  { code: "LA", name: "LA Galaxy", color: "#00235d", secondary: "#ffffff" },
+  { code: "LAFC", name: "LAFC", color: "#c7a36f", secondary: "#000000" },
+  { code: "MIN", name: "Minnesota United FC", color: "#9bcde4", secondary: "#000000" },
+  { code: "NSH", name: "Nashville SC", color: "#ece83a", secondary: "#1f1646" },
+  { code: "NE", name: "New England Revolution", color: "#022166", secondary: "#ce0e2d" },
+  { code: "NYC", name: "New York City FC", color: "#9fd2ff", secondary: "#000229" },
+  { code: "ORL", name: "Orlando City SC", color: "#60269e", secondary: "#f0d283" },
+  { code: "PHI", name: "Philadelphia Union", color: "#e0d0a6", secondary: "#051f31" },
+  { code: "POR", name: "Portland Timbers", color: "#2c5234", secondary: "#c99700" },
+  { code: "RSL", name: "Real Salt Lake", color: "#a32035", secondary: "#daa900" },
+  { code: "RBNY", name: "Red Bull New York", color: "#ba0c2f", secondary: "#ffc72c" },
+  { code: "SD", name: "San Diego FC", color: "#697a7c", secondary: "#f89e1a" },
+  { code: "SJ", name: "San Jose Earthquakes", color: "#003da6", secondary: "#ffffff" },
+  { code: "SEA", name: "Seattle Sounders FC", color: "#2dc84d", secondary: "#0033a0" },
+  { code: "SKC", name: "Sporting Kansas City", color: "#a7c6ed", secondary: "#0a2240" },
+  { code: "STL", name: "St. Louis CITY SC", color: "#ec1458", secondary: "#001544" },
+  { code: "TOR", name: "Toronto FC", color: "#aa182c", secondary: "#a2a9ad" },
+  { code: "VAN", name: "Vancouver Whitecaps", color: "#12284c", secondary: "#ffffff" },
+];
+
+export const EPL_TEAM_THEMES: TeamTheme[] = [
+  { code: "BOU", name: "AFC Bournemouth", color: "#f42727", secondary: "#b57edc" },
+  { code: "ARS", name: "Arsenal", color: "#e20520", secondary: "#003399" },
+  { code: "AVL", name: "Aston Villa", color: "#660e36", secondary: "#000000" },
+  { code: "BRE", name: "Brentford", color: "#f42727", secondary: "#0f1c3f" },
+  { code: "BHA", name: "Brighton & Hove Albion", color: "#0606fa", secondary: "#005f60" },
+  { code: "CHE", name: "Chelsea", color: "#144992", secondary: "#ffffff" },
+  { code: "COV", name: "Coventry City", color: "#87cced", secondary: "#ffffff" },
+  { code: "CRY", name: "Crystal Palace", color: "#0202fb", secondary: "#000000" },
+  { code: "EVE", name: "Everton", color: "#0606fa", secondary: "#ffffff" },
+  { code: "FUL", name: "Fulham", color: "#cc0000", secondary: "#ffffff" },
+  { code: "HUL", name: "Hull City", color: "#f28800", secondary: "#ffffff" },
+  { code: "IPS", name: "Ipswich Town", color: "#0000fa", secondary: "#f5f2dc" },
+  { code: "LEE", name: "Leeds United", color: "#ffcd00", secondary: "#ffffff" },
+  { code: "LIV", name: "Liverpool", color: "#d11317", secondary: "#ffffff" },
+  { code: "MNC", name: "Manchester City", color: "#99c5ea", secondary: "#000000" },
+  { code: "MAN", name: "Manchester United", color: "#da020e", secondary: "#4169e1" },
+  { code: "NEW", name: "Newcastle United", color: "#000000", secondary: "#0b1b3d" },
+  { code: "NFO", name: "Nottingham Forest", color: "#c8102e", secondary: "#1b3624" },
+  { code: "SUN", name: "Sunderland", color: "#eb172b", secondary: "#ffb6c1" },
+  { code: "TOT", name: "Tottenham Hotspur", color: "#0b1426", secondary: "#ffffff" },
+];
+
+export const SOCCER_TEAM_THEMES: TeamTheme[] = [...MLS_TEAM_THEMES, ...EPL_TEAM_THEMES];
+
+// Which soccer league a club code belongs to (codes are unique across leagues).
+export function soccerLeagueForTeam(code: string): SoccerLeague {
+  return EPL_TEAM_THEMES.some((t) => t.code === code) ? "epl" : "mls";
+}
+
+export type League = "nhl" | "nfl" | "nba" | "soccer";
+export const LEAGUE_THEMES: Record<League, TeamTheme[]> = { nhl: TEAM_THEMES, nfl: NFL_TEAM_THEMES, nba: NBA_TEAM_THEMES, soccer: SOCCER_TEAM_THEMES };
 
 export function themeFor(league: League, code: string): TeamTheme | null {
   return LEAGUE_THEMES[league].find((t) => t.code === code) ?? null;
 }
 
-// Per-league favorites: one NHL team, one NFL team, one NBA team. The color
-// scheme follows whichever league is active. Legacy single-favorite values
-// ("league:CODE" or plain "CODE" from the NHL-only era) migrate into the
-// matching league slot on first read.
-export type LeagueFavorites = { nhl: string | null; nfl: string | null; nba: string | null };
+// Per-league favorites: one NHL team, one NFL team, one NBA team, one soccer
+// club. The color scheme follows whichever league is active. Legacy
+// single-favorite values ("league:CODE" or plain "CODE" from the NHL-only
+// era) migrate into the matching league slot on first read.
+export type LeagueFavorites = { nhl: string | null; nfl: string | null; nba: string | null; soccer: string | null };
 const FAV_NHL_KEY = "dh-favorite-nhl";
 const FAV_NFL_KEY = "dh-favorite-nfl";
 const FAV_NBA_KEY = "dh-favorite-nba";
+const FAV_SOCCER_KEY = "dh-favorite-soccer";
 
 export function loadFavorites(): LeagueFavorites {
   try {
     let nhl = localStorage.getItem(FAV_NHL_KEY);
     let nfl = localStorage.getItem(FAV_NFL_KEY);
     let nba = localStorage.getItem(FAV_NBA_KEY);
+    let soccer = localStorage.getItem(FAV_SOCCER_KEY);
     const legacy = localStorage.getItem(FAVORITE_TEAM_KEY);
-    if (legacy && !nhl && !nfl && !nba) {
+    if (legacy && !nhl && !nfl && !nba && !soccer) {
       const [league, code] = legacy.includes(":") ? legacy.split(":") : ["nhl", legacy];
       if (league === "nfl" && code && themeFor("nfl", code)) nfl = code;
       else if (league === "nba" && code && themeFor("nba", code)) nba = code;
+      else if (league === "soccer" && code && themeFor("soccer", code)) soccer = code;
       else if (code && themeFor("nhl", code)) nhl = code;
       try {
         localStorage.removeItem(FAVORITE_TEAM_KEY);
         if (nhl) localStorage.setItem(FAV_NHL_KEY, nhl);
         if (nfl) localStorage.setItem(FAV_NFL_KEY, nfl);
         if (nba) localStorage.setItem(FAV_NBA_KEY, nba);
+        if (soccer) localStorage.setItem(FAV_SOCCER_KEY, soccer);
       } catch { /* migration is best-effort */ }
     }
     return {
       nhl: nhl && themeFor("nhl", nhl) ? nhl : null,
       nfl: nfl && themeFor("nfl", nfl) ? nfl : null,
       nba: nba && themeFor("nba", nba) ? nba : null,
+      soccer: soccer && themeFor("soccer", soccer) ? soccer : null,
     };
   } catch {
-    return { nhl: null, nfl: null, nba: null };
+    return { nhl: null, nfl: null, nba: null, soccer: null };
   }
 }
 
 export function saveFavorite(league: League, code: string | null): void {
   try {
-    const key = league === "nhl" ? FAV_NHL_KEY : league === "nfl" ? FAV_NFL_KEY : FAV_NBA_KEY;
+    const key = league === "nhl" ? FAV_NHL_KEY : league === "nfl" ? FAV_NFL_KEY : league === "nba" ? FAV_NBA_KEY : FAV_SOCCER_KEY;
     if (code) localStorage.setItem(key, code);
     else localStorage.removeItem(key);
   } catch {
@@ -208,6 +286,7 @@ export function loadFavoriteTeam(): FavoriteTeam {
   if (favs.nhl) return { league: "nhl", code: favs.nhl };
   if (favs.nfl) return { league: "nfl", code: favs.nfl };
   if (favs.nba) return { league: "nba", code: favs.nba };
+  if (favs.soccer) return { league: "soccer", code: favs.soccer };
   return null;
 }
 

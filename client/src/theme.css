@@ -955,6 +955,20 @@ h1, h2, h3 { font-family: Rockwell, Georgia, serif; margin: 0; }
     linear-gradient(90deg, transparent 46%, #2b1a10 46% 54%, transparent 54%);
 }
 .sport-shape .hoop::after { content: ""; position: absolute; inset: 5px; border-radius: 50%; border: 2px solid #2b1a10; border-top-color: transparent; border-bottom-color: transparent; transform: rotate(24deg); }
+/* Soccer ball: white leather with a black pentagon and seam shading */
+.sport-shape .soccerball {
+  width: 50px; height: 50px; border-radius: 50%; position: relative;
+  background: radial-gradient(circle at 35% 30%, #ffffff, #e8e4da 55%, #b9b2a4 85%);
+  box-shadow: 0 7px 14px rgba(0,0,0,.45), inset 0 -5px 8px rgba(0,0,0,.28), inset 0 3px 4px rgba(255,255,255,.6);
+}
+.sport-shape .soccerball::before { content: ""; position: absolute; left: 50%; top: 50%; width: 18px; height: 18px; transform: translate(-50%,-50%);
+  background: #1c1a17; clip-path: polygon(50% 0%, 100% 38%, 81% 100%, 19% 100%, 0% 38%); }
+.sport-shape .soccerball::after { content: ""; position: absolute; inset: 4px; border-radius: 50%;
+  background:
+    linear-gradient(115deg, transparent 44%, rgba(28,26,23,.55) 44% 48%, transparent 48%),
+    linear-gradient(245deg, transparent 44%, rgba(28,26,23,.55) 44% 48%, transparent 48%),
+    linear-gradient(180deg, transparent 30%, rgba(28,26,23,.4) 30% 34%, transparent 34%);
+}
 .sport-shape.active em { color: var(--gold-deep); }
 .sport-shape.active .shape { transform: scale(1.08) translateY(-2px); box-shadow: 0 0 0 3px var(--gold), 0 10px 20px rgba(0,0,0,.4), 0 0 22px color-mix(in srgb, var(--gold) 60%, transparent); }
 @media (min-width: 760px) {
@@ -1233,6 +1247,24 @@ h1, h2, h3 { font-family: Rockwell, Georgia, serif; margin: 0; }
 }
 .mode-shape .hoop::before { content: ""; position: absolute; inset: 0; border-radius: 50%; background: linear-gradient(180deg, transparent 46%, #2b1a10 46% 54%, transparent 54%), linear-gradient(90deg, transparent 46%, #2b1a10 46% 54%, transparent 54%); }
 .mode-shape .hoop::after { content: ""; position: absolute; inset: 4px; border-radius: 50%; border: 2px solid #2b1a10; border-top-color: transparent; border-bottom-color: transparent; transform: rotate(24deg); }
+/* Night-match floodlit pitch: deep green stripes, distinct from NFL turf */
+.mode-shape .rink.pitch {
+  background: repeating-linear-gradient(90deg, rgba(255,255,255,.05) 0 12px, transparent 12px 24px), linear-gradient(180deg, #2e7d46 0%, #1f5c33 55%, #123a20 100%);
+  box-shadow: inset 0 2px 6px rgba(255,255,255,.3), inset 0 -4px 8px rgba(0,0,0,.5), 0 8px 16px -6px rgba(10,50,25,.6);
+}
+.mode-shape .rink.pitch::after { content: ""; position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 0%, rgba(255,255,240,.28), transparent 60%); pointer-events: none; }
+.mode-shape .soccerball {
+  width: 44px; height: 44px; border-radius: 50%; position: relative;
+  background: radial-gradient(circle at 36% 30%, #ffffff, #e6e1d6 55%, #b3ac9d 85%);
+  box-shadow: 0 7px 14px rgba(0,0,0,.5), inset 0 -4px 8px rgba(0,0,0,.3), inset 0 3px 4px rgba(255,255,255,.6);
+}
+.mode-shape .soccerball::before { content: ""; position: absolute; left: 50%; top: 50%; width: 16px; height: 16px; transform: translate(-50%,-50%);
+  background: #1c1a17; clip-path: polygon(50% 0%, 100% 38%, 81% 100%, 19% 100%, 0% 38%); }
+.mode-shape .soccerball::after { content: ""; position: absolute; inset: 3px; border-radius: 50%;
+  background:
+    linear-gradient(115deg, transparent 44%, rgba(28,26,23,.5) 44% 48%, transparent 48%),
+    linear-gradient(245deg, transparent 44%, rgba(28,26,23,.5) 44% 48%, transparent 48%);
+}
 .mode-shape .shape { position: relative; z-index: 1; transition: transform .15s ease; }
 /* Ice hockey puck: deep vulcanized-rubber black with knurled edge */
 .mode-shape .puck {
@@ -1336,6 +1368,20 @@ html[data-dimmed="true"] .brightness-veil { display: block; }
 .flip-meter .winner-track { height: 14px; }
 .flip-labels { display: flex; justify-content: space-between; margin-top: 4px; font-size: 12px; color: var(--dim); }
 .flip-labels b { color: var(--text); font-size: 14px; }
+.flip-labels.three { display: grid; grid-template-columns: 1fr auto 1fr; align-items: baseline; }
+.flip-labels.three span:nth-child(2) { text-align: center; }
+.flip-labels.three span:nth-child(3) { text-align: right; }
+/* Three-way result bar: home (green) · draw (gold) · away (orange) */
+.winner-track.three-way u { height: 100%; display: block; text-decoration: none;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--gold) 78%, #fff 22%), var(--gold) 60%, color-mix(in srgb, var(--gold) 80%, #000 20%)); }
+/* Soccer board outcome rows: one line per result (home / draw / away) */
+.soccer-outcome { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--rule); }
+.soccer-outcome:first-of-type { border-top: none; }
+.soccer-outcome > strong { min-width: 92px; font-size: 13px; }
+.soccer-outcome .quote-books { display: flex; flex-wrap: wrap; gap: 4px 10px; flex: 1; font-size: 12px; color: var(--dim); }
+.soccer-outcome .quote-books b { color: var(--text); }
+.soccer-board-head { margin-bottom: 6px; }
+.soccer-board-head .metric-tabs { margin: 0; }
 
 /* Slate flip cards — every real game shows its live model flip % in the matchup lab */
 .slate-flips { display: grid; gap: 10px; margin: 14px 0 4px; }
@@ -1693,6 +1739,22 @@ body[data-sport="nba"] .app-shell {
     radial-gradient(circle at 50% 16%, color-mix(in srgb, #ffffff 26%, transparent) 0 5px, transparent 7px),
     repeating-linear-gradient(90deg, transparent 0 96px, color-mix(in srgb, #ffffff 20%, transparent) 96px 98px),
     linear-gradient(180deg, color-mix(in srgb, #b57a3a 17%, var(--paper)), color-mix(in srgb, #b57a3a 8%, var(--paper)) 460px, var(--paper)),
+    radial-gradient(90% 45% at 50% 108%, color-mix(in srgb, var(--accent) 26%, transparent), transparent 62%),
+    var(--paper);
+}
+
+/* Soccer side — night match under the floodlights: deep green pitch tint,
+   faint center circle and halfway line, team color in the air */
+body[data-sport="soccer"] .app-shell {
+  background:
+    radial-gradient(120% 55% at 50% -12%, color-mix(in srgb, #fffbe8 22%, transparent), transparent 58%),
+    radial-gradient(90% 50% at 0% 0%, color-mix(in srgb, var(--accent) 38%, transparent), transparent 60%),
+    radial-gradient(70% 42% at 100% 6%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 62%),
+    radial-gradient(circle at 50% 14%, transparent 0 64px, color-mix(in srgb, #ffffff 30%, transparent) 64px 67px, transparent 69px),
+    radial-gradient(circle at 50% 14%, color-mix(in srgb, #ffffff 24%, transparent) 0 5px, transparent 7px),
+    linear-gradient(180deg, transparent 13.4%, color-mix(in srgb, #ffffff 22%, transparent) 13.4% 13.7%, transparent 14%),
+    repeating-linear-gradient(90deg, transparent 0 110px, color-mix(in srgb, #ffffff 12%, transparent) 110px 112px),
+    linear-gradient(180deg, color-mix(in srgb, #1f6b3a 16%, var(--paper)), color-mix(in srgb, #1f6b3a 7%, var(--paper)) 460px, var(--paper)),
     radial-gradient(90% 45% at 50% 108%, color-mix(in srgb, var(--accent) 26%, transparent), transparent 62%),
     var(--paper);
 }

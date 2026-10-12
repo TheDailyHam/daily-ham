@@ -75,6 +75,12 @@ function marketNames(sport: "nhl" | "nfl" | "nba"): Record<string, string> {
 }
 const SPORT_KEYS = { nhl: "icehockey_nhl", nfl: "americanfootball_nfl", nba: "basketball_nba" } as const;
 
+// Soccer is per-LEAGUE (two leagues under one "soccer" sport): one Odds API
+// request per league per refresh, ~2/day total — well inside the 500/month.
+export const SOCCER_ODDS_API_KEYS = { mls: "soccer_usa_mls", epl: "soccer_epl" } as const;
+export type SoccerOddsLeague = keyof typeof SOCCER_ODDS_API_KEYS;
+const SOCCER_MARKET_NAMES = { h2h: "Moneyline", spreads: "Spread", totals: "Total Goals" };
+
 export async function validateOddsApiKey(args: { apiKey: string }) {
   // One cheap request: a single market keeps validation inside the free budget.
   const params = new URLSearchParams({ apiKey: args.apiKey, regions: "us", markets: "h2h" });
@@ -112,6 +118,23 @@ export async function fetchOddsApiEvents(args: { apiKey: string; sport?: "nhl" |
   return { ok: true as const, status: 200 as const, payload: { data: events, sport, marketNames: names } };
 }
 
+export async function fetchOddsApiSoccerEvents(args: { apiKey: string; league: SoccerOddsLeague }) {
+  // Same rolling window as the other sports: one response carries every
+  // game, market and bookmaker, so this costs exactly 1 request per league.
+  const now = new Date();
+  const isoNoMs = (d: Date) => d.toISOString().replace(/\.\d{3}Z$/, "Z");
+  const commenceTimeFrom = isoNoMs(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - WINDOW_DAYS_BEFORE, 0, 0, 0)));
+  const commenceTimeTo = isoNoMs(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + WINDOW_DAYS_AFTER, 23, 59, 59)));
+  const params = new URLSearchParams({
+    apiKey: args.apiKey, regions: "us", markets: "h2h,spreads,totals",
+    oddsFormat: "american", dateFormat: "iso", commenceTimeFrom, commenceTimeTo,
+  });
+  const response = await fetch(`https://api.the-odds-api.com/v4/sports/${SOCCER_ODDS_API_KEYS[args.league]}/odds/?${params.toString()}`, { headers: { Accept: "application/json" } });
+  if (!response.ok) return failure(response.status, await errorDetail(response));
+  const payload = (await response.json()) as unknown;
+  const events = Array.isArray(payload) ? payload : [];
+  return { ok: true as const, status: 200 as const, payload: { data: events, league: args.league, marketNames: SOCCER_MARKET_NAMES } };
+}
 export type OddsApiOffer = {
   eventId: string; matchup: string; startsAt: string | null; oddId: string;
   stat: string; marketName: string; entity: string; entityType: "player" | "team" | "event";

@@ -55,6 +55,73 @@ export type UsageStats = {
   bySport: { sport: string; views: number }[];
 };
 
+// ---------------------------------------------------------------------------
+// Soccer (server leg: server/src/soccer.ts). Shapes mirror the server's
+// zod contracts exactly; every soccer view hides gracefully until the
+// getSoccer* actions resolve.
+// ---------------------------------------------------------------------------
+export type SoccerLeague = "mls" | "epl";
+export type SoccerGameSide = { abbrev: string; name: string; score: number | null; winner: boolean };
+export type SoccerThreeWay = { home: number; draw: number; away: number };
+export type SoccerGame = {
+  id: number; date: string; startsAt: string; state: string; detail: string;
+  shortName: string; away: SoccerGameSide; home: SoccerGameSide;
+  modelThreeWay: SoccerThreeWay | null;
+};
+export type SoccerStandingRow = {
+  team: string; name: string; played: number; wins: number; draws: number; losses: number; points: number;
+  goalsFor: number; goalsAgainst: number; goalDifference: number; streak: string | null;
+  attackRating: number | null; defenseRating: number | null;
+  modelHome: number | null; modelDraw: number | null; modelAway: number | null;
+};
+export type SoccerOverview = {
+  league: SoccerLeague; season: number; fetchedAt: string;
+  scheduleSourceUrl: string; standingsSourceUrl: string;
+  games: SoccerGame[]; standings: SoccerStandingRow[];
+};
+export type SoccerMatchupTeam = {
+  team: string; games: number; wins: number; draws: number; losses: number;
+  venueGames: number; venueWins: number; venueDraws: number; venueLosses: number;
+  goalsFor: number; goalsAgainst: number; venueGoalsFor: number; venueGoalsAgainst: number;
+  form: string;
+};
+export type SoccerMatchup = {
+  league: SoccerLeague; away: SoccerMatchupTeam; home: SoccerMatchupTeam;
+  homeWinProbability: number | null; drawProbability: number | null; awayWinProbability: number | null;
+  edgeTeam: string | null; edgeProbability: number | null;
+  over25Probability: number | null; bttsProbability: number | null; margin3PlusProbability: number | null;
+  homeExpectedGoals: number | null; awayExpectedGoals: number | null;
+  headToHead: { games: number; homeWins: number; draws: number; awayWins: number };
+  fetchedAt: string; sourceUrl: string; sampleNote: string;
+};
+export type SoccerPlayer = {
+  id: number; name: string; jersey: string | null; position: string;
+  games: number | null; goals: number | null; assists: number | null;
+};
+export type SoccerRoster = { league: SoccerLeague; team: string; season: number; fetchedAt: string; sourceUrl: string; players: SoccerPlayer[] };
+export type SoccerPlayerGame = {
+  gameId: number; gameDate: string; opponent: string; homeRoad: "home" | "away";
+  result: "W" | "D" | "L"; teamScore: number; oppScore: number;
+  goals: number; assists: number; appearances: number;
+};
+export type SoccerPlayerGameLog = {
+  league: SoccerLeague; playerId: number; playerName: string | null; team: string; season: number;
+  fetchedAt: string; sourceUrl: string; games: SoccerPlayerGame[];
+};
+export type SoccerHotPlayer = { name: string; team: string; position: string | null; goals: number; games: number; braces: number };
+export type SoccerStreakTeam = { team: string; name: string; streak: string; points: number };
+export type SoccerHotStreaks = {
+  league: SoccerLeague; fetchedAt: string; sourceUrl: string;
+  windowStart: string; windowEnd: string; players: SoccerHotPlayer[]; teams: SoccerStreakTeam[];
+};
+export type SoccerColdPlayer = { name: string; team: string; seasonGoals: number; appearances: number };
+export type SoccerColdStreaks = {
+  league: SoccerLeague; fetchedAt: string; sourceUrl: string;
+  windowStart: string; windowEnd: string; players: SoccerColdPlayer[]; teams: SoccerStreakTeam[];
+};
+export type ScorerEntry = { name: string; team: string; position?: string | null; games: number; stat: number; rate: number };
+export type ScorerBoard = { teams: Record<string, ScorerEntry[]> };
+
 export const api = {
   getDashboard: (args: ActionArgs<"getDashboard">) => callAction("getDashboard", args),  refreshDaily: (args: ActionArgs<"refreshDaily">) => callAction("refreshDaily", args),
   getNhlOverview: (args: ActionArgs<"getNhlOverview">) => callAction("getNhlOverview", args),
@@ -92,6 +159,16 @@ export const api = {
   // Pending server actions (see callPending above): fail gracefully client-side until the server lands them.
   getKeyInjuries: (args: { sport: "nhl" | "nfl" | "nba" }) => callPending<KeyInjuries>("getKeyInjuries", args),
   getUsageStats: (args: { adminToken?: string }) => callPending<UsageStats>("getUsageStats", args),
+  // Soccer leg (server landing in parallel): every view hides gracefully until these resolve.
+  getSoccerOverview: (args: { league: SoccerLeague }) => callPending<SoccerOverview>("getSoccerOverview", args),
+  getSoccerMatchup: (args: { league: SoccerLeague; awayTeam: string; homeTeam: string; force?: boolean }) => callPending<SoccerMatchup>("getSoccerMatchup", args),
+  getSoccerHotStreaks: (args: { league: SoccerLeague; force?: boolean }) => callPending<SoccerHotStreaks>("getSoccerHotStreaks", args),
+  getSoccerColdStreaks: (args: { league: SoccerLeague; force?: boolean }) => callPending<SoccerColdStreaks>("getSoccerColdStreaks", args),
+  getSoccerRoster: (args: { league: SoccerLeague; team: string }) => callPending<SoccerRoster>("getSoccerRoster", args),
+  getSoccerPlayerGameLog: (args: { league: SoccerLeague; team: string; playerId: number }) => callPending<SoccerPlayerGameLog>("getSoccerPlayerGameLog", args),
+  getSoccerBoard: (args: { league: SoccerLeague }) => callPending<SoccerBoardData>("getPremiumBoard", { sport: "soccer", league: args.league }),
+  getSoccerKeyInjuries: (args: { league: SoccerLeague }) => callPending<KeyInjuries>("getKeyInjuries", { sport: "soccer", league: args.league }),
+  getSoccerLikelyScorers: (args: { league: SoccerLeague }) => callPending<ScorerBoard>("getLikelyScorers", { sport: "soccer", league: args.league }),
 };
 
 // Re-exported for convenience so client code can do
@@ -100,3 +177,7 @@ export const api = {
 //     type Board = ApiResponse<typeof api, "getPremiumBoard">;
 export type ApiRequest<TApi, TName extends keyof TApi> = TApi[TName] extends (...args: infer P) => unknown ? P[0] : never;
 export type ApiResponse<TApi, TName extends keyof TApi> = TApi[TName] extends (...args: never[]) => infer R ? Awaited<R> : never;
+
+// Premium board payload shape, reused by the soccer board (same server
+// action, sport="soccer").
+export type SoccerBoardData = ApiResponse<typeof api, "getPremiumBoard">;
