@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import express from "express";
@@ -88,7 +88,21 @@ app.post("/api/actions", async (req, res) => {
 const clientDir = resolve(process.env.CLIENT_DIR ?? "./client/dist");
 if (existsSync(clientDir)) {
   app.use(express.static(clientDir, { maxAge: "1h", index: false }));
-  app.get(/^(?!\/api\/).*/, (_req, res) => {
+  // The owner console gets its own app identity (name, icon, start_url) served
+  // server-side so installers see it deterministically — no client race.
+  let ownerHtml: string | null = null;
+  try {
+    ownerHtml = readFileSync(join(clientDir, "index.html"), "utf8")
+      .replace('rel="manifest" href="/manifest.json"', 'rel="manifest" href="/owner-manifest.json"')
+      .replace('<meta name="theme-color" content="#14100b" />', '<meta name="theme-color" content="#1a1410" />')
+      .replace("<title>The Daily Ham — NHL & NFL · Fresh Cuts Daily</title>", "<title>Daily Ham Owner — Private Console</title>");
+  } catch { ownerHtml = null; /* fall through to the stock shell */ }
+  app.get(/^(?!\/api\/).*/, (req, res) => {
+    const isOwner = req.path === "/owner" || req.path.startsWith("/owner/");
+    if (isOwner && ownerHtml) {
+      res.type("html").send(ownerHtml);
+      return;
+    }
     res.sendFile(join(clientDir, "index.html"));
   });
 } else {
