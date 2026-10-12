@@ -1,7 +1,7 @@
 // Daily Ham service worker: network-first for the app shell (so pushes go live
 // immediately), cache-first for hashed static assets, network-only for API.
 const CACHE = "daily-ham-v3";
-const SHELL = ["/", "/index.html", "/manifest.json"];
+const SHELL = ["/", "/index.html", "/owner", "/manifest.json", "/owner-manifest.json"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

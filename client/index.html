@@ -7,6 +7,19 @@
     <meta name="description" content="The Daily Ham — Fresh Cuts Daily. NHL & NFL odds boards, matchup calculators, hot streaks, rosters and standings." />
     <link rel="icon" href="/logo.jpg" />
     <link rel="manifest" href="/manifest.json" />
+    <script>
+      // The owner console installs as its own separate app (own name, icon and
+      // start address) so it never merges with the public app on install.
+      try {
+        if (/(^|\/)owner(\/|$)/.test(window.location.pathname) || window.location.hash.indexOf("#/owner") === 0) {
+          var m = document.querySelector('link[rel="manifest"]');
+          if (m) m.setAttribute("href", "/owner-manifest.json");
+          var t = document.querySelector('meta[name="theme-color"]');
+          if (t) t.setAttribute("content", "#1a1410");
+          document.title = "Daily Ham Owner — Private Console";
+        }
+      } catch (e) { /* owner manifest swap is best-effort */ }
+    </script>
     <meta name="theme-color" content="#14100b" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
