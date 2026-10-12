@@ -646,6 +646,11 @@ const TUTORIAL_SLIDES: { icon: string; kicker: string; title: string; points: st
     "Flip % is the model's win estimate from each team's actual record — e.g. 58% vs 42%.",
     "Under it sit the two likely scorers: season leaders by goals (NHL), TDs (NFL), points (NBA) or goals (soccer). A stat, not a prop.",
   ]},
+  { icon: "⚠️", kicker: "INJURY WATCH", title: "Know who's out.", points: [
+    "When a key player is officially ruled out — a starting QB, a top scorer, a number-one goalie — you'll see a ⚠ chip on that team's game card.",
+    "Designations come straight from official injury reports, with the report date shown. Nothing is guessed.",
+    "Always check the chip before trusting a line: a missing star moves the number more than any model.",
+  ]},
   { icon: "💲", kicker: "READING THE ODDS", title: "Best · DraftKings · FanDuel · BetMGM", points: [
     "Every moneyline card lists the best price plus DraftKings, FanDuel and BetMGM.",
     "Tap any price to add it to your parlay slip.",
@@ -710,13 +715,13 @@ const TUTORIAL_SLIDES: { icon: string; kicker: string; title: string; points: st
     "A flip alert fires when the model likes a side more than the books do.",
     "Coin toss means it's too close to call — no edge either way.",
   ]},
-  { icon: "🎯", kicker: "MATCHUP CALCULATOR", title: "Six ways to slice it", points: [
-    "Pick any game for the model's take: winner, first score, and situational calls like a 14+ blowout or overtime.",
+  { icon: "🎯", kicker: "MATCHUP CALCULATOR", title: "Every angle, sliced.", points: [
+    "Pick any game for the model's take: winner, first score, and situational calls — a 14+ blowout or overtime in football, first basket in hoops, home/draw/away in soccer.",
     "Every percentage is a model estimate from official game data — not a sportsbook price.",
     "Use it to sanity-check your own read before you bet.",
   ]},
   { icon: "📊", kicker: "CHARTS & GRAPHS", title: "How to read the visuals", points: [
-    "Flip % bar: the split is the model's win estimate — more fill, more likely.",
+    "Flip % bar: the split is the model's win estimate — more fill, more likely. Soccer shows three segments: home, draw, away.",
     "Glass probability bars: fuller means more likely. Same idea everywhere.",
     "Player trend graph: per-game stat over recent games — a rising line means heating up.",
     "Donut chart: how the books split their prices. Tendency bars: how often a team scores first.",
@@ -799,7 +804,7 @@ function JamonView({ sport }: { sport: Sport }) {
     <div className="jamon-hero">
       <p className="kicker">JAMÓN IBÉRICO</p>
       <h1>Cody's picks</h1>
-      <p>The premium cut — {sport === "nhl" ? "hockey" : sport === "nfl" ? "football" : "basketball"} picks, plated by hand.</p>
+      <p>The premium cut — {sport === "nhl" ? "hockey" : sport === "nfl" ? "football" : sport === "nba" ? "basketball" : "soccer"} picks, plated by hand.</p>
     </div>
     {plates.isPending ? <div className="slate-loading">Plating the picks…</div> : visible.length === 0 ? (
       <div className="history-empty jamon-empty"><strong>No picks plated yet.</strong><span>{adminToken ? "Add your first plate in Settings → My plates." : "Check back soon — Cody's personal picks land here."}</span></div>
