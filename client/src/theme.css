@@ -944,6 +944,17 @@ h1, h2, h3 { font-family: Rockwell, Georgia, serif; margin: 0; }
   box-shadow: 0 7px 14px rgba(0,0,0,.45), inset 0 -5px 8px rgba(0,0,0,.5), inset 0 3px 4px rgba(255,255,255,.28);
 }
 .sport-shape .ball::after { content: ""; position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); width: 32px; height: 12px; background: repeating-linear-gradient(90deg, #f7f2e7 0 2px, transparent 2px 7px), linear-gradient(#f7f2e7,#f7f2e7); background-size: 100% 6px, 100% 2px; background-position: center; background-repeat: no-repeat; }
+.sport-shape .hoop {
+  width: 50px; height: 50px; border-radius: 50%; position: relative;
+  background: radial-gradient(circle at 35% 30%, #eda45c, #c96a1e 55%, #8a3f0e 80%);
+  box-shadow: 0 7px 14px rgba(0,0,0,.45), inset 0 -5px 8px rgba(0,0,0,.5), inset 0 3px 4px rgba(255,255,255,.28);
+}
+.sport-shape .hoop::before { content: ""; position: absolute; inset: 0; border-radius: 50%;
+  background:
+    linear-gradient(180deg, transparent 46%, #2b1a10 46% 54%, transparent 54%),
+    linear-gradient(90deg, transparent 46%, #2b1a10 46% 54%, transparent 54%);
+}
+.sport-shape .hoop::after { content: ""; position: absolute; inset: 5px; border-radius: 50%; border: 2px solid #2b1a10; border-top-color: transparent; border-bottom-color: transparent; transform: rotate(24deg); }
 .sport-shape.active em { color: var(--gold-deep); }
 .sport-shape.active .shape { transform: scale(1.08) translateY(-2px); box-shadow: 0 0 0 3px var(--gold), 0 10px 20px rgba(0,0,0,.4), 0 0 22px color-mix(in srgb, var(--gold) 60%, transparent); }
 @media (min-width: 760px) {
@@ -1210,6 +1221,18 @@ h1, h2, h3 { font-family: Rockwell, Georgia, serif; margin: 0; }
   box-shadow: inset 0 2px 6px rgba(255,255,255,.35), inset 0 -4px 8px rgba(0,0,0,.4), 0 8px 16px -6px rgba(30,80,30,.5);
 }
 .mode-shape .rink.turf::after { content: ""; position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 0%, rgba(255,255,255,.22), transparent 60%); pointer-events: none; }
+.mode-shape .rink.court {
+  background: repeating-linear-gradient(90deg, rgba(255,255,255,.06) 0 12px, transparent 12px 24px), linear-gradient(180deg, #c98d4e 0%, #a86f33 55%, #7d521f 100%);
+  box-shadow: inset 0 2px 6px rgba(255,255,255,.35), inset 0 -4px 8px rgba(0,0,0,.4), 0 8px 16px -6px rgba(120,80,30,.5);
+}
+.mode-shape .rink.court::after { content: ""; position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 0%, rgba(255,255,255,.22), transparent 60%); pointer-events: none; }
+.mode-shape .hoop {
+  width: 44px; height: 44px; border-radius: 50%; position: relative;
+  background: radial-gradient(circle at 36% 30%, #eda45c, #c96a1e 55%, #8a3f0e 80%);
+  box-shadow: 0 7px 14px rgba(0,0,0,.5), inset 0 -4px 8px rgba(0,0,0,.55), inset 0 3px 4px rgba(255,255,255,.3);
+}
+.mode-shape .hoop::before { content: ""; position: absolute; inset: 0; border-radius: 50%; background: linear-gradient(180deg, transparent 46%, #2b1a10 46% 54%, transparent 54%), linear-gradient(90deg, transparent 46%, #2b1a10 46% 54%, transparent 54%); }
+.mode-shape .hoop::after { content: ""; position: absolute; inset: 4px; border-radius: 50%; border: 2px solid #2b1a10; border-top-color: transparent; border-bottom-color: transparent; transform: rotate(24deg); }
 .mode-shape .shape { position: relative; z-index: 1; transition: transform .15s ease; }
 /* Ice hockey puck: deep vulcanized-rubber black with knurled edge */
 .mode-shape .puck {
@@ -1656,6 +1679,20 @@ body[data-sport="nfl"] .app-shell {
     repeating-linear-gradient(90deg, transparent 0 74px, color-mix(in srgb, #ffffff 34%, transparent) 74px 78px),
     repeating-linear-gradient(90deg, color-mix(in srgb, #2e7d3a 9%, transparent) 0 74px, transparent 74px 148px),
     linear-gradient(180deg, color-mix(in srgb, #2e7d3a 20%, var(--paper)), color-mix(in srgb, #2e7d3a 9%, var(--paper)) 460px, var(--paper)),
+    radial-gradient(90% 45% at 50% 108%, color-mix(in srgb, var(--accent) 26%, transparent), transparent 62%),
+    var(--paper);
+}
+
+/* Basketball side — own the hardwood: warm wood tint, faint court lines, team color in the air */
+body[data-sport="nba"] .app-shell {
+  background:
+    radial-gradient(120% 60% at 50% -10%, color-mix(in srgb, var(--gold-pale) 26%, transparent), transparent 60%),
+    radial-gradient(90% 50% at 0% 0%, color-mix(in srgb, var(--accent) 38%, transparent), transparent 60%),
+    radial-gradient(70% 42% at 100% 6%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 62%),
+    radial-gradient(circle at 50% 16%, transparent 0 56px, color-mix(in srgb, #ffffff 32%, transparent) 56px 59px, transparent 61px),
+    radial-gradient(circle at 50% 16%, color-mix(in srgb, #ffffff 26%, transparent) 0 5px, transparent 7px),
+    repeating-linear-gradient(90deg, transparent 0 96px, color-mix(in srgb, #ffffff 20%, transparent) 96px 98px),
+    linear-gradient(180deg, color-mix(in srgb, #b57a3a 17%, var(--paper)), color-mix(in srgb, #b57a3a 8%, var(--paper)) 460px, var(--paper)),
     radial-gradient(90% 45% at 50% 108%, color-mix(in srgb, var(--accent) 26%, transparent), transparent 62%),
     var(--paper);
 }

@@ -54,17 +54,26 @@ const NFL_TEAM_CODES: Record<string, string> = {
   "new york jets": "NYJ", "philadelphia eagles": "PHI", "pittsburgh steelers": "PIT", "seattle seahawks": "SEA",
   "san francisco 49ers": "SF", "tampa bay buccaneers": "TB", "tennessee titans": "TEN", "washington commanders": "WSH",
 };
-export function oddsApiTeamCode(name: string, sport: "nhl" | "nfl" = "nhl"): string | null {
-  const map = sport === "nfl" ? NFL_TEAM_CODES : NHL_TEAM_CODES;
+const NBA_TEAM_CODES: Record<string, string> = {
+  "atlanta hawks": "ATL", "boston celtics": "BOS", "brooklyn nets": "BKN", "charlotte hornets": "CHA",
+  "chicago bulls": "CHI", "cleveland cavaliers": "CLE", "dallas mavericks": "DAL", "denver nuggets": "DEN",
+  "detroit pistons": "DET", "golden state warriors": "GS", "houston rockets": "HOU", "indiana pacers": "IND",
+  "la clippers": "LAC", "los angeles clippers": "LAC", "los angeles lakers": "LAL", "memphis grizzlies": "MEM",
+  "miami heat": "MIA", "milwaukee bucks": "MIL", "minnesota timberwolves": "MIN", "new orleans pelicans": "NO",
+  "new york knicks": "NY", "oklahoma city thunder": "OKC", "orlando magic": "ORL", "philadelphia 76ers": "PHI",
+  "phoenix suns": "PHX", "portland trail blazers": "POR", "sacramento kings": "SAC", "san antonio spurs": "SA",
+  "toronto raptors": "TOR", "utah jazz": "UTAH", "washington wizards": "WSH",
+};
+export function oddsApiTeamCode(name: string, sport: "nhl" | "nfl" | "nba" = "nhl"): string | null {
+  const map = sport === "nfl" ? NFL_TEAM_CODES : sport === "nba" ? NBA_TEAM_CODES : NHL_TEAM_CODES;
   return map[normalizeTeamName(name)] ?? null;
 }
 
-function marketNames(sport: "nhl" | "nfl"): Record<string, string> {
-  return sport === "nfl"
-    ? { h2h: "Moneyline", spreads: "Spread", totals: "Total Points" }
-    : { h2h: "Moneyline", spreads: "Puck Line", totals: "Total Goals" };
+function marketNames(sport: "nhl" | "nfl" | "nba"): Record<string, string> {
+  if (sport === "nhl") return { h2h: "Moneyline", spreads: "Puck Line", totals: "Total Goals" };
+  return { h2h: "Moneyline", spreads: "Spread", totals: "Total Points" };
 }
-const SPORT_KEYS = { nhl: "icehockey_nhl", nfl: "americanfootball_nfl" } as const;
+const SPORT_KEYS = { nhl: "icehockey_nhl", nfl: "americanfootball_nfl", nba: "basketball_nba" } as const;
 
 export async function validateOddsApiKey(args: { apiKey: string }) {
   // One cheap request: a single market keeps validation inside the free budget.
@@ -81,7 +90,7 @@ export async function validateOddsApiKey(args: { apiKey: string }) {
 const WINDOW_DAYS_BEFORE = 1;
 const WINDOW_DAYS_AFTER = 3;
 
-export async function fetchOddsApiEvents(args: { apiKey: string; sport?: "nhl" | "nfl" }) {
+export async function fetchOddsApiEvents(args: { apiKey: string; sport?: "nhl" | "nfl" | "nba" }) {
   const sport = args.sport ?? "nhl";
   const sportKey = SPORT_KEYS[sport];
   const names = marketNames(sport);
@@ -111,7 +120,7 @@ export type OddsApiOffer = {
   openingOdds: string | null; openingLine: string | null;
 };
 
-export function parseOddsApiPayload(raw: unknown, opts?: { sport?: "nhl" | "nfl"; marketNames?: Record<string, string> }): { eventCount: number; marketCount: number; offerCount: number; offers: OddsApiOffer[] } {
+export function parseOddsApiPayload(raw: unknown, opts?: { sport?: "nhl" | "nfl" | "nba"; marketNames?: Record<string, string> }): { eventCount: number; marketCount: number; offerCount: number; offers: OddsApiOffer[] } {
   const sport = opts?.sport ?? "nhl";
   const names = opts?.marketNames ?? marketNames(sport);
   const events = Array.isArray(raw) ? raw : [];

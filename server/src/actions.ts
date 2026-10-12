@@ -38,15 +38,24 @@ import {
   fetchNflScoreboard, fetchNflStandings, fetchNflTeamGames, nflDivision, nflTeamMeta,
   type NflTeamGame,
 } from "./nfl.js";
+import {
+  NBA_SEASON, enrichNbaGameDetails, fetchNbaGameSummary, fetchNbaRoster,
+  fetchNbaScoreboard, fetchNbaStandings, fetchNbaTeamGames, nbaTeamMeta,
+  type NbaTeamGame,
+} from "./nba.js";
 import { and, desc, eq, gte, lt } from "drizzle-orm";
 import * as schema from "./schema.js";
 
-const sports = ["nhl", "nfl"] as const;
+const sports = ["nhl", "nfl", "nba"] as const;
 type Sport = (typeof sports)[number];
 const teamCodes = ["ANA", "BOS", "BUF", "CAR", "CBJ", "CGY", "CHI", "COL", "DAL", "DET", "EDM", "FLA", "LAK", "MIN", "MTL", "NJD", "NSH", "NYI", "NYR", "OTT", "PHI", "PIT", "SEA", "SJS", "STL", "TBL", "TOR", "UTA", "VAN", "VGK", "WPG", "WSH"] as const;
 // ESPN NFL abbreviations (verified 2026-10-08). Note BUF/DAL/PIT collide
 // with NHL codes — the two sports never share a schema or action.
 const nflTeamCodes = ["ARI", "ATL", "BAL", "BUF", "CAR", "CHI", "CIN", "CLE", "DAL", "DEN", "DET", "GB", "HOU", "IND", "JAX", "KC", "LAC", "LAR", "LV", "MIA", "MIN", "NE", "NO", "NYG", "NYJ", "PHI", "PIT", "SEA", "SF", "TB", "TEN", "WSH"] as const;
+// ESPN NBA abbreviations (verified 2026-10-11). Note NY/UTAH and several
+// codes that collide with NHL/NFL (ATL, BOS, CHI, DAL, DET, MIA, MIL, MIN,
+// PHI, WSH) — the three sports never share a schema or action.
+const nbaTeamCodes = ["ATL", "BOS", "BKN", "CHA", "CHI", "CLE", "DAL", "DEN", "DET", "GS", "HOU", "IND", "LAC", "LAL", "MEM", "MIA", "MIL", "MIN", "NO", "NY", "OKC", "ORL", "PHI", "PHX", "POR", "SAC", "SA", "TOR", "UTAH", "WSH"] as const;
 const SOURCE_URL = "https://api.flashodds.live/api/v1/sample";
 const DOCS_URL = "https://api.flashodds.live/docs";
 const NHL_API = "https://api-web.nhle.com/v1";
@@ -330,10 +339,10 @@ async function fetchPremiumAndCache(ctx: Ctx, sport: Sport, provider: OddsProvid
     const result = await fetchOddsApiEvents({ apiKey: provider.apiKey, sport });
     if (!result.ok) throw providerError(result, "theoddsapi");
     const mapped = parseOddsApiPayload(result.payload.data, { sport, marketNames: result.payload.marketNames });
-    const leagueLabel = sport === "nfl" ? "NFL" : "NHL";
+    const leagueLabel = sport === "nfl" ? "NFL" : sport === "nba" ? "NBA" : "NHL";
     parsed = { sport, fetchedAt: fetchedAt.toISOString(), eventCount: mapped.eventCount, marketCount: mapped.marketCount, offerCount: mapped.offerCount, offers: mapped.offers, cacheStatus: "fresh", healthMessage: `Odds updated successfully (The Odds API · ${leagueLabel})` };
   } else {
-    const league = sport === "nfl" ? "NFL" as const : "NHL" as const;
+    const league = sport === "nfl" ? "NFL" as const : sport === "nba" ? "NBA" as const : "NHL" as const;
     let result = await fetchSportsGameOddsEvents({ apiKey: provider.apiKey, league });
     if (!result.ok && result.reason === "provider_error") result = await fetchSportsGameOddsEvents({ apiKey: provider.apiKey, league });
     if (!result.ok) throw providerError(result);
@@ -1237,6 +1246,545 @@ async function fetchNflColdStreaks(ctx: Ctx, force: boolean): Promise<z.infer<ty
   return response;
 }
 
+// ---------------------------------------------------------------------------
+// NBA (ESPN keyless feeds). Mirrors the NFL insight sections: overview,
+// matchup calculator, hot streaks, rosters and player game logs.
+// ---------------------------------------------------------------------------
+
+const ESPN_SITE_NBA = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba";
+
+const nbaGameSideSchema = z.object({ abbrev: z.string(), name: z.string(), score: z.number().nullable(), winner: z.boolean() });
+const nbaGameSchema = z.object({
+  id: z.number(), date: z.string(), startsAt: z.string(), state: z.string(), detail: z.string(),
+  shortName: z.string(), away: nbaGameSideSchema, home: nbaGameSideSchema,
+});
+const nbaStandingSchema = z.object({
+  team: z.string(), name: z.string(), conference: z.string(), division: z.string(),
+  wins: z.number(), losses: z.number(),
+  pointsFor: z.number(), pointsAgainst: z.number(),
+  streak: z.string().nullable(), playoffSeed: z.number().nullable(),
+});
+const nbaOverviewResponse = z.object({
+  season: z.number(), fetchedAt: z.string(),
+  scheduleSourceUrl: z.string(), standingsSourceUrl: z.string(),
+  games: z.array(nbaGameSchema), standings: z.array(nbaStandingSchema),
+});
+
+const nbaMatchupTeamSchema = z.object({
+  team: z.string(), games: z.number(),
+  wins: z.number(), losses: z.number(), winPct: z.number().nullable(),
+  venueGames: z.number(), venueWins: z.number(), venueWinPct: z.number().nullable(),
+  seasonWins: z.number(), seasonLosses: z.number(), seasonWinPct: z.number().nullable(),
+  firstBasketGames: z.number(), firstBasket: z.number(), firstBasketPct: z.number().nullable(),
+  venueFirstBasketGames: z.number(), venueFirstBasket: z.number(), venueFirstBasketPct: z.number().nullable(),
+  firstHalfOver115: z.number(), firstHalfOver115Pct: z.number().nullable(), venueFirstHalfOver115Pct: z.number().nullable(),
+  blowouts: z.number(), blowoutPct: z.number().nullable(), venueBlowoutPct: z.number().nullable(),
+  bothTeams110: z.number(), bothTeams110Pct: z.number().nullable(), venueBothTeams110Pct: z.number().nullable(),
+  overtimes: z.number(), overtimePct: z.number().nullable(), venueOvertimePct: z.number().nullable(),
+  avgPointsFor: z.number().nullable(), avgPointsAgainst: z.number().nullable(),
+});
+const nbaMatchupResponse = z.object({
+  away: nbaMatchupTeamSchema, home: nbaMatchupTeamSchema,
+  awayWinProbability: z.number().nullable(), homeWinProbability: z.number().nullable(),
+  winnerTeam: z.string().nullable(), winnerEdgePoints: z.number().nullable(),
+  firstBasketAwayProbability: z.number().nullable(), firstBasketHomeProbability: z.number().nullable(),
+  firstBasketEdgeTeam: z.string().nullable(), firstBasketEdgePoints: z.number().nullable(),
+  firstHalfOver115Probability: z.number().nullable(), blowoutProbability: z.number().nullable(),
+  bothTeams110Probability: z.number().nullable(), overtimeProbability: z.number().nullable(),
+  headToHead: z.object({ games: z.number(), awayWins: z.number(), homeWins: z.number() }),
+  fetchedAt: z.string(), sourceUrl: z.string(), sampleNote: z.string(),
+});
+
+const nbaHotGameSchema = z.object({
+  gameId: z.number(), date: z.string(), opponent: z.string(),
+  points: z.number(), rebounds: z.number(), assists: z.number(),
+  steals: z.number(), blocks: z.number(), turnovers: z.number(), minutes: z.number().nullable(),
+  doubleDouble: z.boolean(),
+});
+const nbaHotPlayerSchema = z.object({
+  playerId: z.number(), name: z.string(), team: z.string(), position: z.string(),
+  pointStreak: z.number(), doubleDoubleStreak: z.number(),
+  lastFivePoints: z.number(), lastFiveRebounds: z.number(), lastFiveAssists: z.number(),
+  games: z.array(nbaHotGameSchema), heatScore: z.number(),
+});
+const nbaHotStreaksResponse = z.object({
+  fetchedAt: z.string(), sourceUrl: z.string(), windowStart: z.string(), windowEnd: z.string(),
+  players: z.array(nbaHotPlayerSchema),
+});
+const nbaColdPlayerSchema = z.object({
+  playerId: z.number(), name: z.string(), team: z.string(), position: z.string(),
+  scoringDrought: z.number(), lastFivePoints: z.number(), lastFiveMinutes: z.number().nullable(),
+  games: z.array(nbaHotGameSchema), coldScore: z.number(),
+});
+const nbaColdStreaksResponse = z.object({
+  fetchedAt: z.string(), sourceUrl: z.string(), windowStart: z.string(), windowEnd: z.string(),
+  players: z.array(nbaColdPlayerSchema), teams: z.array(coldTeamSchema),
+});
+
+const nbaRosterPlayerSchema = z.object({
+  id: z.number(), name: z.string(), jersey: z.string().nullable(), position: z.string(), group: z.string(),
+  games: z.number().nullable(),
+  points: z.number().nullable(), rebounds: z.number().nullable(), assists: z.number().nullable(),
+  steals: z.number().nullable(), blocks: z.number().nullable(), turnovers: z.number().nullable(),
+  minutes: z.number().nullable(),
+});
+const nbaRosterResponse = z.object({
+  team: z.string(), season: z.number(), fetchedAt: z.string(), sourceUrl: z.string(),
+  players: z.array(nbaRosterPlayerSchema), groups: z.record(z.string(), z.number()),
+});
+
+const nbaGameLogRowSchema = z.object({
+  gameId: z.number(), gameDate: z.string(), opponent: z.string(), homeRoad: z.enum(["home", "away"]),
+  result: z.string().nullable(), teamScore: z.number().nullable(), oppScore: z.number().nullable(),
+  minutes: z.number().nullable(), points: z.number().nullable(), rebounds: z.number().nullable(),
+  assists: z.number().nullable(), steals: z.number().nullable(), blocks: z.number().nullable(),
+  turnovers: z.number().nullable(),
+  fieldGoalsMade: z.number().nullable(), fieldGoalsAttempted: z.number().nullable(),
+  threePointMade: z.number().nullable(), threePointAttempted: z.number().nullable(),
+  freeThrowsMade: z.number().nullable(), freeThrowsAttempted: z.number().nullable(),
+});
+const nbaGameLogResponse = z.object({
+  playerId: z.number(), team: z.string(), season: z.number(), fetchedAt: z.string(), sourceUrl: z.string(),
+  games: z.array(nbaGameLogRowSchema),
+});
+
+async function loadNbaOverview(): Promise<z.infer<typeof nbaOverviewResponse>> {
+  const board = await fetchNbaScoreboard();
+  let standings: z.infer<typeof nbaStandingSchema>[] = [];
+  let standingsUrl = "";
+  try {
+    const data = await fetchNbaStandings();
+    standingsUrl = data.sourceUrl;
+    standings = data.standings;
+  } catch { /* schedule still renders without standings */ }
+  const games = board.games.map((g) => ({
+    id: g.id, date: g.date.slice(0, 10), startsAt: g.date, state: g.state, detail: g.detail,
+    shortName: g.shortName,
+    away: { abbrev: g.away.abbr, name: g.away.name, score: g.away.score, winner: g.away.winner },
+    home: { abbrev: g.home.abbr, name: g.home.name, score: g.home.score, winner: g.home.winner },
+  }));
+  return {
+    season: board.season, fetchedAt: new Date().toISOString(),
+    scheduleSourceUrl: `${ESPN_SITE_NBA}/scoreboard`, standingsSourceUrl: standingsUrl,
+    games, standings,
+  };
+}
+
+type NbaPlayerGameStats = {
+  minutes: number | null; points: number | null; rebounds: number | null; assists: number | null;
+  steals: number | null; blocks: number | null; turnovers: number | null;
+  fieldGoalsMade: number | null; fieldGoalsAttempted: number | null;
+  threePointMade: number | null; threePointAttempted: number | null;
+  freeThrowsMade: number | null; freeThrowsAttempted: number | null;
+};
+function parseNbaMinutes(raw: string | undefined): number | null {
+  if (raw === undefined || raw === "") return null;
+  if (raw.includes(":")) {
+    const [m, s] = raw.split(":");
+    const mins = Number(m);
+    const secs = Number(s);
+    if (!Number.isFinite(mins)) return null;
+    return mins + (Number.isFinite(secs) ? secs / 60 : 0);
+  }
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+function parseNbaSplit(raw: string | undefined): [number | null, number | null] {
+  if (!raw || !raw.includes("-")) return [null, null];
+  const [made, att] = raw.split("-");
+  const m = parseStatNumber(made);
+  const a = parseStatNumber(att);
+  return [m, a];
+}
+function parseNbaAthleteStats(categories: { keys: string[]; athletes: { id: number; stats: Record<string, string> }[] }[], athleteId: number): NbaPlayerGameStats {
+  const out: NbaPlayerGameStats = {
+    minutes: null, points: null, rebounds: null, assists: null,
+    steals: null, blocks: null, turnovers: null,
+    fieldGoalsMade: null, fieldGoalsAttempted: null,
+    threePointMade: null, threePointAttempted: null,
+    freeThrowsMade: null, freeThrowsAttempted: null,
+  };
+  for (const cat of categories) {
+    const row = cat.athletes.find((a) => a.id === athleteId);
+    if (!row) continue;
+    const s = row.stats;
+    if (s["points"] === undefined) continue; // not the main stat line
+    out.minutes = parseNbaMinutes(s["minutes"]);
+    out.points = parseStatNumber(s["points"]);
+    out.rebounds = parseStatNumber(s["rebounds"]);
+    out.assists = parseStatNumber(s["assists"]);
+    out.steals = parseStatNumber(s["steals"]);
+    out.blocks = parseStatNumber(s["blocks"]);
+    out.turnovers = parseStatNumber(s["turnovers"]);
+    const [fgm, fga] = parseNbaSplit(s["fieldGoalsMade-fieldGoalsAttempted"]);
+    const [tpm, tpa] = parseNbaSplit(s["threePointFieldGoalsMade-threePointFieldGoalsAttempted"]);
+    const [ftm, fta] = parseNbaSplit(s["freeThrowsMade-freeThrowsAttempted"]);
+    out.fieldGoalsMade = fgm; out.fieldGoalsAttempted = fga;
+    out.threePointMade = tpm; out.threePointAttempted = tpa;
+    out.freeThrowsMade = ftm; out.freeThrowsAttempted = fta;
+    break;
+  }
+  return out;
+}
+
+type NbaLoggedGame = {
+  gameId: number; date: string; opponent: string; homeRoad: "home" | "away";
+  teamScore: number; oppScore: number; won: boolean; stats: NbaPlayerGameStats;
+};
+type NbaTeamLogs = { players: { id: number; name: string; position: string; games: NbaLoggedGame[] }[]; fetchedAt: string; sourceUrl: string };
+
+// Per-team per-player game logs, built from ESPN game summaries and cached
+// 24h. Powers the NBA roster aggregates, player files and likely scorers.
+async function nbaTeamPlayerLogs(ctx: Ctx, team: (typeof nbaTeamCodes)[number]): Promise<NbaTeamLogs> {
+  const cacheKey = `nba-team-logs:${team}`;
+  const db = ctx.db;
+  const cachedRows = await db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey)).limit(1);
+  const cached = cachedRows[0];
+  if (cached && cached.expiresAt.getTime() > Date.now()) return JSON.parse(cached.payloadJson) as NbaTeamLogs;
+
+  const meta = nbaTeamMeta(team);
+  if (!meta) throw new Error(`Unknown NBA team ${team}`);
+  const [roster, schedule] = await Promise.all([fetchNbaRoster(team), fetchNbaTeamGames(team, 12)]);
+  const posById = new Map<number, string>();
+  const nameById = new Map<number, string>();
+  for (const p of roster.players) { posById.set(p.id, p.position); nameById.set(p.id, p.name); }
+
+  const byPlayer = new Map<number, { id: number; name: string; position: string; games: NbaLoggedGame[] }>();
+  const sourceUrl = `${ESPN_SITE_NBA}/summary`;
+  for (let i = 0; i < schedule.games.length; i += 4) {
+    const batch = schedule.games.slice(i, i + 4);
+    const summaries = await Promise.all(batch.map(async (g) => {
+      try { return { game: g, summary: await fetchNbaGameSummary(g.gameId) }; }
+      catch { return { game: g, summary: null }; }
+    }));
+    for (const { game, summary } of summaries) {
+      if (!summary) continue;
+      const box = summary.teams.find((t) => t.abbr === team);
+      if (!box) continue;
+      const seen = new Set<number>();
+      for (const cat of box.categories) {
+        for (const ath of cat.athletes) {
+          if (seen.has(ath.id)) continue;
+          seen.add(ath.id);
+          const stats = parseNbaAthleteStats(box.categories, ath.id);
+          if (stats.points === null && stats.minutes === null) continue;
+          const entry = byPlayer.get(ath.id) ?? { id: ath.id, name: nameById.get(ath.id) ?? ath.name, position: posById.get(ath.id) ?? "—", games: [] };
+          entry.games.push({
+            gameId: game.gameId, date: game.date.slice(0, 10), opponent: game.opponent,
+            homeRoad: game.homeAway, teamScore: game.teamScore, oppScore: game.oppScore, won: game.won, stats,
+          });
+          byPlayer.set(ath.id, entry);
+        }
+      }
+    }
+  }
+  const logs: NbaTeamLogs = {
+    players: Array.from(byPlayer.values()).map((p) => ({ ...p, games: p.games.sort((a, b) => b.date.localeCompare(a.date)) })),
+    fetchedAt: new Date().toISOString(), sourceUrl,
+  };
+  await db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey));
+  await db.insert(schema.nhlInsightCache).values({ key: cacheKey, payloadJson: JSON.stringify(logs), fetchedAt: new Date(logs.fetchedAt), expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) });
+  return logs;
+}
+
+async function loadNbaRoster(ctx: Ctx, team: (typeof nbaTeamCodes)[number]): Promise<z.infer<typeof nbaRosterResponse>> {
+  const [roster, logs] = await Promise.all([fetchNbaRoster(team), nbaTeamPlayerLogs(ctx, team).catch(() => null)]);
+  const totalsById = new Map<number, { games: number; points: number; rebounds: number; assists: number; steals: number; blocks: number; turnovers: number; minutes: number }>();
+  if (logs) {
+    for (const p of logs.players) {
+      const t = { games: p.games.length, points: 0, rebounds: 0, assists: 0, steals: 0, blocks: 0, turnovers: 0, minutes: 0 };
+      for (const g of p.games) {
+        t.points += g.stats.points ?? 0; t.rebounds += g.stats.rebounds ?? 0; t.assists += g.stats.assists ?? 0;
+        t.steals += g.stats.steals ?? 0; t.blocks += g.stats.blocks ?? 0; t.turnovers += g.stats.turnovers ?? 0;
+        t.minutes += g.stats.minutes ?? 0;
+      }
+      totalsById.set(p.id, t);
+    }
+  }
+  const players = roster.players
+    .map((p) => {
+      const t = totalsById.get(p.id);
+      const has = (v: number) => (t && t.games > 0 ? v : null);
+      return {
+        id: p.id, name: p.name, jersey: p.jersey, position: p.position, group: p.group,
+        games: t ? t.games : null,
+        points: has(t?.points ?? 0), rebounds: has(t?.rebounds ?? 0), assists: has(t?.assists ?? 0),
+        steals: has(t?.steals ?? 0), blocks: has(t?.blocks ?? 0), turnovers: has(t?.turnovers ?? 0),
+        minutes: t ? Math.round((t.minutes ?? 0) * 10) / 10 : null,
+      };
+    })
+    .sort((a, b) => (b.points ?? 0) - (a.points ?? 0));
+  return { team, season: NBA_SEASON, fetchedAt: roster.fetchedAt, sourceUrl: roster.sourceUrl, players, groups: roster.groups };
+}
+
+async function loadNbaPlayerGameLog(ctx: Ctx, team: (typeof nbaTeamCodes)[number], playerId: number): Promise<z.infer<typeof nbaGameLogResponse>> {
+  const logs = await nbaTeamPlayerLogs(ctx, team);
+  const player = logs.players.find((p) => p.id === playerId);
+  if (!player) throw new Error("No game log found for this player yet this season.");
+  return {
+    playerId, team, season: NBA_SEASON, fetchedAt: logs.fetchedAt, sourceUrl: logs.sourceUrl,
+    games: player.games.map((g) => ({
+      gameId: g.gameId, gameDate: g.date, opponent: g.opponent, homeRoad: g.homeRoad,
+      result: g.won ? "W" : "L", teamScore: g.teamScore, oppScore: g.oppScore,
+      minutes: g.stats.minutes, points: g.stats.points, rebounds: g.stats.rebounds,
+      assists: g.stats.assists, steals: g.stats.steals, blocks: g.stats.blocks,
+      turnovers: g.stats.turnovers,
+      fieldGoalsMade: g.stats.fieldGoalsMade, fieldGoalsAttempted: g.stats.fieldGoalsAttempted,
+      threePointMade: g.stats.threePointMade, threePointAttempted: g.stats.threePointAttempted,
+      freeThrowsMade: g.stats.freeThrowsMade, freeThrowsAttempted: g.stats.freeThrowsAttempted,
+    })),
+  };
+}
+
+type NbaSeasonRec = { wins: number; losses: number } | null;
+function nbaTeamMatchupStats(team: (typeof nbaTeamCodes)[number], venue: "away" | "home", games: NbaTeamGame[], season: NbaSeasonRec): z.infer<typeof nbaMatchupTeamSchema> {
+  const venueGames = games.filter((g) => g.homeAway === venue);
+  const wins = games.filter((g) => g.won).length;
+  const losses = games.length - wins;
+  const venueWins = venueGames.filter((g) => g.won).length;
+  const seasonWins = season?.wins ?? 0;
+  const seasonLosses = season?.losses ?? 0;
+  const seasonGames = seasonWins + seasonLosses;
+  const pct = (n: number, d: number) => d > 0 ? n / d : null;
+  // Win probability base: the season record (falls back to recent form when
+  // the season record is empty, e.g. preseason), venue-blended at 3+ games.
+  const seasonWinPct = pct(seasonWins, seasonGames);
+  const scored = games.filter((g) => g.firstScoringTeam !== null);
+  const venueScored = venueGames.filter((g) => g.firstScoringTeam !== null);
+  const firstBasket = scored.filter((g) => g.firstScoringTeam === team).length;
+  const venueFirstBasket = venueScored.filter((g) => g.firstScoringTeam === team).length;
+  const halfGames = games.filter((g) => g.firstHalfFor !== null && g.firstHalfAgainst !== null);
+  const venueHalfGames = venueGames.filter((g) => g.firstHalfFor !== null && g.firstHalfAgainst !== null);
+  const over115 = halfGames.filter((g) => (g.firstHalfFor ?? 0) + (g.firstHalfAgainst ?? 0) > 115).length;
+  const venueOver115 = venueHalfGames.filter((g) => (g.firstHalfFor ?? 0) + (g.firstHalfAgainst ?? 0) > 115).length;
+  const blowouts = games.filter((g) => g.margin >= 15).length;
+  const venueBlowouts = venueGames.filter((g) => g.margin >= 15).length;
+  const both110 = games.filter((g) => g.teamScore >= 110 && g.oppScore >= 110).length;
+  const venueBoth110 = venueGames.filter((g) => g.teamScore >= 110 && g.oppScore >= 110).length;
+  const otGames = games.filter((g) => g.overtime !== null);
+  const venueOtGames = venueGames.filter((g) => g.overtime !== null);
+  const overtimes = otGames.filter((g) => g.overtime === true).length;
+  const venueOvertimes = venueOtGames.filter((g) => g.overtime === true).length;
+  return {
+    team, games: games.length,
+    wins, losses, winPct: pct(wins, games.length),
+    venueGames: venueGames.length, venueWins, venueWinPct: pct(venueWins, venueGames.length),
+    seasonWins, seasonLosses, seasonWinPct,
+    firstBasketGames: scored.length, firstBasket, firstBasketPct: pct(firstBasket, scored.length),
+    venueFirstBasketGames: venueScored.length, venueFirstBasket, venueFirstBasketPct: pct(venueFirstBasket, venueScored.length),
+    firstHalfOver115: over115, firstHalfOver115Pct: pct(over115, halfGames.length), venueFirstHalfOver115Pct: pct(venueOver115, venueHalfGames.length),
+    blowouts, blowoutPct: pct(blowouts, games.length), venueBlowoutPct: pct(venueBlowouts, venueGames.length),
+    bothTeams110: both110, bothTeams110Pct: pct(both110, games.length), venueBothTeams110Pct: pct(venueBoth110, venueGames.length),
+    overtimes, overtimePct: pct(overtimes, otGames.length), venueOvertimePct: pct(venueOvertimes, venueOtGames.length),
+    avgPointsFor: games.length ? games.reduce((s, g) => s + g.teamScore, 0) / games.length : null,
+    avgPointsAgainst: games.length ? games.reduce((s, g) => s + g.oppScore, 0) / games.length : null,
+  };
+}
+
+async function loadNbaMatchup(ctx: Ctx, awayTeam: (typeof nbaTeamCodes)[number], homeTeam: (typeof nbaTeamCodes)[number], force: boolean): Promise<z.infer<typeof nbaMatchupResponse>> {
+  const cacheKey = `nba-matchup:${awayTeam}:${homeTeam}`;
+  const db = ctx.db;
+  const cachedRows = await db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey)).limit(1);
+  const cached = cachedRows[0];
+  if (!force && cached && cached.expiresAt.getTime() > Date.now()) return nbaMatchupResponse.parse(JSON.parse(cached.payloadJson));
+
+  const [awayData, homeData, standingsData] = await Promise.all([
+    fetchNbaTeamGames(awayTeam, 8),
+    fetchNbaTeamGames(homeTeam, 8),
+    fetchNbaStandings().catch(() => null),
+  ]);
+  const seen = new Map<number, NbaTeamGame>();
+  for (const g of [...awayData.games, ...homeData.games]) if (!seen.has(g.gameId)) seen.set(g.gameId, g);
+  await enrichNbaGameDetails(Array.from(seen.values()));
+
+  const seasonRec = (team: string): NbaSeasonRec => {
+    const row = standingsData?.standings.find((s) => s.team === team);
+    return row ? { wins: row.wins, losses: row.losses } : null;
+  };
+  const away = nbaTeamMatchupStats(awayTeam, "away", awayData.games, seasonRec(awayTeam));
+  const home = nbaTeamMatchupStats(homeTeam, "home", homeData.games, seasonRec(homeTeam));
+  // Trust venue splits at 3+ games; otherwise lean on the season record.
+  const venueBlend = (overall: number | null, venueRate: number | null, venueGames: number): number | null =>
+    overall === null ? null : venueGames >= 3 && venueRate !== null ? overall * .4 + venueRate * .6 : overall;
+  const mean = (a: number | null, b: number | null): number | null => a !== null && b !== null ? (a + b) / 2 : a ?? b;
+  const baseWin = (t: z.infer<typeof nbaMatchupTeamSchema>) => t.seasonWinPct ?? t.winPct;
+
+  const awayWinForm = venueBlend(baseWin(away), away.venueWinPct, away.venueGames);
+  const homeWinForm = venueBlend(baseWin(home), home.venueWinPct, home.venueGames);
+  const awayWinRaw = awayWinForm !== null && homeWinForm !== null ? (awayWinForm + (1 - homeWinForm)) / 2 : null;
+  const homeWinRaw = awayWinForm !== null && homeWinForm !== null ? (homeWinForm + (1 - awayWinForm)) / 2 : null;
+  const winTotal = awayWinRaw !== null && homeWinRaw !== null ? awayWinRaw + homeWinRaw : null;
+  const awayWinProbability = awayWinRaw !== null && winTotal !== null && winTotal > 0 ? awayWinRaw / winTotal : null;
+  const homeWinProbability = homeWinRaw !== null && winTotal !== null && winTotal > 0 ? homeWinRaw / winTotal : null;
+  const winnerTeam = awayWinProbability === null || homeWinProbability === null ? null : awayWinProbability >= homeWinProbability ? awayTeam : homeTeam;
+  const winnerEdgePoints = awayWinProbability === null || homeWinProbability === null ? null : Math.abs(awayWinProbability - homeWinProbability) * 100;
+
+  const awayFirstForm = venueBlend(away.firstBasketPct, away.venueFirstBasketPct, away.venueFirstBasketGames);
+  const homeFirstForm = venueBlend(home.firstBasketPct, home.venueFirstBasketPct, home.venueFirstBasketGames);
+  const awayFirstAllowed = home.firstBasketGames > 0 ? 1 - (home.firstBasket / home.firstBasketGames) : null;
+  const homeFirstAllowed = away.firstBasketGames > 0 ? 1 - (away.firstBasket / away.firstBasketGames) : null;
+  const awayFirstRaw = awayFirstForm !== null && awayFirstAllowed !== null ? (awayFirstForm + awayFirstAllowed) / 2 : null;
+  const homeFirstRaw = homeFirstForm !== null && homeFirstAllowed !== null ? (homeFirstForm + homeFirstAllowed) / 2 : null;
+  const firstTotal = awayFirstRaw !== null && homeFirstRaw !== null ? awayFirstRaw + homeFirstRaw : null;
+  const firstBasketAwayProbability = awayFirstRaw !== null && firstTotal !== null && firstTotal > 0 ? awayFirstRaw / firstTotal : null;
+  const firstBasketHomeProbability = homeFirstRaw !== null && firstTotal !== null && firstTotal > 0 ? homeFirstRaw / firstTotal : null;
+  const firstBasketEdgeTeam = firstBasketAwayProbability === null || firstBasketHomeProbability === null ? null : firstBasketAwayProbability >= firstBasketHomeProbability ? awayTeam : homeTeam;
+  const firstBasketEdgePoints = firstBasketAwayProbability === null || firstBasketHomeProbability === null ? null : Math.abs(firstBasketAwayProbability - firstBasketHomeProbability) * 100;
+
+  const firstHalfOver115Probability = mean(venueBlend(away.firstHalfOver115Pct, away.venueFirstHalfOver115Pct, away.venueGames), venueBlend(home.firstHalfOver115Pct, home.venueFirstHalfOver115Pct, home.venueGames));
+  const blowoutProbability = mean(venueBlend(away.blowoutPct, away.venueBlowoutPct, away.venueGames), venueBlend(home.blowoutPct, home.venueBlowoutPct, home.venueGames));
+  const bothTeams110Probability = mean(venueBlend(away.bothTeams110Pct, away.venueBothTeams110Pct, away.venueGames), venueBlend(home.bothTeams110Pct, home.venueBothTeams110Pct, home.venueGames));
+  const overtimeProbability = mean(venueBlend(away.overtimePct, away.venueOvertimePct, away.venueGames), venueBlend(home.overtimePct, home.venueOvertimePct, home.venueGames));
+
+  const h2h = awayData.games.filter((g) => g.opponent === homeTeam);
+  const seasonLabel = awayData.seasonLabel || homeData.seasonLabel;
+  const response: z.infer<typeof nbaMatchupResponse> = {
+    away, home, awayWinProbability, homeWinProbability, winnerTeam, winnerEdgePoints,
+    firstBasketAwayProbability, firstBasketHomeProbability, firstBasketEdgeTeam, firstBasketEdgePoints,
+    firstHalfOver115Probability, blowoutProbability, bothTeams110Probability, overtimeProbability,
+    headToHead: { games: h2h.length, awayWins: h2h.filter((g) => g.won).length, homeWins: h2h.filter((g) => !g.won).length },
+    fetchedAt: new Date().toISOString(), sourceUrl: awayData.sourceUrl,
+    sampleNote: `Last ${away.games} ${awayTeam} and ${home.games} ${homeTeam} completed ${seasonLabel} games from the official ESPN scoreboard. Win probabilities start from season records, venue-blended. All figures are model estimates.`,
+  };
+  await db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey));
+  await db.insert(schema.nhlInsightCache).values({ key: cacheKey, payloadJson: JSON.stringify(response), fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(Date.now() + 12 * 60 * 60 * 1000) });
+  return response;
+}
+
+type NbaRecentGame = z.infer<typeof nbaHotGameSchema>;
+type NbaPlayerAcc = { playerId: number; name: string; team: string; position: string; games: NbaRecentGame[] };
+
+function nbaDateKey(daysAgo: number): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - daysAgo);
+  return `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, "0")}${String(d.getUTCDate()).padStart(2, "0")}`;
+}
+
+async function collectNbaRecentGames(): Promise<{ byPlayer: Map<number, NbaPlayerAcc> }> {
+  // Scan the last 7 days of scoreboards (one request per day), then pull box
+  // scores for the most recent finals. Capped so one refresh stays bounded.
+  const gameIds = new Map<number, { date: string; away: string; home: string }>();
+  for (let daysAgo = 0; daysAgo < 7; daysAgo++) {
+    try {
+      const board = await fetchNbaScoreboard(nbaDateKey(daysAgo));
+      for (const g of board.games) {
+        if (g.state !== "final") continue;
+        gameIds.set(g.id, { date: g.date.slice(0, 10), away: g.away.abbr, home: g.home.abbr });
+      }
+    } catch { /* a bad day never kills the scan */ }
+  }
+  const ids = Array.from(gameIds.entries())
+    .sort((a, b) => b[1].date.localeCompare(a[1].date))
+    .slice(0, 24);
+  const byPlayer = new Map<number, NbaPlayerAcc>();
+  for (let i = 0; i < ids.length; i += 6) {
+    const batch = ids.slice(i, i + 6);
+    const summaries = await Promise.all(batch.map(async ([id, meta]) => {
+      try { return { id, meta, summary: await fetchNbaGameSummary(id) }; }
+      catch { return { id, meta, summary: null }; }
+    }));
+    for (const { id, meta, summary } of summaries) {
+      if (!summary) continue;
+      for (const teamBox of summary.teams) {
+        const opponent = teamBox.abbr === meta.away ? meta.home : meta.away;
+        const seen = new Set<number>();
+        for (const cat of teamBox.categories) {
+          for (const ath of cat.athletes) {
+            if (seen.has(ath.id)) continue;
+            seen.add(ath.id);
+            const stats = parseNbaAthleteStats(teamBox.categories, ath.id);
+            const points = stats.points ?? 0;
+            if (points === 0 && (stats.minutes ?? 0) === 0) continue;
+            const rebounds = stats.rebounds ?? 0;
+            const assists = stats.assists ?? 0;
+            const doubleDouble = points >= 10 && (rebounds >= 10 || assists >= 10);
+            const acc: NbaPlayerAcc = byPlayer.get(ath.id) ?? { playerId: ath.id, name: ath.name, team: teamBox.abbr, position: "—", games: [] };
+            acc.games.push({
+              gameId: id, date: meta.date, opponent,
+              points, rebounds, assists,
+              steals: stats.steals ?? 0, blocks: stats.blocks ?? 0, turnovers: stats.turnovers ?? 0,
+              minutes: stats.minutes, doubleDouble,
+            });
+            byPlayer.set(ath.id, acc);
+          }
+        }
+      }
+    }
+  }
+  return { byPlayer };
+}
+
+async function fetchNbaHotStreaks(ctx: Ctx, force: boolean): Promise<z.infer<typeof nbaHotStreaksResponse>> {
+  const db = ctx.db;
+  const cachedRows = await db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, "nba-hot-streaks")).limit(1);
+  const cached = cachedRows[0];
+  if (!force && cached && cached.expiresAt.getTime() > Date.now()) return nbaHotStreaksResponse.parse(JSON.parse(cached.payloadJson));
+  const { byPlayer } = await collectNbaRecentGames();
+  const players = Array.from(byPlayer.values()).flatMap((player) => {
+    const recent = player.games.sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
+    if (recent.length < 2) return [];
+    let pointStreak = 0;
+    for (const g of recent) { if (g.points < 15) break; pointStreak += 1; }
+    let doubleDoubleStreak = 0;
+    for (const g of recent) { if (!g.doubleDouble) break; doubleDoubleStreak += 1; }
+    const lastFivePoints = recent.reduce((s, g) => s + g.points, 0);
+    const lastFiveRebounds = recent.reduce((s, g) => s + g.rebounds, 0);
+    const lastFiveAssists = recent.reduce((s, g) => s + g.assists, 0);
+    const hot = pointStreak >= 2 || doubleDoubleStreak >= 2 || lastFivePoints >= 125;
+    if (!hot) return [];
+    const heatScore = pointStreak * 8 + doubleDoubleStreak * 10 + lastFivePoints / 10;
+    return [{ playerId: player.playerId, name: player.name, team: player.team, position: player.position, pointStreak, doubleDoubleStreak, lastFivePoints, lastFiveRebounds, lastFiveAssists, games: recent, heatScore }];
+  }).sort((a, b) => b.heatScore - a.heatScore);
+  const response: z.infer<typeof nbaHotStreaksResponse> = {
+    fetchedAt: new Date().toISOString(), sourceUrl: `${ESPN_SITE_NBA}/scoreboard`,
+    windowStart: nbaDateKey(7).replace(/(\d{4})(\d{2})(\d{2})/, "$1-$2-$3"), windowEnd: new Date().toISOString().slice(0, 10), players,
+  };
+  await db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, "nba-hot-streaks"));
+  await db.insert(schema.nhlInsightCache).values({ key: "nba-hot-streaks", payloadJson: JSON.stringify(response), fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) });
+  return response;
+}
+
+async function fetchNbaColdStreaks(ctx: Ctx, force: boolean): Promise<z.infer<typeof nbaColdStreaksResponse>> {
+  const db = ctx.db;
+  const cachedRows = await db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, "nba-cold-streaks")).limit(1);
+  const cached = cachedRows[0];
+  if (!force && cached && cached.expiresAt.getTime() > Date.now()) return nbaColdStreaksResponse.parse(JSON.parse(cached.payloadJson));
+  const { byPlayer } = await collectNbaRecentGames();
+  const players = Array.from(byPlayer.values()).flatMap((player) => {
+    const recent = player.games.sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
+    if (recent.length < 3) return [];
+    let scoringDrought = 0;
+    for (const g of recent) { if (g.points >= 10) break; scoringDrought += 1; }
+    const lastFivePoints = recent.reduce((sum, g) => sum + g.points, 0);
+    const minutes = recent.map((g) => g.minutes ?? 0);
+    const avgMinutes = minutes.reduce((s, m) => s + m, 0) / minutes.length;
+    const lastFiveMinutes = minutes.reduce((s, m) => s + m, 0);
+    // Only real rotation players: need meaningful recent minutes, not deep bench.
+    const involved = avgMinutes >= 20;
+    const cold = involved && (scoringDrought >= 2 || lastFivePoints < 50);
+    if (!cold) return [];
+    const coldScore = scoringDrought * 8 + Math.max(0, 75 - lastFivePoints) / 5 + (lastFivePoints < 50 ? 6 : 0);
+    return [{ playerId: player.playerId, name: player.name, team: player.team, position: player.position, scoringDrought, lastFivePoints, lastFiveMinutes: Math.round(lastFiveMinutes * 10) / 10, games: recent, coldScore }];
+  }).sort((a, b) => b.coldScore - a.coldScore);
+  let teams: z.infer<typeof coldTeamSchema>[] = [];
+  try {
+    const { standings } = await fetchNbaStandings();
+    teams = standings.flatMap((row) => {
+      const match = /^L(\d+)$/.exec(row.streak ?? "");
+      const losses = match ? Number(match[1]) : 0;
+      if (losses < 2) return [];
+      return [{ team: row.team, name: row.name, streak: row.streak ?? `L${losses}`, losses, gamesPlayed: row.wins + row.losses }];
+    }).sort((a, b) => b.losses - a.losses);
+  } catch { /* team slumps are best-effort */ }
+  const response: z.infer<typeof nbaColdStreaksResponse> = {
+    fetchedAt: new Date().toISOString(), sourceUrl: `${ESPN_SITE_NBA}/scoreboard`,
+    windowStart: nbaDateKey(7).replace(/(\d{4})(\d{2})(\d{2})/, "$1-$2-$3"), windowEnd: new Date().toISOString().slice(0, 10), players, teams,
+  };
+  await db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, "nba-cold-streaks"));
+  await db.insert(schema.nhlInsightCache).values({ key: "nba-cold-streaks", payloadJson: JSON.stringify(response), fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) });
+  return response;
+}
+
 const likelyScorerSchema = z.object({
   name: z.string(),
   team: z.string(),
@@ -1281,7 +1829,7 @@ async function fetchLikelyScorers(ctx: Ctx, sport: (typeof sports)[number], forc
       }));
       for (const row of rows) if (row && row.ranked.length > 0) teams[row.team] = row.ranked;
     }
-  } else {
+  } else if (sport === "nfl") {
     const codes = [...nflTeamCodes];
     for (let index = 0; index < codes.length; index += 4) {
       const batch = codes.slice(index, index + 4);
@@ -1294,6 +1842,26 @@ async function fetchLikelyScorers(ctx: Ctx, sport: (typeof sports)[number], forc
             const games = player.games.length;
             if (touchdowns <= 0 || games < 2 || !player.name) return [];
             return [{ name: player.name, team, stat: touchdowns, games, rate: touchdowns / games }];
+          }).sort((a, b) => b.rate - a.rate || b.stat - a.stat || a.name.localeCompare(b.name)).slice(0, 4);
+          return { team, ranked };
+        } catch { return null; }
+      }));
+      for (const row of rows) if (row && row.ranked.length > 0) teams[row.team] = row.ranked;
+    }
+  } else {
+    // NBA: top scorers by points per game (min 2 GP) from official boxscores.
+    const codes = [...nbaTeamCodes];
+    for (let index = 0; index < codes.length; index += 4) {
+      const batch = codes.slice(index, index + 4);
+      const rows = await Promise.all(batch.map(async (team) => {
+        try {
+          const logs = await nbaTeamPlayerLogs(ctx, team);
+          const ranked = logs.players.flatMap((player) => {
+            let points = 0;
+            for (const game of player.games) points += game.stats.points ?? 0;
+            const games = player.games.length;
+            if (points <= 0 || games < 2 || !player.name) return [];
+            return [{ name: player.name, team, stat: points, games, rate: points / games }];
           }).sort((a, b) => b.rate - a.rate || b.stat - a.stat || a.name.localeCompare(b.name)).slice(0, 4);
           return { team, ranked };
         } catch { return null; }
@@ -1330,7 +1898,7 @@ async function listPlates(ctx: Ctx, publicOnly: boolean): Promise<z.infer<typeof
 
 export const Actions = {
   getDashboard: defineAction({ request: z.object({ sport: z.enum(sports).default("nhl") }), response: dashboardResponse, async handler(ctx, args) { return loadDashboard(ctx, args.sport); } }),
-  refreshDaily: defineAction({ request: z.object({}), response: z.object({ status: z.enum(["success", "partial", "failed"]), message: z.string(), rowCount: z.number(), snapshotDate: z.string() }), async handler(ctx) { const result = await refresh(ctx); try { await fetchHotStreaks(ctx, true); } catch { /* Keep odds refresh independent of free NHL insight refresh. */ } try { await fetchNflHotStreaks(ctx, true); } catch { /* Same for the NFL leg. */ } try { await fetchColdStreaks(ctx, true); } catch { /* Cold streaks refresh with the same daily job. */ } try { await fetchNflColdStreaks(ctx, true); } catch { /* Same for the NFL leg. */ } try { await fetchLikelyScorers(ctx, "nhl", true); } catch { /* Likely scorers warm with the same daily job. */ } try { await fetchLikelyScorers(ctx, "nfl", true); } catch { /* Same for the NFL leg. */ } return result; } }),
+  refreshDaily: defineAction({ request: z.object({}), response: z.object({ status: z.enum(["success", "partial", "failed"]), message: z.string(), rowCount: z.number(), snapshotDate: z.string() }), async handler(ctx) { const result = await refresh(ctx); try { await fetchHotStreaks(ctx, true); } catch { /* Keep odds refresh independent of free NHL insight refresh. */ } try { await fetchNflHotStreaks(ctx, true); } catch { /* Same for the NFL leg. */ } try { await fetchColdStreaks(ctx, true); } catch { /* Cold streaks refresh with the same daily job. */ } try { await fetchNflColdStreaks(ctx, true); } catch { /* Same for the NFL leg. */ } try { await fetchNbaHotStreaks(ctx, true); } catch { /* Same for the NBA leg. */ } try { await fetchNbaColdStreaks(ctx, true); } catch { /* Same for the NBA leg. */ } try { await fetchLikelyScorers(ctx, "nhl", true); } catch { /* Likely scorers warm with the same daily job. */ } try { await fetchLikelyScorers(ctx, "nfl", true); } catch { /* Same for the NFL leg. */ } try { await fetchLikelyScorers(ctx, "nba", true); } catch { /* Same for the NBA leg. */ } return result; } }),
   getNhlOverview: defineAction({ request: z.object({}), response: nhlOverviewResponse, async handler() { return loadNhlOverview(); } }),
   getFirstGoalMatchup: defineAction({ request: z.object({ awayTeam: z.enum(teamCodes), homeTeam: z.enum(teamCodes), force: z.boolean().default(false) }).refine((value) => value.awayTeam !== value.homeTeam, { message: "Choose two different teams" }), response: firstGoalMatchupResponse, async handler(ctx, args) { return loadFirstGoalMatchup(ctx, args.awayTeam, args.homeTeam, args.force); } }),
   getHotStreaks: defineAction({ request: z.object({ force: z.boolean().default(false) }), response: hotStreaksResponse, async handler(ctx, args) { return fetchHotStreaks(ctx, args.force); } }),
@@ -1341,6 +1909,10 @@ export const Actions = {
   getNflHotStreaks: defineAction({ request: z.object({ force: z.boolean().default(false) }), response: nflHotStreaksResponse, async handler(ctx, args) { return fetchNflHotStreaks(ctx, args.force); } }),
   getColdStreaks: defineAction({ request: z.object({ force: z.boolean().default(false) }), response: coldStreaksResponse, async handler(ctx, args) { return fetchColdStreaks(ctx, args.force); } }),
   getNflColdStreaks: defineAction({ request: z.object({ force: z.boolean().default(false) }), response: nflColdStreaksResponse, async handler(ctx, args) { return fetchNflColdStreaks(ctx, args.force); } }),
+  getNbaOverview: defineAction({ request: z.object({}), response: nbaOverviewResponse, async handler() { return loadNbaOverview(); } }),
+  getNbaMatchup: defineAction({ request: z.object({ awayTeam: z.enum(nbaTeamCodes), homeTeam: z.enum(nbaTeamCodes), force: z.boolean().default(false) }).refine((value) => value.awayTeam !== value.homeTeam, { message: "Choose two different teams" }), response: nbaMatchupResponse, async handler(ctx, args) { return loadNbaMatchup(ctx, args.awayTeam, args.homeTeam, args.force); } }),
+  getNbaHotStreaks: defineAction({ request: z.object({ force: z.boolean().default(false) }), response: nbaHotStreaksResponse, async handler(ctx, args) { return fetchNbaHotStreaks(ctx, args.force); } }),
+  getNbaColdStreaks: defineAction({ request: z.object({ force: z.boolean().default(false) }), response: nbaColdStreaksResponse, async handler(ctx, args) { return fetchNbaColdStreaks(ctx, args.force); } }),
   getLikelyScorers: defineAction({ request: z.object({ sport: z.enum(sports), force: z.boolean().default(false) }), response: likelyScorersResponse, async handler(ctx, args) { return fetchLikelyScorers(ctx, args.sport, args.force); } }),
   getPublicPlates: defineAction({ request: z.object({}), response: platesResponse, async handler(ctx) { return listPlates(ctx, true); } }),
   getMyPlates: defineAction({ request: z.object({ adminToken: adminTokenSchema }), response: platesResponse, async handler(ctx, args) { requireAdmin(args); return listPlates(ctx, false); } }),
@@ -1374,6 +1946,8 @@ export const Actions = {
     async handler(ctx, args) { requireAdmin(args); await ctx.db.delete(schema.codyPlates).where(eq(schema.codyPlates.id, args.id)); return { deleted: true }; },
   }),  getNflRoster: defineAction({ request: z.object({ team: z.enum(nflTeamCodes) }), response: nflRosterResponse, async handler(ctx, args) { return loadNflRoster(ctx, args.team); } }),
   getNflPlayerGameLog: defineAction({ request: z.object({ team: z.enum(nflTeamCodes), playerId: z.number().int().positive() }), response: nflGameLogResponse, async handler(ctx, args) { return loadNflPlayerGameLog(ctx, args.team, args.playerId); } }),
+  getNbaRoster: defineAction({ request: z.object({ team: z.enum(nbaTeamCodes) }), response: nbaRosterResponse, async handler(ctx, args) { return loadNbaRoster(ctx, args.team); } }),
+  getNbaPlayerGameLog: defineAction({ request: z.object({ team: z.enum(nbaTeamCodes), playerId: z.number().int().positive() }), response: nbaGameLogResponse, async handler(ctx, args) { return loadNbaPlayerGameLog(ctx, args.team, args.playerId); } }),
   getPremiumBoard: defineAction({ request: z.object({ sport: z.enum(sports) }), response: premiumResponse, async handler(ctx, args) { return loadPremium(ctx, args.sport); } }),
   getAdminStatus: defineAction({ request: z.object({}), response: z.object({ configured: z.boolean() }), async handler() { return { configured: !!process.env.ADMIN_TOKEN?.trim() }; } }),
   refreshAllSportsbooks: defineAction({ request: z.object({ adminToken: adminTokenSchema }), response: premiumRefreshResponse, async handler(ctx, args) { requireAdmin(args); return refreshAllPremium(ctx); } }),
