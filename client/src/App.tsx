@@ -1381,7 +1381,7 @@ function OwnerConsole() {
   const gateConfigured = adminStatus.data?.configured ?? false;
   return <div className="owner-console"><div className="owner-banner" role="banner">
     <div><p className="kicker">PRIVATE · SITE OWNER ONLY</p><h1>The Daily Ham — Owner Console</h1><p>Plates, provider keys and visitor stats. Nothing here is visible to the public.</p></div>
-    <a className="owner-back" href="#/">← Public app</a>
+    <a className="owner-back" href="/">← Public app</a>
   </div><section className="settings-panel">
     <div className="settings-heading"><p className="kicker">PROVIDER SETTINGS</p><h1>Sportsbook connection</h1><p>Connect a sportsbook odds provider — SportsGameOdds or The Odds API — to power the complete NHL, NFL, NBA & soccer odds boards. Your keys are used only for hockey, football, basketball and soccer markets.</p></div>
     {adminStatus.isPending && <p className="settings-message">Checking admin access…</p>}
@@ -2089,10 +2089,18 @@ function TeamDetailSheet({ sport, team, onClose, onViewRoster }: { sport: League
   </div>;
 }
 
+function isOwnerRoute() {
+  try {
+    // Hash route (#/owner) plus real path (/owner): the path form survives
+    // PWA interception and link sharing where fragments can get dropped.
+    return window.location.hash.startsWith("#/owner") || /(^|\/)owner(\/|$)/.test(window.location.pathname);
+  } catch { return false; }
+}
+
 export function App(){
-  const [isOwner, setIsOwner] = useState(() => { try { return window.location.hash.startsWith("#/owner"); } catch { return false; } });
+  const [isOwner, setIsOwner] = useState(isOwnerRoute);
   useEffect(() => {
-    const onHash = () => { try { setIsOwner(window.location.hash.startsWith("#/owner")); } catch { /* noop */ } };
+    const onHash = () => setIsOwner(isOwnerRoute());
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
