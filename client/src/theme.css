@@ -1779,3 +1779,23 @@ body[data-sport="nba"] .app-shell {
 .model-panel > strong { filter: drop-shadow(0 1px 3px rgba(0,0,0,.6)); }
 .jamon-hero p:last-child { text-shadow: 0 1px 2px rgba(0,0,0,.65); }
 .jamon-hero .kicker { text-shadow: 0 1px 2px rgba(0,0,0,.6); }
+
+/* Key-injury warning chips — compact, honest, rendered verbatim from the official injury feed */
+.injury-chips { margin: 8px 0 2px; display: grid; gap: 6px; }
+.injury-chip { margin: 0; padding: 7px 10px; border-radius: 10px; background: rgba(178, 74, 32, .10); border: 1px solid rgba(178, 74, 32, .45); font-size: 12.5px; line-height: 1.4; color: var(--text); }
+.injury-chip b { font-weight: 800; }
+.injury-asof { font-size: 11px; color: var(--dim); }
+
+/* Admin usage dashboard — private, only rendered after admin unlock */
+.usage-panel { display: grid; gap: 12px; }
+.usage-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.usage-stat { padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--toast); display: grid; gap: 2px; }
+.usage-stat small { font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
+.usage-stat strong { font-size: 22px; }
+.usage-stat span { font-size: 12px; color: var(--dim); }
+.usage-block .kicker { margin: 0 0 6px; }
+.usage-table { display: grid; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+.usage-row { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; padding: 7px 12px; font-size: 12.5px; color: var(--text); }
+.usage-row:nth-child(odd):not(.header) { background: rgba(0, 0, 0, .03); }
+.usage-row.header { font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
+.usage-row span:nth-child(n+2) { text-align: right; font-variant-numeric: tabular-nums; }

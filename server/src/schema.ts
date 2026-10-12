@@ -1,4 +1,4 @@
-import { index, integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, primaryKey, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 export const projections = sqliteTable(
   "projections",
@@ -78,3 +78,17 @@ export const codyPlates = sqliteTable("cody_plates", {
   isPublic: integer("is_public").notNull().default(1),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
 });
+
+// Privacy-respecting usage counts: one row per (day, anonymized visitor,
+// sport). visitor_hash is SHA-256(IP + day + user-agent) — raw IPs are never
+// stored, and hashes are unlinkable across days.
+export const usageDaily = sqliteTable(
+  "usage_daily",
+  {
+    date: text("date").notNull(),
+    visitorHash: text("visitor_hash").notNull(),
+    sport: text("sport", { enum: ["nhl", "nfl", "nba", "other"] }).notNull(),
+    views: integer("views").notNull().default(1),
+  },
+  (table) => [primaryKey({ columns: [table.date, table.visitorHash, table.sport] })],
+);

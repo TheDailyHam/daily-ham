@@ -34,16 +34,16 @@ function defineAction<Req extends z.ZodTypeAny, Res extends z.ZodTypeAny>(opts: 
 import { fetchSportsGameOddsEvents, validateSportsGameOddsKey } from "./provider.js";
 import { fetchOddsApiEvents, parseOddsApiPayload, validateOddsApiKey } from "./oddsapi.js";
 import {
-  NFL_SEASON, enrichFirstScores, fetchNflGameSummary, fetchNflRoster,
+  NFL_SEASON, NFL_TEAM_CODES, enrichFirstScores, fetchNflGameSummary, fetchNflRoster,
   fetchNflScoreboard, fetchNflStandings, fetchNflTeamGames, nflDivision, nflTeamMeta,
-  type NflTeamGame,
+  type NflGame, type NflTeamGame,
 } from "./nfl.js";
 import {
-  NBA_SEASON, enrichNbaGameDetails, fetchNbaGameSummary, fetchNbaRoster,
+  NBA_SEASON, NBA_TEAM_CODES, enrichNbaGameDetails, fetchNbaGameSummary, fetchNbaRoster,
   fetchNbaScoreboard, fetchNbaStandings, fetchNbaTeamGames, nbaTeamMeta,
   type NbaTeamGame,
 } from "./nba.js";
-import { and, desc, eq, gte, lt } from "drizzle-orm";
+import { and, desc, eq, gte, lt, sql } from "drizzle-orm";
 import * as schema from "./schema.js";
 
 const sports = ["nhl", "nfl", "nba"] as const;
@@ -779,6 +779,10 @@ const nflStandingSchema = z.object({
   wins: z.number(), losses: z.number(), ties: z.number(),
   pointsFor: z.number(), pointsAgainst: z.number(),
   streak: z.string().nullable(), playoffSeed: z.number().nullable(),
+  // Flip % v2: Pythagorean expectation blended with last-5 form, regressed
+  // toward .500 early in the season. Null when the sample is too thin.
+  // Always a model estimate, never a sportsbook price.
+  modelWinPct: z.number().nullable(),
 });
 const nflOverviewResponse = z.object({
   week: z.number(), weeks: z.array(z.number()), season: z.number(), fetchedAt: z.string(),
@@ -859,14 +863,150 @@ const nflGameLogResponse = z.object({
   games: z.array(nflGameLogRowSchema),
 });
 
-async function loadNflOverview(week?: number): Promise<z.infer<typeof nflOverviewResponse>> {
+// ---------------------------------------------------------------------------
+// Flip % v2 model engine (NFL + NBA; the NHL side keeps its existing model).
+//
+// modelWinPct blends three signals, all from keyless official feeds:
+//   1. Pythagorean expectation from points for/against (exp 2.37 NFL, 13.91 NBA)
+//   2. Last-5-games form (cached league-wide; see warmNflForm/warmNbaForm)
+//   3. Regression toward .500 until 8 games are played
+// Null when fewer than 2 games are logged. The form term is skipped when
+// fewer than 3 games are logged (or the form cache is unavailable), in which
+// case the regressed Pythagorean value stands alone. Always a model
+// estimate — never presented as a sportsbook price.
+// ---------------------------------------------------------------------------
+
+async function pool<T, R>(items: T[], concurrency: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.max(1, Math.min(concurrency, items.length)) }, async () => {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i] as T);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+function modelWinPct(opts: {
+  pointsFor: number; pointsAgainst: number;
+  wins: number; losses: number; ties?: number;
+  exponent: number;
+  form: { wins: number; games: number } | null;
+}): number | null {
+  const games = opts.wins + opts.losses + (opts.ties ?? 0);
+  if (games < 2) return null;
+  const pf = Math.max(0, opts.pointsFor);
+  const pa = Math.max(0, opts.pointsAgainst);
+  const pfExp = Math.pow(pf, opts.exponent);
+  const paExp = Math.pow(pa, opts.exponent);
+  const pythag = pfExp + paExp > 0 ? pfExp / (pfExp + paExp) : 0.5;
+  const w = Math.min(games, 8);
+  const blended = (pythag * w + 0.5 * (8 - w)) / 8;
+  const f = opts.form;
+  const formPct = f && f.games >= 3 && games >= 3 ? f.wins / f.games : null;
+  const value = formPct === null ? blended : 0.7 * blended + 0.3 * formPct;
+  return Math.round(value * 1000) / 1000;
+}
+
+type TeamForm = { wins: number; games: number };
+const FORM_TTL_MS = 12 * 60 * 60 * 1000;
+
+async function readLeagueForm(ctx: Ctx, sport: "nfl" | "nba"): Promise<Record<string, TeamForm> | null> {
+  try {
+    const rows = await ctx.db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, `${sport}-team-form`)).limit(1);
+    const row = rows[0];
+    if (!row || row.expiresAt.getTime() <= Date.now()) return null;
+    const parsed = JSON.parse(row.payloadJson) as Record<string, TeamForm>;
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeLeagueForm(ctx: Ctx, sport: "nfl" | "nba", form: Record<string, TeamForm>): Promise<void> {
+  const key = `${sport}-team-form`;
+  await ctx.db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, key));
+  await ctx.db.insert(schema.nhlInsightCache).values({
+    key, payloadJson: JSON.stringify(form),
+    fetchedAt: new Date(), expiresAt: new Date(Date.now() + FORM_TTL_MS),
+  });
+}
+
+// NFL form, derived efficiently: fetch each recent week's scoreboard once and
+// attribute results to all 32 teams, instead of one schedule scan per team.
+async function warmNflForm(ctx: Ctx): Promise<void> {
+  const current = await fetchNflScoreboard();
+  const weeks: number[] = [];
+  for (let w = current.week; w >= Math.max(1, current.week - 6); w--) weeks.push(w);
+  const boards = new Map<number, NflGame[]>();
+  await pool(weeks, 3, async (w) => {
+    boards.set(w, w === current.week ? current.games : (await fetchNflScoreboard(w)).games);
+  });
+  const form: Record<string, TeamForm> = {};
+  for (const code of NFL_TEAM_CODES) {
+    const recent: { date: string; won: boolean }[] = [];
+    for (const w of weeks) {
+      for (const g of boards.get(w) ?? []) {
+        if (g.state !== "final") continue;
+        const isAway = g.away.abbr === code;
+        const isHome = g.home.abbr === code;
+        if (!isAway && !isHome) continue;
+        recent.push({ date: g.date, won: (isAway ? g.away : g.home).winner });
+      }
+    }
+    recent.sort((a, b) => b.date.localeCompare(a.date));
+    const sample = recent.slice(0, 5);
+    form[code] = { wins: sample.filter((r) => r.won).length, games: sample.length };
+  }
+  await writeLeagueForm(ctx, "nfl", form);
+}
+
+// NBA form: one team-schedule fetch per club (30 keyless requests), each
+// already sorted most-recent-first by the data client.
+async function warmNbaForm(ctx: Ctx): Promise<void> {
+  const form: Record<string, TeamForm> = {};
+  await pool(NBA_TEAM_CODES, 5, async (code) => {
+    try {
+      const { games } = await fetchNbaTeamGames(code, 5);
+      const sample = games.slice(0, 5);
+      form[code] = { wins: sample.filter((g) => g.won).length, games: sample.length };
+    } catch {
+      // One club's form never breaks the league map.
+    }
+  });
+  await writeLeagueForm(ctx, "nba", form);
+}
+
+// Stale-while-revalidate for the overview: use the cached form when fresh;
+// otherwise fall back to the regressed Pythagorean value and refresh the
+// cache in the background so the next load has form.
+async function formForOverview(ctx: Ctx, sport: "nfl" | "nba"): Promise<Record<string, TeamForm> | null> {
+  const form = await readLeagueForm(ctx, sport);
+  if (!form) {
+    (sport === "nfl" ? warmNflForm(ctx) : warmNbaForm(ctx)).catch(() => {});
+  }
+  return form;
+}
+
+async function loadNflOverview(week?: number, ctx?: Ctx): Promise<z.infer<typeof nflOverviewResponse>> {
   const board = await fetchNflScoreboard(week);
+  const formMap = ctx ? await formForOverview(ctx, "nfl") : null;
   let standings: z.infer<typeof nflStandingSchema>[] = [];
   let standingsUrl = "";
   try {
     const data = await fetchNflStandings();
     standingsUrl = data.sourceUrl;
-    standings = data.standings.map((s) => ({ ...s, division: s.division || nflDivision(s.team) }));
+    standings = data.standings.map((s) => ({
+      ...s,
+      division: s.division || nflDivision(s.team),
+      modelWinPct: modelWinPct({
+        pointsFor: s.pointsFor, pointsAgainst: s.pointsAgainst,
+        wins: s.wins, losses: s.losses, ties: s.ties, exponent: 2.37,
+        form: formMap?.[s.team] ?? null,
+      }),
+    }));
   } catch { /* schedule still renders without standings */ }
   const weeks = Array.from({ length: 18 }, (_, i) => i + 1);
   const games = board.games.map((g) => ({
@@ -1263,6 +1403,10 @@ const nbaStandingSchema = z.object({
   wins: z.number(), losses: z.number(),
   pointsFor: z.number(), pointsAgainst: z.number(),
   streak: z.string().nullable(), playoffSeed: z.number().nullable(),
+  // Flip % v2: Pythagorean expectation blended with last-5 form, regressed
+  // toward .500 early in the season. Null when the sample is too thin.
+  // Always a model estimate, never a sportsbook price.
+  modelWinPct: z.number().nullable(),
 });
 const nbaOverviewResponse = z.object({
   season: z.number(), fetchedAt: z.string(),
@@ -1348,14 +1492,22 @@ const nbaGameLogResponse = z.object({
   games: z.array(nbaGameLogRowSchema),
 });
 
-async function loadNbaOverview(): Promise<z.infer<typeof nbaOverviewResponse>> {
+async function loadNbaOverview(ctx?: Ctx): Promise<z.infer<typeof nbaOverviewResponse>> {
   const board = await fetchNbaScoreboard();
+  const formMap = ctx ? await formForOverview(ctx, "nba") : null;
   let standings: z.infer<typeof nbaStandingSchema>[] = [];
   let standingsUrl = "";
   try {
     const data = await fetchNbaStandings();
     standingsUrl = data.sourceUrl;
-    standings = data.standings;
+    standings = data.standings.map((s) => ({
+      ...s,
+      modelWinPct: modelWinPct({
+        pointsFor: s.pointsFor, pointsAgainst: s.pointsAgainst,
+        wins: s.wins, losses: s.losses, exponent: 13.91,
+        form: formMap?.[s.team] ?? null,
+      }),
+    }));
   } catch { /* schedule still renders without standings */ }
   const games = board.games.map((g) => ({
     id: g.id, date: g.date.slice(0, 10), startsAt: g.date, state: g.state, detail: g.detail,
@@ -1896,20 +2048,353 @@ async function listPlates(ctx: Ctx, publicOnly: boolean): Promise<z.infer<typeof
   return { plates: rows.map(toPlate) };
 }
 
+// ---------------------------------------------------------------------------
+// Key-player injury warnings (Job 2).
+//
+// Official ESPN injury designations only — never invented. For each team with
+// a game in the next 48 hours we pull the club's injury report from the
+// keyless ESPN core API and keep only Out / Doubtful / Injured Reserve
+// designations (Questionable only when the official note itself says the
+// player is expected to miss). Position filter: NFL QB/RB/WR/TE; NBA and NHL
+// keep every position (the client ranks NBA players by scoring importance).
+// Cached 12h; zero sportsbook quota.
+// ---------------------------------------------------------------------------
+
+const injuryPlayerSchema = z.object({
+  name: z.string(), position: z.string(), status: z.string(), note: z.string(),
+});
+const injuryTeamSchema = z.object({ team: z.string(), players: z.array(injuryPlayerSchema) });
+const keyInjuriesResponse = z.object({
+  sport: z.enum(["nhl", "nfl", "nba"]),
+  fetchedAt: z.string(),
+  teams: z.array(injuryTeamSchema),
+});
+
+const INJURY_TTL_MS = 12 * 60 * 60 * 1000;
+const ESPN_CORE_BASE = "https://sports.core.api.espn.com/v2/sports";
+const INJURY_LEAGUE_PATH: Record<Sport, string> = {
+  nhl: "hockey/leagues/nhl",
+  nfl: "football/leagues/nfl",
+  nba: "basketball/leagues/nba",
+};
+
+async function espnCoreJson(url: string): Promise<unknown> {
+  // Defensive timeout: a hanging upstream must never wedge the action.
+  const response = await fetch(url, {
+    headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(25000),
+  });
+  if (!response.ok) throw new Error(`ESPN core request failed (${response.status})`);
+  return response.json() as Promise<unknown>;
+}
+
+function coreRef(value: unknown): string | null {
+  const row = objectValue(value);
+  const ref = textValue(row?.$ref);
+  if (!ref || !ref.startsWith("http")) return null;
+  // ESPN core $refs come back as http:// — plain HTTP hangs Node's fetch
+  // against this host (verified 2026-10-12), so upgrade to https://.
+  return ref.replace(/^http:\/\//, "https://");
+}
+
+// NHL clubs are keyed by tri-code on the api-web.nhle.com side, but the ESPN
+// core injuries endpoint needs ESPN's numeric team ids. Resolve dynamically
+// (cached 7 days); ESPN abbreviations match our tri-codes except LA/NJ/SJ.
+const NHL_ESPN_ABBR_OVERRIDES: Record<string, string> = { LAK: "LA", NJD: "NJ", SJS: "SJ" };
+
+async function nhlEspnIdMap(ctx: Ctx): Promise<Record<string, number>> {
+  const cacheKey = "nhl-espn-team-ids";
+  try {
+    const rows = await ctx.db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey)).limit(1);
+    const row = rows[0];
+    if (row && row.expiresAt.getTime() > Date.now()) {
+      const parsed = JSON.parse(row.payloadJson) as Record<string, number>;
+      if (parsed && typeof parsed === "object") return parsed;
+    }
+  } catch { /* fall through to live fetch */ }
+  const reverse = new Map<string, string>();
+  for (const [tri, abbr] of Object.entries(NHL_ESPN_ABBR_OVERRIDES)) reverse.set(abbr, tri);
+  const map: Record<string, number> = {};
+  for (const page of [1, 2]) {
+    const payload = await espnCoreJson(`${ESPN_CORE_BASE}/hockey/leagues/nhl/teams?lang=en&region=us&page=${page}`);
+    const items = arrayValue(objectValue(payload)?.items);
+    if (!items.length) break;
+    const teams = await pool(items, 8, async (item) => {
+      const ref = coreRef(item);
+      if (!ref) return null;
+      try { return await espnCoreJson(ref); } catch { return null; }
+    });
+    for (const team of teams) {
+      const row = objectValue(team);
+      const abbr = textValue(row?.abbreviation);
+      // ESPN core returns the team id as a numeric string ("1"), not a
+      // number — parse it explicitly (the strict num() helper rejects strings).
+      const idRaw = row?.id;
+      const id = typeof idRaw === "number" && Number.isFinite(idRaw) ? idRaw
+        : typeof idRaw === "string" && /^\d+$/.test(idRaw.trim()) ? parseInt(idRaw, 10) : null;
+      if (!abbr || id === null) continue;
+      map[reverse.get(abbr) ?? abbr] = id;
+    }
+  }
+  if (Object.keys(map).length >= 30) {
+    try {
+      await ctx.db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey));
+      await ctx.db.insert(schema.nhlInsightCache).values({
+        key: cacheKey, payloadJson: JSON.stringify(map),
+        fetchedAt: new Date(), expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      });
+    } catch { /* cache is best-effort */ }
+  }
+  return map;
+}
+
+function espnTeamId(sport: Sport, abbr: string, nhlIds: Record<string, number>): number | null {
+  if (sport === "nfl") return nflTeamMeta(abbr)?.id ?? null;
+  if (sport === "nba") return nbaTeamMeta(abbr)?.id ?? null;
+  return nhlIds[abbr] ?? null;
+}
+
+function startsWithin48h(iso: string): boolean {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return false;
+  const now = Date.now();
+  return t >= now && t <= now + 48 * 60 * 60 * 1000;
+}
+
+// Clubs with a game tipping off / kicking off in the next 48 hours.
+async function upcomingInjuryTeams(sport: Sport): Promise<string[]> {
+  const seen = new Set<string>();
+  if (sport === "nfl") {
+    const board = await fetchNflScoreboard();
+    for (const g of board.games) {
+      if (!startsWithin48h(g.date)) continue;
+      seen.add(g.away.abbr); seen.add(g.home.abbr);
+    }
+    // Next week's board can hold games inside 48h once the week turns over.
+    try {
+      const next = await fetchNflScoreboard(board.week + 1);
+      for (const g of next.games) {
+        if (!startsWithin48h(g.date)) continue;
+        seen.add(g.away.abbr); seen.add(g.home.abbr);
+      }
+    } catch { /* current week is enough */ }
+  } else if (sport === "nba") {
+    // The default scoreboard only covers today and the dates param takes a
+    // single YYYYMMDD (no ranges), so fetch the next three calendar days and
+    // let the 48h filter pick precisely.
+    const fmtDay = (t: number) => {
+      const d = new Date(t);
+      const p = (n: number) => String(n).padStart(2, "0");
+      return `${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}`;
+    };
+    const now = Date.now();
+    const dayMs = 24 * 60 * 60 * 1000;
+    const boards = await pool([1, 2, 3], 3, async (offset) => {
+      try { return await fetchNbaScoreboard(fmtDay(now + offset * dayMs)); } catch { return null; }
+    });
+    for (const board of boards) {
+      if (!board) continue;
+      for (const g of board.games) {
+        if (!startsWithin48h(g.date)) continue;
+        seen.add(g.away.abbr); seen.add(g.home.abbr);
+      }
+    }
+  } else {
+    const today = new Date();
+    const dates = [0, 1, 2].map((offset) => {
+      const d = new Date(today.getTime() + offset * 24 * 60 * 60 * 1000);
+      return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
+    });
+    const payloads = await pool(dates, 3, async (date) => {
+      try { return await espnCoreJson(`https://api-web.nhle.com/v1/schedule/${date}`); } catch { return null; }
+    });
+    for (const payload of payloads) {
+      for (const weekValue of arrayValue(objectValue(payload)?.gameWeek)) {
+        for (const gameValue of arrayValue(objectValue(weekValue)?.games)) {
+          const game = objectValue(gameValue);
+          if (!game || !startsWithin48h(textValue(game.startTimeUTC) ?? "")) continue;
+          const away = textValue(objectValue(game.awayTeam)?.abbrev);
+          const home = textValue(objectValue(game.homeTeam)?.abbrev);
+          if (away) seen.add(away);
+          if (home) seen.add(home);
+        }
+      }
+    }
+  }
+  const valid = sport === "nfl" ? new Set(nflTeamCodes as readonly string[]) : sport === "nba" ? new Set(nbaTeamCodes as readonly string[]) : new Set(teamCodes as readonly string[]);
+  return [...seen].filter((abbr) => valid.has(abbr));
+}
+
+// Official designation gate: Out, Doubtful, and Injured Reserve always
+// count. Questionable counts only when ESPN's own note says the player is
+// expected to miss — conservative by design, never inferred.
+function injuryIsKey(status: string, note: string): boolean {
+  const s = status.trim().toLowerCase();
+  if (s === "out" || s === "doubtful" || s === "injured reserve" || s === "ir") return true;
+  if (s === "questionable") {
+    return /(ruled out|will not play|won'?t play|expected to miss|not expected to play)/i.test(note);
+  }
+  return false;
+}
+
+const NFL_KEY_POSITIONS = new Set(["QB", "RB", "WR", "TE"]);
+
+async function fetchTeamKeyInjuries(sport: Sport, espnId: number): Promise<z.infer<typeof injuryPlayerSchema>[]> {
+  const listUrl = `${ESPN_CORE_BASE}/${INJURY_LEAGUE_PATH[sport]}/teams/${espnId}/injuries?lang=en&region=us`;
+  const payload = await espnCoreJson(listUrl);
+  const root = objectValue(payload);
+  const items = arrayValue(root?.items).slice(0, 50);
+  const pageCount = num(root?.pageCount) ?? 1;
+  const refs = items.flatMap((item) => { const ref = coreRef(item); return ref ? [ref] : []; });
+  // If page one is full and turned up nothing key, peek at page two — the
+  // list is newest-first, so current designations are almost always on page 1.
+  let details = await pool(refs, 6, async (ref) => {
+    try { return await espnCoreJson(ref); } catch { return null; }
+  });
+  const keySoFar = details.filter((d) => d && injuryIsKey(textValue(objectValue(d)?.status) ?? "", "")).length;
+  if (pageCount > 1 && items.length >= 25 && keySoFar === 0) {
+    try {
+      const page2 = await espnCoreJson(`${listUrl}&page=2`);
+      const refs2 = arrayValue(objectValue(page2)?.items).flatMap((item) => { const ref = coreRef(item); return ref ? [ref] : []; });
+      const details2 = await pool(refs2, 6, async (ref) => {
+        try { return await espnCoreJson(ref); } catch { return null; }
+      });
+      details = [...details, ...details2];
+    } catch { /* page one is enough */ }
+  }
+  const kept: z.infer<typeof injuryPlayerSchema>[] = [];
+  const keyDetails = details.flatMap((d) => {
+    const row = objectValue(d);
+    if (!row) return [];
+    const status = textValue(row.status) ?? "";
+    const note = textValue(row.shortComment) ?? textValue(row.longComment) ?? "";
+    return injuryIsKey(status, note) ? [{ row, status, note }] : [];
+  });
+  const athletes = await pool(keyDetails, 4, async ({ row }) => {
+    const ref = coreRef(row.athlete);
+    if (!ref) return null;
+    try { return await espnCoreJson(ref); } catch { return null; }
+  });
+  keyDetails.forEach(({ status, note }, i) => {
+    const athlete = objectValue(athletes[i]);
+    const name = textValue(athlete?.displayName) ?? textValue(athlete?.fullName) ?? "Unknown";
+    const position = textValue(objectValue(athlete?.position)?.abbreviation) ?? "";
+    if (sport === "nfl" && !NFL_KEY_POSITIONS.has(position.toUpperCase())) return;
+    kept.push({ name, position, status, note });
+  });
+  return kept;
+}
+
+async function fetchKeyInjuries(ctx: Ctx, sport: Sport, force: boolean): Promise<z.infer<typeof keyInjuriesResponse>> {
+  const cacheKey = `key-injuries-${sport}`;
+  if (!force) {
+    try {
+      const rows = await ctx.db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey)).limit(1);
+      const row = rows[0];
+      if (row && row.expiresAt.getTime() > Date.now()) {
+        const teams = JSON.parse(row.payloadJson) as z.infer<typeof injuryTeamSchema>[];
+        return { sport, fetchedAt: row.fetchedAt.toISOString(), teams };
+      }
+    } catch { /* fall through to live fetch */ }
+  }
+  const abbrs = await upcomingInjuryTeams(sport);
+  const nhlIds = sport === "nhl" ? await nhlEspnIdMap(ctx).catch(() => ({} as Record<string, number>)) : {};
+  const teams: z.infer<typeof injuryTeamSchema>[] = [];
+  await pool(abbrs, 4, async (abbr) => {
+    const id = espnTeamId(sport, abbr, nhlIds);
+    if (!id) return;
+    try {
+      const players = await fetchTeamKeyInjuries(sport, id);
+      if (players.length) teams.push({ team: abbr, players });
+    } catch { /* one club never breaks the report */ }
+  });
+  teams.sort((a, b) => a.team.localeCompare(b.team));
+  const response = { sport, fetchedAt: new Date().toISOString(), teams };
+  try {
+    await ctx.db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey));
+    await ctx.db.insert(schema.nhlInsightCache).values({
+      key: cacheKey, payloadJson: JSON.stringify(teams),
+      fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(Date.now() + INJURY_TTL_MS),
+    });
+  } catch { /* cache is best-effort */ }
+  return response;
+}
+
+// ---------------------------------------------------------------------------
+// Admin-only usage stats (Job 3). Counts, never identities: the tracker in
+// index.ts stores one row per (UTC day, SHA-256(IP + day + UA), sport) and
+// never stores raw IPs. Gated exactly like the plate write actions.
+// ---------------------------------------------------------------------------
+
+const usageDaySchema = z.object({ uniques: z.number(), views: z.number() });
+const usageStatsResponse = z.object({
+  today: usageDaySchema,
+  yesterday: usageDaySchema,
+  last14: z.array(z.object({ date: z.string(), uniques: z.number(), views: z.number() })),
+  bySport: z.object({ nhl: usageDaySchema, nfl: usageDaySchema, nba: usageDaySchema }),
+  total: usageDaySchema,
+});
+
+function usageDayKey(offsetDays: number): string {
+  return new Date(Date.now() + offsetDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+async function loadUsageStats(ctx: Ctx): Promise<z.infer<typeof usageStatsResponse>> {
+  const today = usageDayKey(0);
+  const yesterday = usageDayKey(-1);
+  const since = usageDayKey(-13);
+  const zero = { uniques: 0, views: 0 };
+  const dayRows = await ctx.db.select({
+    date: schema.usageDaily.date,
+    uniques: sql<number>`count(distinct ${schema.usageDaily.visitorHash})`,
+    views: sql<number>`coalesce(sum(${schema.usageDaily.views}), 0)`,
+  }).from(schema.usageDaily).where(gte(schema.usageDaily.date, since)).groupBy(schema.usageDaily.date);
+  const sportRows = await ctx.db.select({
+    sport: schema.usageDaily.sport,
+    uniques: sql<number>`count(distinct ${schema.usageDaily.visitorHash})`,
+    views: sql<number>`coalesce(sum(${schema.usageDaily.views}), 0)`,
+  }).from(schema.usageDaily).where(gte(schema.usageDaily.date, since)).groupBy(schema.usageDaily.sport);
+  const byDay = new Map(dayRows.map((r) => [r.date, { uniques: Number(r.uniques) || 0, views: Number(r.views) || 0 }]));
+  const bySport = new Map(sportRows.map((r) => [r.sport, { uniques: Number(r.uniques) || 0, views: Number(r.views) || 0 }]));
+  const last14: { date: string; uniques: number; views: number }[] = [];
+  for (let offset = -13; offset <= 0; offset++) {
+    const date = usageDayKey(offset);
+    last14.push({ date, ...(byDay.get(date) ?? zero) });
+  }
+  const total = { uniques: 0, views: 0 };
+  for (const row of dayRows) { total.views += Number(row.views) || 0; }
+  // Visitor hashes rotate daily by design (privacy), so true 14-day
+  // deduplicated uniques are unknowable; total.uniques is the sum of daily
+  // uniques — an upper bound, not a deduplicated count.
+  for (const row of dayRows) { total.uniques += Number(row.uniques) || 0; }
+  return {
+    today: byDay.get(today) ?? { ...zero },
+    yesterday: byDay.get(yesterday) ?? { ...zero },
+    last14,
+    bySport: {
+      nhl: bySport.get("nhl") ?? { ...zero },
+      nfl: bySport.get("nfl") ?? { ...zero },
+      nba: bySport.get("nba") ?? { ...zero },
+    },
+    total,
+  };
+}
+
 export const Actions = {
   getDashboard: defineAction({ request: z.object({ sport: z.enum(sports).default("nhl") }), response: dashboardResponse, async handler(ctx, args) { return loadDashboard(ctx, args.sport); } }),
-  refreshDaily: defineAction({ request: z.object({}), response: z.object({ status: z.enum(["success", "partial", "failed"]), message: z.string(), rowCount: z.number(), snapshotDate: z.string() }), async handler(ctx) { const result = await refresh(ctx); try { await fetchHotStreaks(ctx, true); } catch { /* Keep odds refresh independent of free NHL insight refresh. */ } try { await fetchNflHotStreaks(ctx, true); } catch { /* Same for the NFL leg. */ } try { await fetchColdStreaks(ctx, true); } catch { /* Cold streaks refresh with the same daily job. */ } try { await fetchNflColdStreaks(ctx, true); } catch { /* Same for the NFL leg. */ } try { await fetchNbaHotStreaks(ctx, true); } catch { /* Same for the NBA leg. */ } try { await fetchNbaColdStreaks(ctx, true); } catch { /* Same for the NBA leg. */ } try { await fetchLikelyScorers(ctx, "nhl", true); } catch { /* Likely scorers warm with the same daily job. */ } try { await fetchLikelyScorers(ctx, "nfl", true); } catch { /* Same for the NFL leg. */ } try { await fetchLikelyScorers(ctx, "nba", true); } catch { /* Same for the NBA leg. */ } return result; } }),
+  refreshDaily: defineAction({ request: z.object({}), response: z.object({ status: z.enum(["success", "partial", "failed"]), message: z.string(), rowCount: z.number(), snapshotDate: z.string() }), async handler(ctx) { const result = await refresh(ctx); try { await fetchHotStreaks(ctx, true); } catch { /* Keep odds refresh independent of free NHL insight refresh. */ } try { await fetchNflHotStreaks(ctx, true); } catch { /* Same for the NFL leg. */ } try { await fetchColdStreaks(ctx, true); } catch { /* Cold streaks refresh with the same daily job. */ } try { await fetchNflColdStreaks(ctx, true); } catch { /* Same for the NFL leg. */ } try { await fetchNbaHotStreaks(ctx, true); } catch { /* Same for the NBA leg. */ } try { await fetchNbaColdStreaks(ctx, true); } catch { /* Same for the NBA leg. */ } try { await fetchLikelyScorers(ctx, "nhl", true); } catch { /* Likely scorers warm with the same daily job. */ } try { await fetchLikelyScorers(ctx, "nfl", true); } catch { /* Same for the NFL leg. */ } try { await fetchLikelyScorers(ctx, "nba", true); } catch { /* Same for the NBA leg. */ } try { await warmNflForm(ctx); } catch { /* Flip % v2 form warms with the same daily job. */ } try { await warmNbaForm(ctx); } catch { /* Same for the NBA leg. */ } try { await fetchKeyInjuries(ctx, "nfl", true); } catch { /* Injury warnings warm with the same daily job. */ } try { await fetchKeyInjuries(ctx, "nba", true); } catch { /* Same for the NBA leg. */ } try { await fetchKeyInjuries(ctx, "nhl", true); } catch { /* Same for the NHL leg. */ } return result; } }),
   getNhlOverview: defineAction({ request: z.object({}), response: nhlOverviewResponse, async handler() { return loadNhlOverview(); } }),
   getFirstGoalMatchup: defineAction({ request: z.object({ awayTeam: z.enum(teamCodes), homeTeam: z.enum(teamCodes), force: z.boolean().default(false) }).refine((value) => value.awayTeam !== value.homeTeam, { message: "Choose two different teams" }), response: firstGoalMatchupResponse, async handler(ctx, args) { return loadFirstGoalMatchup(ctx, args.awayTeam, args.homeTeam, args.force); } }),
   getHotStreaks: defineAction({ request: z.object({ force: z.boolean().default(false) }), response: hotStreaksResponse, async handler(ctx, args) { return fetchHotStreaks(ctx, args.force); } }),
   getNhlRoster: defineAction({ request: z.object({ team: z.enum(teamCodes) }), response: rosterResponse, async handler(_ctx, args) { return loadRoster(args.team); } }),
   getNhlPlayerGameLog: defineAction({ request: z.object({ playerId: z.number().int().positive() }), response: gameLogResponse, async handler(_ctx, args) { return loadNhlPlayerGameLog(args.playerId); } }),
-  getNflOverview: defineAction({ request: z.object({ week: z.number().int().min(1).max(18).optional() }), response: nflOverviewResponse, async handler(_ctx, args) { return loadNflOverview(args.week); } }),
+  getNflOverview: defineAction({ request: z.object({ week: z.number().int().min(1).max(18).optional() }), response: nflOverviewResponse, async handler(ctx, args) { return loadNflOverview(args.week, ctx); } }),
   getNflMatchup: defineAction({ request: z.object({ awayTeam: z.enum(nflTeamCodes), homeTeam: z.enum(nflTeamCodes), force: z.boolean().default(false) }).refine((value) => value.awayTeam !== value.homeTeam, { message: "Choose two different teams" }), response: nflMatchupResponse, async handler(ctx, args) { return loadNflMatchup(ctx, args.awayTeam, args.homeTeam, args.force); } }),
   getNflHotStreaks: defineAction({ request: z.object({ force: z.boolean().default(false) }), response: nflHotStreaksResponse, async handler(ctx, args) { return fetchNflHotStreaks(ctx, args.force); } }),
   getColdStreaks: defineAction({ request: z.object({ force: z.boolean().default(false) }), response: coldStreaksResponse, async handler(ctx, args) { return fetchColdStreaks(ctx, args.force); } }),
   getNflColdStreaks: defineAction({ request: z.object({ force: z.boolean().default(false) }), response: nflColdStreaksResponse, async handler(ctx, args) { return fetchNflColdStreaks(ctx, args.force); } }),
-  getNbaOverview: defineAction({ request: z.object({}), response: nbaOverviewResponse, async handler() { return loadNbaOverview(); } }),
+  getNbaOverview: defineAction({ request: z.object({}), response: nbaOverviewResponse, async handler(ctx) { return loadNbaOverview(ctx); } }),
+  getKeyInjuries: defineAction({ request: z.object({ sport: z.enum(["nhl", "nfl", "nba"]) }), response: keyInjuriesResponse, async handler(ctx, args) { return fetchKeyInjuries(ctx, args.sport, false); } }),
   getNbaMatchup: defineAction({ request: z.object({ awayTeam: z.enum(nbaTeamCodes), homeTeam: z.enum(nbaTeamCodes), force: z.boolean().default(false) }).refine((value) => value.awayTeam !== value.homeTeam, { message: "Choose two different teams" }), response: nbaMatchupResponse, async handler(ctx, args) { return loadNbaMatchup(ctx, args.awayTeam, args.homeTeam, args.force); } }),
   getNbaHotStreaks: defineAction({ request: z.object({ force: z.boolean().default(false) }), response: nbaHotStreaksResponse, async handler(ctx, args) { return fetchNbaHotStreaks(ctx, args.force); } }),
   getNbaColdStreaks: defineAction({ request: z.object({ force: z.boolean().default(false) }), response: nbaColdStreaksResponse, async handler(ctx, args) { return fetchNbaColdStreaks(ctx, args.force); } }),
@@ -1950,6 +2435,7 @@ export const Actions = {
   getNbaPlayerGameLog: defineAction({ request: z.object({ team: z.enum(nbaTeamCodes), playerId: z.number().int().positive() }), response: nbaGameLogResponse, async handler(ctx, args) { return loadNbaPlayerGameLog(ctx, args.team, args.playerId); } }),
   getPremiumBoard: defineAction({ request: z.object({ sport: z.enum(sports) }), response: premiumResponse, async handler(ctx, args) { return loadPremium(ctx, args.sport); } }),
   getAdminStatus: defineAction({ request: z.object({}), response: z.object({ configured: z.boolean() }), async handler() { return { configured: !!process.env.ADMIN_TOKEN?.trim() }; } }),
+  getUsageStats: defineAction({ request: z.object({ adminToken: adminTokenSchema }), response: usageStatsResponse, async handler(ctx, args) { requireAdmin(args); return loadUsageStats(ctx); } }),
   refreshAllSportsbooks: defineAction({ request: z.object({ adminToken: adminTokenSchema }), response: premiumRefreshResponse, async handler(ctx, args) { requireAdmin(args); return refreshAllPremium(ctx); } }),
   getSportsGameOddsKeyStatus: defineAction({ request: z.object({}), response: providerStatusResponse, async handler(ctx) { return getProviderStatus(ctx, "sportsgameodds"); } }),
   saveSportsGameOddsKey: defineAction({

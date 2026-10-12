@@ -57,6 +57,13 @@
       "when": 1791685345769,
       "tag": "0008_add_cody_plates",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1791769600000,
+      "tag": "0009_add_usage_daily",
+      "breakpoints": true
     }
   ]
 }

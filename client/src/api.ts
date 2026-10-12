@@ -28,9 +28,35 @@ async function callAction<N extends ActionName>(action: N, args: ActionArgs<N>):
   return payload.data as ActionData<N>;
 }
 
+// Server actions that are landing in a parallel server leg (not yet in
+// `server/src/actions.ts`). These are typed loosely here so the client builds
+// and degrades gracefully until then; once the server exposes them, collapse
+// these onto `callAction` like the rest.
+async function callPending<T>(action: string, args: unknown): Promise<T> {
+  const response = await fetch("/api/actions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, args }),
+  });
+  if (!response.ok) throw new Error(`Request failed (${response.status})`);
+  const payload = (await response.json()) as { ok: boolean; data?: unknown; error?: string };
+  if (!payload.ok) {
+    throw new Error(typeof payload.error === "string" && payload.error ? payload.error : "The request could not be completed.");
+  }
+  return payload.data as T;
+}
+
+export type KeyInjuryPlayer = { name: string; position: string | null; status: string; note: string | null };
+export type KeyInjuries = { fetchedAt: string | null; teams: { team: string; players: KeyInjuryPlayer[] }[] };
+export type UsageStats = {
+  today: { uniques: number; views: number };
+  yesterday: { uniques: number; views: number };
+  last14: { date: string; uniques: number; views: number }[];
+  bySport: { sport: string; views: number }[];
+};
+
 export const api = {
-  getDashboard: (args: ActionArgs<"getDashboard">) => callAction("getDashboard", args),
-  refreshDaily: (args: ActionArgs<"refreshDaily">) => callAction("refreshDaily", args),
+  getDashboard: (args: ActionArgs<"getDashboard">) => callAction("getDashboard", args),  refreshDaily: (args: ActionArgs<"refreshDaily">) => callAction("refreshDaily", args),
   getNhlOverview: (args: ActionArgs<"getNhlOverview">) => callAction("getNhlOverview", args),
   getFirstGoalMatchup: (args: ActionArgs<"getFirstGoalMatchup">) => callAction("getFirstGoalMatchup", args),
   getHotStreaks: (args: ActionArgs<"getHotStreaks">) => callAction("getHotStreaks", args),
@@ -63,6 +89,9 @@ export const api = {
   getOddsApiKeyStatus: (args: ActionArgs<"getOddsApiKeyStatus">) => callAction("getOddsApiKeyStatus", args),
   saveOddsApiKey: (args: ActionArgs<"saveOddsApiKey">) => callAction("saveOddsApiKey", args),
   removeOddsApiKey: (args: ActionArgs<"removeOddsApiKey">) => callAction("removeOddsApiKey", args),
+  // Pending server actions (see callPending above): fail gracefully client-side until the server lands them.
+  getKeyInjuries: (args: { sport: "nhl" | "nfl" | "nba" }) => callPending<KeyInjuries>("getKeyInjuries", args),
+  getUsageStats: (args: { adminToken?: string }) => callPending<UsageStats>("getUsageStats", args),
 };
 
 // Re-exported for convenience so client code can do
