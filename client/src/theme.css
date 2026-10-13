@@ -989,7 +989,7 @@ h1, h2, h3 { font-family: Rockwell, Georgia, serif; margin: 0; }
     linear-gradient(180deg, transparent 30%, rgba(28,26,23,.4) 30% 34%, transparent 34%);
 }
 .sport-shape.active em { color: var(--gold-deep); }
-.sport-shape.active .shape { transform: scale(1.08) translateY(-2px); box-shadow: 0 0 0 3px var(--gold), 0 10px 20px rgba(0,0,0,.4), 0 0 22px color-mix(in srgb, var(--gold) 60%, transparent); }
+.sport-shape.active .shape { transform: scale(1.08) translateY(-2px); box-shadow: 0 0 0 3px var(--gold), 0 10px 20px rgba(0,0,0,.4); }
 @media (min-width: 760px) {
   .sport-switch { margin-bottom: 0; flex: none; }
 }
@@ -1300,7 +1300,7 @@ h1, h2, h3 { font-family: Rockwell, Georgia, serif; margin: 0; }
 .mode-shape .ball::after { content: ""; position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); width: 26px; height: 10px; background: repeating-linear-gradient(90deg, #f7f2e7 0 2px, transparent 2px 6px), linear-gradient(#f7f2e7,#f7f2e7); background-size: 100% 5px, 100% 2px; background-position: center; background-repeat: no-repeat; }
 .mode-shape em { font-style: normal; font-size: 11px; font-weight: 800; color: var(--muted); white-space: nowrap; letter-spacing: .02em; text-shadow: 0 1px 0 rgba(255,255,255,.4); }
 .mode-shape.active em { color: #fff8ea; text-shadow: 0 1px 3px rgba(0,0,0,.65), 0 0 12px color-mix(in srgb, var(--accent) 85%, transparent); position: relative; }
-.mode-shape.active .rink { transform: scale(1.05); box-shadow: 0 0 0 2px var(--gold), 0 0 22px color-mix(in srgb, var(--gold) 70%, transparent), 0 0 34px -4px color-mix(in srgb, var(--accent) 55%, #ffffff), 0 0 44px -6px color-mix(in srgb, var(--accent2, var(--accent)) 50%, #ffffff), 0 10px 20px -8px rgba(var(--shadow-warm), .6); animation: none; }
+.mode-shape.active .rink { transform: scale(1.05); box-shadow: 0 0 0 2px var(--gold), 0 10px 20px -8px rgba(var(--shadow-warm), .6); animation: none; }
 .mode-glow { position: absolute; inset: 0; border-radius: 16px; pointer-events: none; background: radial-gradient(60% 60% at 50% 45%, color-mix(in srgb, var(--gold) 35%, transparent), transparent 70%); }
 .mode-shape.active .mode-glow { background: radial-gradient(60% 60% at 50% 45%, color-mix(in srgb, var(--gold) 40%, transparent), color-mix(in srgb, var(--accent) 26%, #ffffff) 45%, color-mix(in srgb, var(--accent2, var(--accent)) 22%, #ffffff) 62%, transparent 72%); }
 
