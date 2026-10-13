@@ -634,12 +634,11 @@ async function snapshotTwoWaySport(
     const vf = vigFreeProbs([awayDec, homeDec]);
     const vfAway = vf[0] ?? null;
     const vfHome = vf[1] ?? null;
-    // Selectivity gate: the model never forces a pick. Backtest showed 9-11
-    // (45%) under 55% confidence, so below that line it passes instead of
-    // guessing — the book is probably right in those spots anyway.
+    // No selectivity gate: the model always shows its read, even when unsure.
+    // When confidence is low or the model disagrees with the books, the
+    // Book Read deep dive explains what the books might be seeing.
     const rawPick: Pick3 = flip === null ? null : topPick({ away: flip.away, home: flip.home });
-    const rawProb = rawPick === "away" ? flip?.away ?? null : rawPick === "home" ? flip?.home ?? null : null;
-    const modelPick: Pick3 = rawPick !== null && rawProb !== null && rawProb >= 0.55 ? rawPick : null;
+    const modelPick: Pick3 = rawPick;
     const bookPick: Pick3 = topPick({ away: vfAway, home: vfHome });
     await upsertSnapshot(ctx, {
       sport, league: "", awayTeam: g.awayAbbrev, homeTeam: g.homeAbbrev, gameDate: g.date,
@@ -3059,6 +3058,29 @@ const matchupScorersResponse = z.object({
   fetchedAt: z.string(), expiresAt: z.string(),
 });
 
+// Book Read: deep dive into why the books favor their side, for games where
+// the model is unsure or disagrees. Every factor is grounded in real data.
+const bookReadFactorSchema = z.object({
+  side: z.enum(["away", "home", "neutral"]),
+  icon: z.string(),
+  label: z.string(),
+  detail: z.string(),
+  strength: z.enum(["strong", "notable"]),
+});
+const bookReadResponse = z.object({
+  sport: z.enum(sports),
+  awayTeam: z.string(), homeTeam: z.string(), league: z.string().nullable(),
+  modelAway: z.number().nullable(), modelHome: z.number().nullable(), modelDraw: z.number().nullable(),
+  modelPick: z.string().nullable(), modelConfidence: z.number().nullable(),
+  bookAway: z.number().nullable(), bookHome: z.number().nullable(), bookDraw: z.number().nullable(),
+  bookPick: z.string().nullable(),
+  bookAwayPrice: z.number().nullable(), bookHomePrice: z.number().nullable(), bookDrawPrice: z.number().nullable(),
+  status: z.enum(["agree", "unsure", "disagree", "no-book", "no-model"]),
+  factors: z.array(bookReadFactorSchema),
+  read: z.string(),
+  fetchedAt: z.string(),
+});
+
 function normScorerName(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ").trim();
 }
@@ -3160,6 +3182,287 @@ async function fetchMatchupScorers(ctx: Ctx, sport: (typeof sports)[number], awa
   await db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, key));
   await db.insert(schema.nhlInsightCache).values({ key, payloadJson: JSON.stringify(response), fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(response.expiresAt) });
   return response;
+}
+
+// ---------------------------------------------------------------------------
+// Book Read: deep dive into why the books favor their side.
+// When the model is unsure (<55%) or disagrees with the books, this analyzes
+// the book's position using real data — venue, form, injuries, head-to-head —
+// and gives an honest read. The model always shows its numbers; this explains
+// what the books might be seeing that the model doesn't fully capture.
+
+const NHL_TEAM_NAMES: Record<string, string> = {
+  ANA: "Anaheim Ducks", BOS: "Boston Bruins", BUF: "Buffalo Sabres", CAR: "Carolina Hurricanes",
+  CBJ: "Columbus Blue Jackets", CGY: "Calgary Flames", CHI: "Chicago Blackhawks", COL: "Colorado Avalanche",
+  DAL: "Dallas Stars", DET: "Detroit Red Wings", EDM: "Edmonton Oilers", FLA: "Florida Panthers",
+  LAK: "Los Angeles Kings", MIN: "Minnesota Wild", MTL: "Montréal Canadiens", NJD: "New Jersey Devils",
+  NSH: "Nashville Predators", NYI: "New York Islanders", NYR: "New York Rangers", OTT: "Ottawa Senators",
+  PHI: "Philadelphia Flyers", PIT: "Pittsburgh Penguins", SEA: "Seattle Kraken", SJS: "San Jose Sharks",
+  STL: "St. Louis Blues", TBL: "Tampa Bay Lightning", TOR: "Toronto Maple Leafs", UTA: "Utah Mammoth",
+  VAN: "Vancouver Canucks", VGK: "Vegas Golden Knights", WPG: "Winnipeg Jets", WSH: "Washington Capitals",
+};
+
+function bookReadTeamName(sport: string, code: string): string {
+  const c = code.toUpperCase();
+  if (sport === "nhl") return NHL_TEAM_NAMES[c] ?? c;
+  if (sport === "nfl") return nflTeamMeta(c)?.name ?? c;
+  if (sport === "nba") return nbaTeamMeta(c)?.name ?? c;
+  if (sport === "soccer") {
+    for (const l of ["mls", "epl"] as const) {
+      const m = soccerTeamMeta(l, c);
+      if (m) return m.name;
+    }
+    return c;
+  }
+  return c;
+}
+
+type BookReadOdds = {
+  awayProb: number | null; homeProb: number | null; drawProb: number | null;
+  awayPrice: number | null; homePrice: number | null; drawPrice: number | null;
+};
+
+async function bookReadOdds(ctx: Ctx, sport: Sport, awayName: string, homeName: string, league: string | null): Promise<BookReadOdds> {
+  const empty: BookReadOdds = { awayProb: null, homeProb: null, drawProb: null, awayPrice: null, homePrice: null, drawPrice: null };
+  try {
+    const board = await loadPremium(ctx, sport);
+    const awayLower = awayName.toLowerCase();
+    const homeLower = homeName.toLowerCase();
+    // Find moneyline offers for this matchup. Match on the matchup string
+    // containing both team names, then filter to moneyline market.
+    const ml = board.offers.filter((o) => {
+      if (o.marketName !== "Moneyline") return false;
+      if (league && o.league && o.league !== league) return false;
+      const m = o.matchup.toLowerCase();
+      return m.includes(awayLower) || m.includes(homeLower);
+    });
+    if (!ml.length) return empty;
+    // Group by matchup to find the one with both teams, prefer exact match.
+    const byMatchup = new Map<string, typeof ml>();
+    for (const o of ml) {
+      const list = byMatchup.get(o.matchup) ?? [];
+      list.push(o);
+      byMatchup.set(o.matchup, list);
+    }
+    let best: typeof ml | null = null;
+    for (const [matchup, list] of byMatchup) {
+      const m = matchup.toLowerCase();
+      if (m.includes(awayLower) && m.includes(homeLower)) { best = list; break; }
+      if (!best && (m.includes(awayLower) || m.includes(homeLower))) best = list;
+    }
+    if (!best) return empty;
+    let awayDec: number | null = null, homeDec: number | null = null, drawDec: number | null = null;
+    for (const o of best) {
+      const dec = bestDec(o);
+      if (dec === null) continue;
+      const e = o.entity.trim().toLowerCase();
+      if (e === awayLower) awayDec = awayDec === null ? dec : Math.max(awayDec, dec);
+      else if (e === homeLower) homeDec = homeDec === null ? dec : Math.max(homeDec, dec);
+      else if (e === "draw") drawDec = drawDec === null ? dec : Math.max(drawDec, dec);
+    }
+    if (awayDec === null || homeDec === null) return empty;
+    const probs = drawDec !== null ? vigFreeProbs([awayDec, homeDec, drawDec]) : vigFreeProbs([awayDec, homeDec]);
+    return {
+      awayProb: probs[0] ?? null, homeProb: probs[1] ?? null, drawProb: drawDec !== null ? (probs[2] ?? null) : null,
+      awayPrice: decimalToAmerican(awayDec), homePrice: decimalToAmerican(homeDec),
+      drawPrice: drawDec !== null ? decimalToAmerican(drawDec) : null,
+    };
+  } catch {
+    return empty;
+  }
+}
+
+type BookReadTeamStats = {
+  wins: number; games: number; winPct: number | null;
+  venueWins: number; venueGames: number; venueWinPct: number | null;
+  avgFor: number | null; avgAgainst: number | null;
+};
+
+async function loadBookRead(
+  ctx: Ctx, sport: Sport, awayTeam: string, homeTeam: string, league: string | null,
+): Promise<z.infer<typeof bookReadResponse>> {
+  const awayName = bookReadTeamName(sport, awayTeam);
+  const homeName = bookReadTeamName(sport, homeTeam);
+  const factors: z.infer<typeof bookReadFactorSchema>[] = [];
+
+  // --- Model probabilities from the sport's matchup loader ---
+  let modelAway: number | null = null, modelHome: number | null = null, modelDraw: number | null = null;
+  let awayStats: BookReadTeamStats | null = null, homeStats: BookReadTeamStats | null = null;
+  let h2hAwayWins = 0, h2hHomeWins = 0, h2hGames = 0, h2hDraws = 0;
+  try {
+    if (sport === "nhl") {
+      const m = await loadFirstGoalMatchup(ctx, awayTeam as (typeof teamCodes)[number], homeTeam as (typeof teamCodes)[number], false);
+      modelAway = m.awayWinProbability; modelHome = m.homeWinProbability;
+      awayStats = { wins: m.away.wins, games: m.away.games, winPct: m.away.winPct, venueWins: m.away.venueWins, venueGames: m.away.venueGames, venueWinPct: m.away.venueWinPct, avgFor: null, avgAgainst: null };
+      homeStats = { wins: m.home.wins, games: m.home.games, winPct: m.home.winPct, venueWins: m.home.venueWins, venueGames: m.home.venueGames, venueWinPct: m.home.venueWinPct, avgFor: null, avgAgainst: null };
+      h2hGames = m.headToHead.games; h2hAwayWins = 0; h2hHomeWins = 0; // NHL H2H tracks first-goal, not wins
+    } else if (sport === "nfl") {
+      const m = await loadNflMatchup(ctx, awayTeam as (typeof nflTeamCodes)[number], homeTeam as (typeof nflTeamCodes)[number], false);
+      modelAway = m.awayWinProbability; modelHome = m.homeWinProbability;
+      awayStats = { wins: m.away.wins, games: m.away.games, winPct: m.away.winPct, venueWins: m.away.venueWins, venueGames: m.away.venueGames, venueWinPct: m.away.venueWinPct, avgFor: m.away.avgPointsFor, avgAgainst: m.away.avgPointsAgainst };
+      homeStats = { wins: m.home.wins, games: m.home.games, winPct: m.home.winPct, venueWins: m.home.venueWins, venueGames: m.home.venueGames, venueWinPct: m.home.venueWinPct, avgFor: m.home.avgPointsFor, avgAgainst: m.home.avgPointsAgainst };
+      h2hGames = m.headToHead.games; h2hAwayWins = m.headToHead.awayWins; h2hHomeWins = m.headToHead.homeWins;
+    } else if (sport === "nba") {
+      const m = await loadNbaMatchup(ctx, awayTeam as (typeof nbaTeamCodes)[number], homeTeam as (typeof nbaTeamCodes)[number], false);
+      modelAway = m.awayWinProbability; modelHome = m.homeWinProbability;
+      awayStats = { wins: m.away.wins, games: m.away.games, winPct: m.away.winPct, venueWins: m.away.venueWins, venueGames: m.away.venueGames, venueWinPct: m.away.venueWinPct, avgFor: m.away.avgPointsFor, avgAgainst: m.away.avgPointsAgainst };
+      homeStats = { wins: m.home.wins, games: m.home.games, winPct: m.home.winPct, venueWins: m.home.venueWins, venueGames: m.home.venueGames, venueWinPct: m.home.venueWinPct, avgFor: m.home.avgPointsFor, avgAgainst: m.home.avgPointsAgainst };
+      h2hGames = m.headToHead.games; h2hAwayWins = m.headToHead.awayWins; h2hHomeWins = m.headToHead.homeWins;
+    } else {
+      const m = await loadSoccerMatchup(ctx, (league ?? "epl") as SoccerLeagueParam, awayTeam, homeTeam, false);
+      modelAway = m.awayWinProbability; modelHome = m.homeWinProbability; modelDraw = m.drawProbability;
+      const awayWinPct = m.away.games > 0 ? m.away.wins / m.away.games : null;
+      const awayVenueWinPct = m.away.venueGames > 0 ? m.away.venueWins / m.away.venueGames : null;
+      const homeWinPct = m.home.games > 0 ? m.home.wins / m.home.games : null;
+      const homeVenueWinPct = m.home.venueGames > 0 ? m.home.venueWins / m.home.venueGames : null;
+      awayStats = { wins: m.away.wins, games: m.away.games, winPct: awayWinPct, venueWins: m.away.venueWins, venueGames: m.away.venueGames, venueWinPct: awayVenueWinPct, avgFor: m.away.avgGoalsFor, avgAgainst: m.away.avgGoalsAgainst };
+      homeStats = { wins: m.home.wins, games: m.home.games, winPct: homeWinPct, venueWins: m.home.venueWins, venueGames: m.home.venueGames, venueWinPct: homeVenueWinPct, avgFor: m.home.avgGoalsFor, avgAgainst: m.home.avgGoalsAgainst };
+      h2hGames = m.headToHead.games; h2hAwayWins = m.headToHead.awayWins; h2hHomeWins = m.headToHead.homeWins; h2hDraws = m.headToHead.draws;
+    }
+  } catch { /* Model data unavailable — factors will note it. */ }
+
+  const modelPick = modelAway !== null && modelHome !== null
+    ? (modelDraw !== null && modelDraw >= modelAway && modelDraw >= modelHome ? "draw" : modelAway >= modelHome ? "away" : "home")
+    : null;
+  const modelConfidence = modelPick === "away" ? modelAway : modelPick === "home" ? modelHome : modelPick === "draw" ? modelDraw : null;
+
+  // --- Book probabilities from cached odds ---
+  const book = await bookReadOdds(ctx, sport, awayName, homeName, league);
+  const bookPick = book.awayProb !== null && book.homeProb !== null
+    ? (book.drawProb !== null && book.drawProb >= book.awayProb && book.drawProb >= book.homeProb ? "draw" : book.awayProb >= book.homeProb ? "away" : "home")
+    : null;
+
+  // --- Status ---
+  let status: z.infer<typeof bookReadResponse>["status"];
+  if (modelPick === null) status = "no-model";
+  else if (bookPick === null) status = "no-book";
+  else if (modelPick !== bookPick) status = "disagree";
+  else if ((modelConfidence ?? 0) < 0.55) status = "unsure";
+  else status = "agree";
+
+  const pct = (n: number | null) => n === null ? "—" : `${Math.round(n * 100)}%`;
+  const pickName = (p: string | null) => p === "away" ? awayName : p === "home" ? homeName : p === "draw" ? "Draw" : "—";
+
+  // --- Factor 1: Venue edge ---
+  if (homeStats && awayStats && homeStats.venueGames >= 2 && awayStats.venueGames >= 2
+      && homeStats.venueWinPct !== null && awayStats.venueWinPct !== null) {
+    const homeEdge = homeStats.venueWinPct - awayStats.venueWinPct;
+    if (homeEdge >= 0.25) {
+      factors.push({ side: "home", icon: "🏠", label: "Home dominance",
+        detail: `${homeName} are ${homeStats.venueWins}-${homeStats.venueGames - homeStats.venueWins} at home (${pct(homeStats.venueWinPct)}); ${awayName} are ${awayStats.venueWins}-${awayStats.venueGames - awayStats.venueWins} on the road (${pct(awayStats.venueWinPct)}).`,
+        strength: "strong" });
+    } else if (homeEdge <= -0.25) {
+      factors.push({ side: "away", icon: "✈️", label: "Road warriors",
+        detail: `${awayName} are ${awayStats.venueWins}-${awayStats.venueGames - awayStats.venueWins} on the road (${pct(awayStats.venueWinPct)}); ${homeName} are just ${homeStats.venueWins}-${homeStats.venueGames - homeStats.venueWins} at home (${pct(homeStats.venueWinPct)}).`,
+        strength: "strong" });
+    } else if (homeStats.venueWinPct >= 0.7 && homeStats.venueGames >= 3) {
+      factors.push({ side: "home", icon: "🏠", label: "Strong at home",
+        detail: `${homeName} are ${homeStats.venueWins}-${homeStats.venueGames - homeStats.venueWins} at home this season.`,
+        strength: "notable" });
+    }
+  }
+
+  // --- Factor 2: Overall form gap ---
+  if (awayStats && homeStats && awayStats.winPct !== null && homeStats.winPct !== null
+      && awayStats.games >= 3 && homeStats.games >= 3) {
+    const gap = homeStats.winPct - awayStats.winPct;
+    if (gap >= 0.3) {
+      factors.push({ side: "home", icon: "📈", label: "Better overall form",
+        detail: `${homeName} (${awayStats.wins}-${awayStats.games - awayStats.wins} → ${homeStats.wins}-${homeStats.games - homeStats.wins}) have the clearly better record at ${pct(homeStats.winPct)} vs ${pct(awayStats.winPct)}.`,
+        strength: "strong" });
+    } else if (gap <= -0.3) {
+      factors.push({ side: "away", icon: "📈", label: "Better overall form",
+        detail: `${awayName} have the clearly better record at ${pct(awayStats.winPct)} vs ${pct(homeStats.winPct)}.`,
+        strength: "strong" });
+    }
+  }
+
+  // --- Factor 3: Scoring margin ---
+  if (awayStats && homeStats && awayStats.avgFor !== null && awayStats.avgAgainst !== null
+      && homeStats.avgFor !== null && homeStats.avgAgainst !== null
+      && awayStats.games >= 3 && homeStats.games >= 3) {
+    const awayMargin = awayStats.avgFor - awayStats.avgAgainst;
+    const homeMargin = homeStats.avgFor - homeStats.avgAgainst;
+    const marginGap = homeMargin - awayMargin;
+    if (marginGap >= 0.5) {
+      factors.push({ side: "home", icon: "⚡", label: "Outscoring opponents",
+        detail: `${homeName} outscore opponents by ${homeMargin.toFixed(1)}/game vs ${awayMargin >= 0 ? "+" : ""}${awayMargin.toFixed(1)} for ${awayName}.`,
+        strength: "notable" });
+    } else if (marginGap <= -0.5) {
+      factors.push({ side: "away", icon: "⚡", label: "Outscoring opponents",
+        detail: `${awayName} outscore opponents by ${awayMargin.toFixed(1)}/game vs ${homeMargin >= 0 ? "+" : ""}${homeMargin.toFixed(1)} for ${homeName}.`,
+        strength: "notable" });
+    }
+  }
+
+  // --- Factor 4: Head-to-head this season ---
+  if (h2hGames > 0) {
+    if (h2hHomeWins === h2hGames) {
+      factors.push({ side: "home", icon: "🔁", label: "Owns the matchup",
+        detail: `${homeName} won ${h2hGames === 1 ? "the meeting" : `all ${h2hGames} meetings`} vs ${awayName} this season.`,
+        strength: "strong" });
+    } else if (h2hAwayWins === h2hGames) {
+      factors.push({ side: "away", icon: "🔁", label: "Owns the matchup",
+        detail: `${awayName} won ${h2hGames === 1 ? "the meeting" : `all ${h2hGames} meetings`} vs ${homeName} this season.`,
+        strength: "strong" });
+    } else if (h2hGames >= 2) {
+      const leader = h2hHomeWins > h2hAwayWins ? "home" : h2hAwayWins > h2hHomeWins ? "away" : "neutral";
+      if (leader !== "neutral") {
+        factors.push({ side: leader, icon: "🔁", label: "Season series edge",
+          detail: `${leader === "home" ? homeName : awayName} lead the season series ${Math.max(h2hHomeWins, h2hAwayWins)}-${Math.min(h2hHomeWins, h2hAwayWins)}${h2hDraws ? `-${h2hDraws}` : ""}.`,
+          strength: "notable" });
+      }
+    }
+  }
+
+  // --- Factor 5: Key injuries ---
+  try {
+    const injuries = await fetchKeyInjuries(ctx, sport, false, sport === "soccer" ? ((league ?? "epl") as SoccerLeagueParam) : undefined);
+    const findHits = (teamName: string) => {
+      const t = (injuries.teams ?? []).find((tm: { team: string }) => tm.team.toLowerCase() === teamName.toLowerCase());
+      return (t?.players ?? []).slice(0, 2);
+    };
+    for (const p of findHits(awayName)) {
+      factors.push({ side: "home", icon: "🏥", label: `${awayName} shorthanded`,
+        detail: `${p.name} (${p.status}) — ${p.note}. Books often shade against shorthanded teams.`,
+        strength: "strong" });
+    }
+    for (const p of findHits(homeName)) {
+      factors.push({ side: "away", icon: "🏥", label: `${homeName} shorthanded`,
+        detail: `${p.name} (${p.status}) — ${p.note}. Books often shade against shorthanded teams.`,
+        strength: "strong" });
+    }
+  } catch { /* Injuries unavailable — skip. */ }
+
+  // --- The honest read ---
+  let read: string;
+  if (status === "no-model") {
+    read = `Not enough model data on this one yet. ${bookPick ? `The books favor ${pickName(bookPick)} (${pct(bookPick === "away" ? book.awayProb : bookPick === "home" ? book.homeProb : book.drawProb)} vig-free) — treat their price as the best available read until the sample grows.` : "No book price either — this is a pass."}`;
+  } else if (status === "no-book") {
+    read = `No book price posted yet. Model leans ${pickName(modelPick)} at ${pct(modelConfidence)} — a pure model read, no market to check it against.`;
+  } else if (status === "agree") {
+    read = `Model and books agree on ${pickName(modelPick)} — model ${pct(modelConfidence)}, books ${pct(bookPick === "away" ? book.awayProb : bookPick === "home" ? book.homeProb : book.drawProb)} vig-free. ${factors.length ? "The factors below line up behind it." : "Clean agreement, no red flags in the data."}`;
+  } else if (status === "unsure") {
+    const bookSide = pickName(bookPick);
+    const agreeingFactors = factors.filter((f) => (f.side === "away" && bookPick === "away") || (f.side === "home" && bookPick === "home"));
+    read = `The model only leans ${pickName(modelPick)} (${pct(modelConfidence)}) — a coin flip it won't pretend is an edge. The books favor ${bookSide} (${pct(bookPick === "away" ? book.awayProb : bookPick === "home" ? book.homeProb : book.drawProb)} vig-free)${agreeingFactors.length ? `, and the data backs them: ${agreeingFactors.slice(0, 2).map((f) => f.detail).join(" ")}` : "."} Honest read: lean ${bookSide} with the books, but keep it small — the model sees this as too close to call.`;
+  } else {
+    // disagree
+    const bookSide = pickName(bookPick);
+    const modelSide = pickName(modelPick);
+    const bookFactors = factors.filter((f) => (f.side === "away" && bookPick === "away") || (f.side === "home" && bookPick === "home"));
+    const modelFactors = factors.filter((f) => (f.side === "away" && modelPick === "away") || (f.side === "home" && modelPick === "home"));
+    read = `Genuine disagreement: model says ${modelSide} (${pct(modelConfidence)}), books say ${bookSide} (${pct(bookPick === "away" ? book.awayProb : bookPick === "home" ? book.homeProb : book.drawProb)} vig-free).${bookFactors.length ? ` Why the books might be right: ${bookFactors.slice(0, 2).map((f) => f.detail).join(" ")}` : ""}${modelFactors.length ? ` Why the model might be right: ${modelFactors.slice(0, 1).map((f) => f.detail).join(" ")}` : ""} Honest read: ${bookFactors.length >= modelFactors.length ? `the books' case is stronger on the data — lean ${bookSide}` : `the model has a real case for ${modelSide}, but respect the market`} — either way, this is not a spot to force.`;
+  }
+
+  return {
+    sport, awayTeam, homeTeam, league,
+    modelAway, modelHome, modelDraw, modelPick, modelConfidence,
+    bookAway: book.awayProb, bookHome: book.homeProb, bookDraw: book.drawProb, bookPick,
+    bookAwayPrice: book.awayPrice, bookHomePrice: book.homePrice, bookDrawPrice: book.drawPrice,
+    status, factors, read,
+    fetchedAt: new Date().toISOString(),
+  };
 }
 
 const plateSchema = z.object({
@@ -3695,6 +3998,7 @@ export const Actions = {
   getNbaColdStreaks: defineAction({ request: z.object({ force: z.boolean().default(false) }), response: nbaColdStreaksResponse, async handler(ctx, args) { return fetchNbaColdStreaks(ctx, args.force); } }),
   getLikelyScorers: defineAction({ request: z.object({ sport: z.enum(sports), league: z.enum(soccerLeagues).optional(), force: z.boolean().default(false) }), response: likelyScorersResponse, async handler(ctx, args) { return fetchLikelyScorers(ctx, args.sport, args.force, args.league); } }),
   getMatchupScorers: defineAction({ request: z.object({ sport: z.enum(sports), away: z.string().min(1), home: z.string().min(1), league: z.enum(soccerLeagues).optional() }), response: matchupScorersResponse, async handler(ctx, args) { return fetchMatchupScorers(ctx, args.sport, args.away, args.home, args.league); } }),
+  getBookRead: defineAction({ request: z.object({ sport: z.enum(sports), awayTeam: z.string().min(1), homeTeam: z.string().min(1), league: z.string().nullable().optional() }), response: bookReadResponse, async handler(ctx, args) { return loadBookRead(ctx, args.sport, args.awayTeam, args.homeTeam, args.league ?? null); } }),
   getPublicPlates: defineAction({ request: z.object({}), response: platesResponse, async handler(ctx) { return listPlates(ctx, true); } }),
   getMyPlates: defineAction({ request: z.object({ adminToken: adminTokenSchema }), response: platesResponse, async handler(ctx, args) { requireAdmin(args); return listPlates(ctx, false); } }),
   savePlate: defineAction({

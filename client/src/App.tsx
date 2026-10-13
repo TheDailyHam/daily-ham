@@ -713,7 +713,7 @@ const TUTORIAL_SLIDES: { icon: string; kicker: string; title: string; points: st
   { icon: "⚖️", kicker: "MODEL VS BOOKS", title: "Finding value", points: [
     "The matchup calculator compares the model's estimate to what the books imply.",
     "A flip alert fires when the model likes a side more than the books do.",
-    "Coin toss means it's too close to call — no edge either way.",
+    "When the model is unsure or disagrees with the books, the Book Read deep dive explains what the market might be seeing — venue, form, injuries, head-to-head — with an honest take.",
   ]},
   { icon: "📜", kicker: "TRACK RECORD", title: "The receipts.", points: [
     "The Record tab grades every pregame model pick against final scores — and against the books' own prices.",
@@ -852,7 +852,7 @@ function RecordView() {
           showBooks={true}
           emptyHint="First snapshots land with the morning refresh — check back after today's games."
         />
-        <p className="record-note">Live picks are snapshotted every morning before games, with the model's win probability and each side's best book price (vig removed for the book comparison). The model only picks at 55%+ confidence — below that it passes rather than guessing. ROI assumes a flat 1 unit on every model pick at the best captured price.</p>
+        <p className="record-note">Live picks are snapshotted every morning before games, with the model's win probability and each side's best book price (vig removed for the book comparison). The model always shows its read — when it's unsure or disagrees with the books, the Book Read deep dive in each matchup explains what the market might be seeing. ROI assumes a flat 1 unit on every model pick at the best captured price.</p>
         {data.recent.length > 0 && <section className="record-recent" aria-label="Recent graded picks">
           <div className="section-heading"><div><p className="kicker">RECEIPT</p><h3>Recent picks</h3></div></div>
           <div className="record-list">
@@ -1222,6 +1222,43 @@ function MatchupScorersSection({ sport, awayCode, homeCode, league }: {
   </section>;
 }
 
+function BookReadSection({ sport, awayCode, homeCode, league }: {
+  sport: Sport;
+  awayCode: string;
+  homeCode: string;
+  league?: string | null;
+}) {
+  const { data, isPending, isError } = useQuery({
+    queryKey: ["book-read", sport, league ?? "na", awayCode, homeCode],
+    queryFn: () => api.getBookRead({ sport, awayTeam: awayCode, homeTeam: homeCode, league: league ?? null }),
+    staleTime: 6 * 60 * 60 * 1000, retry: 1,
+  });
+  if (isPending) return <section className="book-read" aria-label="Book read"><div className="loading"><span />Reading the books…</div></section>;
+  if (isError || !data) return null;
+  const d = data;
+  const pct = (n: number | null) => n === null ? "—" : `${Math.round(n * 100)}%`;
+  const price = (n: number | null) => n === null ? "—" : n > 0 ? `+${n}` : `${n}`;
+  const statusLabel = d.status === "agree" ? "Model & books agree" : d.status === "unsure" ? "Model is unsure — here's the book's case" : d.status === "disagree" ? "Model vs books: disagreement" : d.status === "no-book" ? "No book price yet" : "Model still gathering data";
+  const statusIcon = d.status === "agree" ? "✅" : d.status === "unsure" ? "🔍" : d.status === "disagree" ? "⚔️" : "📊";
+  return <section className="book-read" aria-label="Book read deep dive">
+    <div className="section-heading"><div><p className="kicker">BOOK READ</p><h3>Why the books see it this way</h3></div><span>{statusIcon}</span></div>
+    <p className="mvb-note"><strong>{statusLabel}.</strong></p>
+    <div className="book-read-probs">
+      <div className="br-col"><span className="br-label">Model</span><strong>{d.modelPick === "away" ? awayCode : d.modelPick === "home" ? homeCode : d.modelPick === "draw" ? "Draw" : "—"}</strong><span>{pct(d.modelConfidence)} <em>model estimate</em></span></div>
+      <div className="br-vs" aria-hidden="true">vs</div>
+      <div className="br-col"><span className="br-label">Books</span><strong>{d.bookPick === "away" ? awayCode : d.bookPick === "home" ? homeCode : d.bookPick === "draw" ? "Draw" : "—"}</strong><span>{d.bookPick === "away" ? price(d.bookAwayPrice) : d.bookPick === "home" ? price(d.bookHomePrice) : price(d.bookDrawPrice)} <em>vig-free {pct(d.bookPick === "away" ? d.bookAway : d.bookPick === "home" ? d.bookHome : d.bookDraw)}</em></span></div>
+    </div>
+    {d.factors.length > 0 && <ul className="book-read-factors">
+      {d.factors.map((f, i) => <li key={i} className={`br-factor ${f.strength}`}>
+        <span className="br-factor-icon" aria-hidden="true">{f.icon}</span>
+        <span className="br-factor-body"><strong>{f.label}</strong><small>{f.detail}</small></span>
+      </li>)}
+    </ul>}
+    <p className="book-read-take"><strong>The honest read:</strong> {d.read}</p>
+    <p className="mvb-note">Model estimates are labeled as estimates, never sportsbook lines. The book's price is the market's read, not a recommendation.</p>
+  </section>;
+}
+
 function MatchupCalculator() {
   const [awayTeam, setAwayTeam] = useState<TeamCode>("WSH");
   const [homeTeam, setHomeTeam] = useState<TeamCode>("PIT");
@@ -1269,6 +1306,7 @@ function MatchupCalculator() {
       </section>
       {data && <ModelVsBooks sport="nhl" awayCode={data.away.team} homeCode={data.home.team} awayModel={data.awayWinProbability} homeModel={data.homeWinProbability} groups={boardGroups} />}
       {data && <MatchupScorersSection sport="nhl" awayCode={data.away.team} homeCode={data.home.team} />}
+      {data && <BookReadSection sport="nhl" awayCode={data.away.team} homeCode={data.home.team} />}
       <section className="first-goal-card">
         <div className="section-heading"><div><p className="kicker">MODEL ESTIMATE</p><h2>First goal probability</h2></div><span>{data.edgeTeam ? `${data.edgeTeam} +${data.edgePoints?.toFixed(1) ?? "0.0"} pts` : "Insufficient sample"}</span></div>
         <div className="first-goal-score"><div><span>{data.away.team} · away</span><strong>{percentage(data.awayProbability)}</strong></div><div className="first-goal-track" role="img" aria-label={`${data.away.team} ${percentage(data.awayProbability)} and ${data.home.team} ${percentage(data.homeProbability)} to score first`}><i style={{ width: `${(data.awayProbability ?? .5) * 100}%` }}/><b style={{ width: `${(data.homeProbability ?? .5) * 100}%` }}/></div><div className="home"><span>{data.home.team} · home</span><strong>{percentage(data.homeProbability)}</strong></div></div>
@@ -1810,6 +1848,7 @@ function NflMatchupCalculator() {
       </section>
       {data && <ModelVsBooks sport="nfl" awayCode={data.away.team} homeCode={data.home.team} awayModel={data.awayWinProbability} homeModel={data.homeWinProbability} groups={boardGroups} />}
       {data && <MatchupScorersSection sport="nfl" awayCode={data.away.team} homeCode={data.home.team} />}
+      {data && <BookReadSection sport="nfl" awayCode={data.away.team} homeCode={data.home.team} />}
       <section className="first-goal-card">
         <div className="section-heading"><div><p className="kicker">MODEL ESTIMATE</p><h2>First score probability</h2></div><span>{data.firstScoreEdgeTeam ? `${data.firstScoreEdgeTeam} +${data.firstScoreEdgePoints?.toFixed(1) ?? "0.0"} pts` : "Insufficient sample"}</span></div>
         <div className="first-goal-score"><div><span>{data.away.team} · away</span><strong>{percentage(data.firstScoreAwayProbability)}</strong></div><div className="first-goal-track" role="img" aria-label={`${data.away.team} ${percentage(data.firstScoreAwayProbability)} and ${data.home.team} ${percentage(data.firstScoreHomeProbability)} to score first`}><i style={{ width: `${(data.firstScoreAwayProbability ?? .5) * 100}%` }}/><b style={{ width: `${(data.firstScoreHomeProbability ?? .5) * 100}%` }}/></div><div className="home"><span>{data.home.team} · home</span><strong>{percentage(data.firstScoreHomeProbability)}</strong></div></div>
@@ -2400,6 +2439,7 @@ function NbaMatchupCalculator() {
       </section>
       {data && <ModelVsBooks sport="nba" awayCode={data.away.team} homeCode={data.home.team} awayModel={data.awayWinProbability} homeModel={data.homeWinProbability} groups={boardGroups} />}
       {data && <MatchupScorersSection sport="nba" awayCode={data.away.team} homeCode={data.home.team} />}
+      {data && <BookReadSection sport="nba" awayCode={data.away.team} homeCode={data.home.team} />}
       <section className="first-goal-card">
         <div className="section-heading"><div><p className="kicker">MODEL ESTIMATE</p><h2>First basket probability</h2></div><span>{data.firstBasketEdgeTeam ? `${data.firstBasketEdgeTeam} +${data.firstBasketEdgePoints?.toFixed(1) ?? "0.0"} pts` : "Insufficient sample"}</span></div>
         <div className="first-goal-score"><div><span>{data.away.team} · away</span><strong>{percentage(data.firstBasketAwayProbability)}</strong></div><div className="first-goal-track" role="img" aria-label={`${data.away.team} ${percentage(data.firstBasketAwayProbability)} and ${data.home.team} ${percentage(data.firstBasketHomeProbability)} to score first`}><i style={{ width: `${(data.firstBasketAwayProbability ?? .5) * 100}%` }}/><b style={{ width: `${(data.firstBasketHomeProbability ?? .5) * 100}%` }}/></div><div className="home"><span>{data.home.team} · home</span><strong>{percentage(data.firstBasketHomeProbability)}</strong></div></div>
@@ -2947,6 +2987,7 @@ function SoccerMatchupCalculator({ league, onLeagueChange }: { league: SoccerLea
       </section>
       <SoccerModelVsBooks league={league} homeCode={data.home.team} awayCode={data.away.team} homeModel={data.homeWinProbability} drawModel={data.drawProbability} awayModel={data.awayWinProbability} groups={boardGroups} />
       {data && <MatchupScorersSection sport="soccer" awayCode={data.away.team} homeCode={data.home.team} league={league} />}
+      {data && <BookReadSection sport="soccer" awayCode={data.away.team} homeCode={data.home.team} league={league} />}
       <section className="scenario-grid" aria-label="Matchup model estimates">
         <article><span>Over 2.5 goals</span><strong>{percentage(data.over25Probability)}</strong><small>Three or more total goals</small></article>
         <article><span>Both teams to score</span><strong>{percentage(data.bttsProbability)}</strong><small>Each side scores at least once</small></article>
