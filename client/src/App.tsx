@@ -2288,7 +2288,7 @@ export function App(){
     if (!splash) return;
     const t0 = performance.now();
     const dismiss = () => {
-      const wait = 5500 - (performance.now() - t0);
+      const wait = 8500 - (performance.now() - t0);
       if (wait > 0) { setTimeout(dismiss, wait); return; }
       splash.style.opacity = "0";
       setTimeout(() => splash.remove(), 400);
