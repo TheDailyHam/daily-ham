@@ -48,23 +48,23 @@
   --space-muted: var(--dim);
   --space-border: var(--border);
   --space-accent: var(--accent);
-  /* Pearlescent collar pop — iridescent sheen tinted by the team color.
-     Replaces the flat white gloss: pearl shifts rose → sky → mint → lilac
-     as it crosses a surface, with the team color woven through. */
+  /* Pearlescent collar pop — the finish shimmers between the picked team's
+     two colors (accent <-> secondary), light to deep, like light on a pearl.
+     --accent2 falls back to --accent when no second color is set. */
   --pearl: linear-gradient(115deg,
-    color-mix(in srgb, var(--accent) 38%, #ffd9f2) 0%,
-    rgba(255,255,255,.36) 20%,
-    color-mix(in srgb, var(--accent) 28%, #d2e9ff) 40%,
-    rgba(255,255,255,.14) 58%,
-    color-mix(in srgb, var(--accent) 32%, #d9ffe6) 76%,
-    color-mix(in srgb, var(--accent) 24%, #ece1ff) 90%,
+    color-mix(in srgb, var(--accent) 42%, #ffffff) 0%,
+    rgba(255,255,255,.38) 18%,
+    color-mix(in srgb, var(--accent2, var(--accent)) 42%, #ffffff) 38%,
+    rgba(255,255,255,.14) 56%,
+    color-mix(in srgb, var(--accent) 58%, #ffffff) 74%,
+    color-mix(in srgb, var(--accent2, var(--accent)) 30%, #ffffff) 90%,
     transparent 100%);
   --pearl-dim: linear-gradient(115deg,
-    color-mix(in srgb, var(--accent) 30%, #ffd9f2) 0%,
+    color-mix(in srgb, var(--accent) 34%, #ffffff) 0%,
     rgba(255,255,255,.16) 22%,
-    color-mix(in srgb, var(--accent) 22%, #d2e9ff) 44%,
+    color-mix(in srgb, var(--accent2, var(--accent)) 34%, #ffffff) 44%,
     rgba(255,255,255,.06) 60%,
-    color-mix(in srgb, var(--accent) 26%, #d9ffe6) 78%,
+    color-mix(in srgb, var(--accent) 46%, #ffffff) 78%,
     transparent 100%);
 }
 
@@ -187,7 +187,7 @@ h1, h2, h3 { font-family: Rockwell, Georgia, serif; margin: 0; }
   border: 0; cursor: pointer; font-weight: 900; padding: 12px 16px; border-radius: 10px;
   color: var(--accent-ink, #1b120a);
   background:
-    linear-gradient(115deg, rgba(255,217,242,.34), rgba(210,233,255,.26) 38%, rgba(217,255,230,.22) 62%, transparent 85%),
+    linear-gradient(115deg, color-mix(in srgb, var(--accent) 34%, #ffffff) 0%, color-mix(in srgb, var(--accent2, var(--accent)) 30%, #ffffff) 42%, rgba(255,255,255,.16) 62%, transparent 88%),
     linear-gradient(180deg, color-mix(in srgb, var(--accent) 82%, #fff 18%), var(--accent) 55%, color-mix(in srgb, var(--accent) 78%, #000 22%));
   box-shadow: inset 0 1px 0 rgba(255,255,255,.55), inset 0 -3px 6px rgba(0,0,0,.16), 0 8px 18px -6px color-mix(in srgb, var(--accent) 70%, transparent);
   text-shadow: 0 1px 0 rgba(255,255,255,.3);
@@ -582,7 +582,7 @@ h1, h2, h3 { font-family: Rockwell, Georgia, serif; margin: 0; }
   border: 1px solid rgba(217,164,65,.4);
   box-shadow: 0 18px 40px -16px rgba(var(--shadow-warm), .6), inset 0 1px 0 rgba(255,255,255,.15), inset 0 -3px 10px rgba(0,0,0,.4);
 }
-.brand-banner::after { content: ""; position: absolute; inset: -40%; pointer-events: none; background: linear-gradient(105deg, transparent 42%, rgba(255,217,242,.14) 47%, rgba(255,255,255,.16) 50%, rgba(210,233,255,.14) 53%, transparent 58%); animation: hero-sheen 8s ease-in-out infinite; }
+.brand-banner::after { content: ""; position: absolute; inset: -40%; pointer-events: none; background: linear-gradient(105deg, transparent 42%, color-mix(in srgb, var(--accent) 22%, #ffffff) 47%, rgba(255,255,255,.18) 50%, color-mix(in srgb, var(--accent2, var(--accent)) 22%, #ffffff) 53%, transparent 58%); animation: hero-sheen 8s ease-in-out infinite; }
 .brand-banner img { width: 82px; height: 82px; object-fit: contain; object-position: center; padding: 3px; background: #fff; border: 3px solid var(--gold); border-radius: 12px; box-shadow: 0 0 18px color-mix(in srgb, var(--gold) 55%, transparent), 0 8px 18px rgba(0,0,0,.45); position: relative; z-index: 1; }
 .brand-banner div { min-width: 0; position: relative; z-index: 1; }
 .brand-banner p { margin: 0 0 2px; color: #f3c58e; font-size: 10px; font-weight: 900; letter-spacing: .16em; }
@@ -1301,9 +1301,9 @@ h1, h2, h3 { font-family: Rockwell, Georgia, serif; margin: 0; }
 .mode-shape .ball::after { content: ""; position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); width: 26px; height: 10px; background: repeating-linear-gradient(90deg, #f7f2e7 0 2px, transparent 2px 6px), linear-gradient(#f7f2e7,#f7f2e7); background-size: 100% 5px, 100% 2px; background-position: center; background-repeat: no-repeat; }
 .mode-shape em { font-style: normal; font-size: 11px; font-weight: 800; color: var(--muted); white-space: nowrap; letter-spacing: .02em; text-shadow: 0 1px 0 rgba(255,255,255,.4); }
 .mode-shape.active em { color: #fff8ea; text-shadow: 0 1px 3px rgba(0,0,0,.65), 0 0 12px color-mix(in srgb, var(--accent) 85%, transparent); position: relative; }
-.mode-shape.active .rink { transform: scale(1.05); box-shadow: 0 0 0 2px var(--gold), 0 0 22px color-mix(in srgb, var(--gold) 70%, transparent), 0 0 34px -4px color-mix(in srgb, #ffd9f2 55%, transparent), 0 0 44px -6px color-mix(in srgb, #d2e9ff 50%, transparent), 0 10px 20px -8px rgba(var(--shadow-warm), .6); animation: none; }
+.mode-shape.active .rink { transform: scale(1.05); box-shadow: 0 0 0 2px var(--gold), 0 0 22px color-mix(in srgb, var(--gold) 70%, transparent), 0 0 34px -4px color-mix(in srgb, var(--accent) 55%, #ffffff), 0 0 44px -6px color-mix(in srgb, var(--accent2, var(--accent)) 50%, #ffffff), 0 10px 20px -8px rgba(var(--shadow-warm), .6); animation: none; }
 .mode-glow { position: absolute; inset: 0; border-radius: 16px; pointer-events: none; background: radial-gradient(60% 60% at 50% 45%, color-mix(in srgb, var(--gold) 35%, transparent), transparent 70%); }
-.mode-shape.active .mode-glow { background: radial-gradient(60% 60% at 50% 45%, color-mix(in srgb, var(--gold) 40%, transparent), color-mix(in srgb, #ffd9f2 18%, transparent) 45%, color-mix(in srgb, #d2e9ff 14%, transparent) 62%, transparent 72%); }
+.mode-shape.active .mode-glow { background: radial-gradient(60% 60% at 50% 45%, color-mix(in srgb, var(--gold) 40%, transparent), color-mix(in srgb, var(--accent) 26%, #ffffff) 45%, color-mix(in srgb, var(--accent2, var(--accent)) 22%, #ffffff) 62%, transparent 72%); }
 
 /* Roster cards: every stat visible, no sideways scroll — 3D tiles */
 .roster-card {
@@ -1518,7 +1518,7 @@ html[data-dimmed="true"] .brightness-veil { display: block; }
   border-radius: 14px; padding: 16px 16px 18px; position: relative;
   background:
     radial-gradient(120% 90% at 50% 0%, rgba(255,255,255,.85), rgba(255,255,255,0) 55%),
-    linear-gradient(115deg, rgba(255,217,242,.30), rgba(210,233,255,.22) 40%, rgba(217,255,230,.18) 65%, transparent 90%),
+    linear-gradient(115deg, color-mix(in srgb, var(--accent) 26%, #ffffff), color-mix(in srgb, var(--accent2, var(--accent)) 22%, #ffffff) 45%, transparent 90%),
     linear-gradient(180deg, #fffdf7, #f7ecd6 78%, #efdfc0);
   border: 2px solid var(--gold-deep);
   box-shadow:
@@ -1625,7 +1625,7 @@ html[data-dimmed="true"] .brightness-veil { display: block; }
   border: 1px solid rgba(217,164,65,.45);
   box-shadow: 0 22px 48px -18px rgba(var(--shadow-warm), .65), inset 0 1px 0 rgba(255,255,255,.16), inset 0 -3px 10px rgba(0,0,0,.4);
 }
-.jamon-hero::before { content: ""; position: absolute; inset: -40%; pointer-events: none; background: linear-gradient(105deg, transparent 42%, rgba(255,217,242,.16) 47%, rgba(255,255,255,.18) 50%, rgba(210,233,255,.16) 53%, transparent 58%); animation: hero-sheen 7s ease-in-out infinite; }
+.jamon-hero::before { content: ""; position: absolute; inset: -40%; pointer-events: none; background: linear-gradient(105deg, transparent 42%, color-mix(in srgb, var(--accent) 24%, #ffffff) 47%, rgba(255,255,255,.20) 50%, color-mix(in srgb, var(--accent2, var(--accent)) 24%, #ffffff) 53%, transparent 58%); animation: hero-sheen 7s ease-in-out infinite; }
 .jamon-hero .kicker { color: var(--gold-pale); position: relative; }
 .jamon-hero h1 {
   margin: 6px 0 8px; font-size: clamp(38px, 10vw, 60px); line-height: .95; letter-spacing: -.03em; position: relative;
@@ -1787,9 +1787,9 @@ html[data-dimmed="true"] .brightness-veil { display: block; }
 .welcome-sign::before {
   content: ""; position: absolute; inset: -40%; pointer-events: none;
   background: linear-gradient(105deg, transparent 42%,
-    color-mix(in srgb, var(--team-color, var(--accent)) 20%, #ffd9f2) 47%,
-    rgba(255,255,255,.28) 50%,
-    color-mix(in srgb, var(--team-color, var(--accent)) 20%, #d2e9ff) 53%, transparent 58%);
+    color-mix(in srgb, var(--team-color, var(--accent)) 32%, #ffffff) 47%,
+    rgba(255,255,255,.30) 50%,
+    color-mix(in srgb, var(--team-secondary, var(--accent2, var(--accent))) 32%, #ffffff) 53%, transparent 58%);
   animation: hero-sheen 8s ease-in-out infinite;
 }
 

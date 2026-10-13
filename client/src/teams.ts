@@ -259,6 +259,8 @@ export function applyLeagueTheme(league: League, code: string | null): void {
     const team = code ? themeFor(league, code) : null;
     if (team) {
       root.style.setProperty("--accent", team.color);
+      // The pearlescent finish shimmers between the team's two colors.
+      root.style.setProperty("--accent2", team.secondary || team.color);
       // Dark team colors need a lightened variant for text sitting on
       // accent-colored buttons/bars; light team colors keep the default
       // dark text via the CSS fallbacks.
@@ -270,6 +272,7 @@ export function applyLeagueTheme(league: League, code: string | null): void {
       root.setAttribute("data-fav-team", `${league}:${team.code}`);
     } else {
       root.style.removeProperty("--accent");
+      root.style.removeProperty("--accent2");
       root.style.removeProperty("--accent-ink");
       root.removeAttribute("data-fav-team");
     }
