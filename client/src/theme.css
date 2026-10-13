@@ -33,6 +33,7 @@
   --accent: #e98a35;
   --orange: color-mix(in srgb, var(--accent) 45%, #b85f1e);
   --green: #237a57;
+  --red: #bc3f2c;
   --toast: #f2e4cf;
   --radius: 14px;
   /* prestige additions — metals follow the team color; the logo artwork itself never changes */
@@ -854,14 +855,14 @@ h1, h2, h3 { font-family: Rockwell, Georgia, serif; margin: 0; }
 .first-goal-track::after { content: ""; position: absolute; inset: 0; border-radius: 9px; pointer-events: none; background: linear-gradient(180deg, rgba(255,255,255,.3), rgba(255,255,255,0) 45%); }
 .first-goal-track i, .first-goal-track b { height: 100%; display: block; }
 .first-goal-track i { background: linear-gradient(180deg, color-mix(in srgb, var(--green) 78%, #fff 22%), var(--green) 60%, color-mix(in srgb, var(--green) 80%, #000 20%)); }
-.first-goal-track b { background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 80%, #fff 20%), var(--accent) 60%, color-mix(in srgb, var(--accent) 80%, #000 20%)); }
+.first-goal-track b { background: linear-gradient(180deg, color-mix(in srgb, var(--orange) 78%, #fff 22%), var(--orange) 60%, color-mix(in srgb, var(--orange) 80%, #000 20%)); }
 .model-explain { margin: 16px 0 0; color: #d8c8b3; font-size: 11px; line-height: 1.5; }
 
 .scenario-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; margin: 14px 0; }
 .scenario-grid article {
   min-width: 0; min-height: 132px; display: flex; flex-direction: column; padding: 14px 12px; border-radius: 14px;
   border: 1px solid var(--border);
-  background: linear-gradient(180deg, rgba(255,255,255,.55), rgba(255,255,255,0) 70%), var(--paper);
+  background: var(--pearl), linear-gradient(180deg, rgba(255,255,255,.55), rgba(255,255,255,0) 70%), var(--paper);
   box-shadow: inset 0 1px 0 rgba(255,255,255,.6), 0 12px 24px -16px rgba(var(--shadow-warm), .55);
 }
 .scenario-grid span { color: var(--dim); font-size: 10px; font-weight: 900; letter-spacing: .05em; text-transform: uppercase; }
@@ -871,11 +872,11 @@ h1, h2, h3 { font-family: Rockwell, Georgia, serif; margin: 0; }
 .scenario-chart { width: 100%; height: 265px; }
 .team-tendency-chart { width: 100%; height: 235px; }
 .team-sample-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
-.team-sample-grid > div { display: flex; flex-direction: column; gap: 3px; padding: 11px; background: linear-gradient(180deg, rgba(255,255,255,.45), rgba(255,255,255,0) 65%), var(--toast); border-radius: 10px; border: 1px solid var(--border); box-shadow: inset 0 1px 0 rgba(255,255,255,.5); }
+.team-sample-grid > div { display: flex; flex-direction: column; gap: 3px; padding: 11px; background: var(--pearl), linear-gradient(180deg, rgba(255,255,255,.45), rgba(255,255,255,0) 65%), var(--toast); border-radius: 10px; border: 1px solid var(--border); box-shadow: inset 0 1px 0 rgba(255,255,255,.5); }
 .team-sample-grid strong { font: 800 19px/1 Rockwell, Georgia, serif; }
 .team-sample-grid span { font-size: 12px; font-weight: 800; }
 .team-sample-grid small { color: var(--dim); font-size: 9px; }
-.head-to-head { margin-top: 18px; padding: 14px; background: linear-gradient(180deg, rgba(255,255,255,.45), rgba(255,255,255,0) 65%), var(--toast); border: 1px solid var(--border); border-top: 3px solid var(--green); border-radius: 0 0 12px 12px; }
+.head-to-head { margin-top: 18px; padding: 14px; background: var(--pearl), linear-gradient(180deg, rgba(255,255,255,.45), rgba(255,255,255,0) 65%), var(--toast); border: 1px solid var(--border); border-top: 3px solid var(--green); border-radius: 0 0 12px 12px; }
 .head-to-head > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 7px 14px; }
 .head-to-head span { color: var(--dim); font-size: 10px; font-weight: 900; text-transform: uppercase; letter-spacing: .06em; }
 .head-to-head p { margin: 8px 0 0; color: var(--dim); font-size: 10px; line-height: 1.45; }
