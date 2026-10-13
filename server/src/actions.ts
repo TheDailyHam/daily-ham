@@ -3038,6 +3038,130 @@ async function fetchLikelyScorers(ctx: Ctx, sport: (typeof sports)[number], forc
   return response;
 }
 
+// ---------------------------------------------------------------------------
+// Matchup scorers: who owns THIS matchup. Season scoring rate blended with
+// head-to-head production vs the specific opponent (75/25). The head-to-head
+// sample is small by nature, so every row shows both numbers and the meeting
+// count — the rating is a descriptive blend, never a probability.
+// ---------------------------------------------------------------------------
+
+const matchupScorerSchema = z.object({
+  name: z.string(),
+  seasonStat: z.number(), seasonGames: z.number(), seasonRate: z.number(),
+  h2hStat: z.number(), h2hGames: z.number(), h2hRate: z.number().nullable(),
+  matchupRating: z.number(),
+});
+const matchupScorersResponse = z.object({
+  sport: z.enum(sports),
+  away: z.string(), home: z.string(),
+  teams: z.record(z.string(), z.array(matchupScorerSchema)),
+  blendNote: z.string(),
+  fetchedAt: z.string(), expiresAt: z.string(),
+});
+
+function normScorerName(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ").trim();
+}
+
+type H2hMap = Map<string, { stat: number; games: number }>;
+
+async function matchupH2h(ctx: Ctx, sport: (typeof sports)[number], team: string, opp: string, league?: SoccerLeagueParam): Promise<H2hMap> {
+  const map: H2hMap = new Map();
+  if (sport === "nhl") {
+    const { byPlayer } = await collectNhlRecentGames();
+    for (const acc of byPlayer.values()) {
+      if (acc.team !== team) continue;
+      const meetings = acc.games.filter((g) => g.opponent === opp);
+      if (meetings.length === 0) continue;
+      map.set(normScorerName(acc.name), { stat: meetings.reduce((s, g) => s + g.goals, 0), games: meetings.length });
+    }
+  } else if (sport === "nfl") {
+    const logs = await nflTeamPlayerLogs(ctx, team as (typeof nflTeamCodes)[number]);
+    for (const player of logs.players) {
+      const meetings = player.games.filter((g) => g.opponent === opp);
+      if (meetings.length === 0) continue;
+      map.set(normScorerName(player.name), {
+        stat: meetings.reduce((s, g) => s + (g.stats.rushTds ?? 0) + (g.stats.recTds ?? 0), 0),
+        games: meetings.length,
+      });
+    }
+  } else if (sport === "nba") {
+    const logs = await nbaTeamPlayerLogs(ctx, team as (typeof nbaTeamCodes)[number]);
+    for (const player of logs.players) {
+      const meetings = player.games.filter((g) => g.opponent === opp);
+      if (meetings.length === 0) continue;
+      map.set(normScorerName(player.name), {
+        stat: meetings.reduce((s, g) => s + (g.stats.points ?? 0), 0),
+        games: meetings.length,
+      });
+    }
+  } else if (sport === "soccer") {
+    const lg = league ?? "mls";
+    const { games } = await fetchSoccerTeamGames(lg, team, 12);
+    const meetings = games.filter((g) => g.opponent === opp);
+    const perScorer = new Map<string, { stat: number; gameIds: Set<number> }>();
+    await pool(meetings, 3, async (g) => {
+      try {
+        const summary = await fetchSoccerGameSummary(lg, g.gameId);
+        for (const goal of summary.goals) {
+          if (goal.teamAbbr !== team) continue;
+          const key = normScorerName(goal.scorer);
+          const entry = perScorer.get(key) ?? { stat: 0, gameIds: new Set<number>() };
+          entry.stat += 1; entry.gameIds.add(g.gameId); perScorer.set(key, entry);
+        }
+      } catch { /* One bad summary never breaks the matchup. */ }
+    });
+    for (const [key, entry] of perScorer) map.set(key, { stat: entry.stat, games: entry.gameIds.size });
+  }
+  return map;
+}
+
+async function fetchMatchupScorers(ctx: Ctx, sport: (typeof sports)[number], away: string, home: string, league?: SoccerLeagueParam): Promise<z.infer<typeof matchupScorersResponse>> {
+  const db = ctx.db;
+  const key = `matchup-scorers:${sport}:${league ?? "-"}:${away}:${home}`;
+  const cachedRows = await db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, key)).limit(1);
+  const cached = cachedRows[0];
+  if (cached && cached.expiresAt.getTime() > Date.now()) return matchupScorersResponse.parse(JSON.parse(cached.payloadJson));
+
+  // Candidates: top season scorers per team (already cached daily).
+  const season = await fetchLikelyScorers(ctx, sport, false, league);
+  const sides: { team: string; opp: string }[] = [{ team: away, opp: home }, { team: home, opp: away }];
+  const blended: { team: string; rows: (z.infer<typeof matchupScorerSchema> & { blend: number })[] }[] = [];
+  let maxBlend = 0;
+  for (const { team, opp } of sides) {
+    const candidates = (season.teams[team] ?? []).slice(0, 6);
+    let h2h: H2hMap = new Map();
+    try { h2h = await matchupH2h(ctx, sport, team, opp, league); } catch { /* Head-to-head falls back to season-only. */ }
+    const rows = candidates.map((c) => {
+      const h = h2h.get(normScorerName(c.name));
+      const h2hStat = h?.stat ?? 0;
+      const h2hGames = h?.games ?? 0;
+      const h2hRate = h2hGames > 0 ? h2hStat / h2hGames : null;
+      const blend = 0.75 * c.rate + 0.25 * (h2hRate ?? c.rate);
+      if (blend > maxBlend) maxBlend = blend;
+      return { name: c.name, seasonStat: c.stat, seasonGames: c.games, seasonRate: c.rate, h2hStat, h2hGames, h2hRate, matchupRating: 0, blend };
+    });
+    blended.push({ team, rows });
+  }
+  const teams: Record<string, z.infer<typeof matchupScorerSchema>[]> = {};
+  for (const { team, rows } of blended) {
+    teams[team] = rows
+      .map((r) => ({ ...r, matchupRating: maxBlend > 0 ? Math.round((100 * r.blend) / maxBlend) : 0 }))
+      .sort((a, b) => b.matchupRating - a.matchupRating || b.seasonRate - a.seasonRate)
+      .slice(0, 2)
+      .map(({ blend: _blend, ...rest }) => rest);
+  }
+  const unit = sport === "nhl" ? "goals" : sport === "nfl" ? "TDs" : sport === "nba" ? "points" : "goals";
+  const response: z.infer<typeof matchupScorersResponse> = {
+    sport, away, home, teams,
+    blendNote: `75% season ${unit} per game, 25% head-to-head vs this opponent. The rating is relative to the best in this matchup — a descriptive blend, not a probability.`,
+    fetchedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString(),
+  };
+  await db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, key));
+  await db.insert(schema.nhlInsightCache).values({ key, payloadJson: JSON.stringify(response), fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(response.expiresAt) });
+  return response;
+}
+
 const plateSchema = z.object({
   id: z.string(),
   sport: z.enum(sports),
@@ -3570,6 +3694,7 @@ export const Actions = {
   getNbaHotStreaks: defineAction({ request: z.object({ force: z.boolean().default(false) }), response: nbaHotStreaksResponse, async handler(ctx, args) { return fetchNbaHotStreaks(ctx, args.force); } }),
   getNbaColdStreaks: defineAction({ request: z.object({ force: z.boolean().default(false) }), response: nbaColdStreaksResponse, async handler(ctx, args) { return fetchNbaColdStreaks(ctx, args.force); } }),
   getLikelyScorers: defineAction({ request: z.object({ sport: z.enum(sports), league: z.enum(soccerLeagues).optional(), force: z.boolean().default(false) }), response: likelyScorersResponse, async handler(ctx, args) { return fetchLikelyScorers(ctx, args.sport, args.force, args.league); } }),
+  getMatchupScorers: defineAction({ request: z.object({ sport: z.enum(sports), away: z.string().min(1), home: z.string().min(1), league: z.enum(soccerLeagues).optional() }), response: matchupScorersResponse, async handler(ctx, args) { return fetchMatchupScorers(ctx, args.sport, args.away, args.home, args.league); } }),
   getPublicPlates: defineAction({ request: z.object({}), response: platesResponse, async handler(ctx) { return listPlates(ctx, true); } }),
   getMyPlates: defineAction({ request: z.object({ adminToken: adminTokenSchema }), response: platesResponse, async handler(ctx, args) { requireAdmin(args); return listPlates(ctx, false); } }),
   savePlate: defineAction({

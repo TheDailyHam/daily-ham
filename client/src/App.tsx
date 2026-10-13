@@ -1149,21 +1149,76 @@ function LikelyScorersStrip({ sport, market, nhlStandings, nflStandings, nbaStan
   </div>;
 }
 
-function LikelyScorersSection({ sport, awayCode, homeCode, scorers }: {
+async function fetchMatchupRoster(sport: Sport, team: string, league: SoccerLeague | undefined): Promise<{ players: { id: number; name: string }[] }> {
+  if (sport === "nhl") return api.getNhlRoster({ team: team as TeamCode });
+  if (sport === "nfl") return api.getNflRoster({ team: team as NflTeamCode });
+  if (sport === "nba") return api.getNbaRoster({ team: team as NbaTeamCode });
+  return api.getSoccerRoster({ league: league ?? "mls", team });
+}
+
+function MatchupScorersSection({ sport, awayCode, homeCode, league }: {
   sport: Sport;
   awayCode: string;
   homeCode: string;
-  scorers: LikelyScorers | undefined;
+  league?: SoccerLeague;
 }) {
-  if (!scorers) return null;
-  const top = topGameScorers(scorers, awayCode, homeCode);
-  if (top.length === 0) return null;
-  const unit = sport === "nhl" ? "G" : sport === "nfl" ? "TD" : "PTS";
-  const thing = sport === "nhl" ? "goal" : sport === "nfl" ? "touchdown" : "point";
-  return <section className="likely-scorers" aria-label={sport === "nfl" ? "Likely touchdown scorers" : "Likely scorers"}>
-    <div className="section-heading"><div><p className="kicker">{sport === "nhl" ? "LIKELY GOAL SCORERS" : sport === "nfl" ? "LIKELY TD SCORERS" : "LIKELY SCORERS"}</p><h3>{sport === "nba" ? "Who goes off" : `Who finds ${sport === "nhl" ? "the net" : "the end zone"}`}</h3></div><span>🎯</span></div>
-    <ol className="scorer-list">{top.map((player, index) => <li key={`${player.team}-${player.name}`}><span className="scorer-rank">#{index + 1}</span><span className="scorer-player"><strong>{player.name}</strong><small>{player.team}</small></span><span className="scorer-stat"><b>{player.stat} {unit}</b><small>{player.games} GP · {player.rate.toFixed(2)}/game</small></span></li>)}</ol>
-    <p className="mvb-note">Ranked by {thing}s per game this season from official stats. A stat, not a sportsbook line or prop.</p>
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const data = useQuery({
+    queryKey: ["matchup-scorers", sport, league ?? "na", awayCode, homeCode],
+    queryFn: () => api.getMatchupScorers({ sport, away: awayCode, home: homeCode, league }),
+    staleTime: 6 * 60 * 60 * 1000, retry: 1,
+  });
+  const awayRoster = useQuery({
+    queryKey: ["ms-roster", sport, league ?? "na", awayCode],
+    queryFn: () => fetchMatchupRoster(sport, awayCode, league),
+    staleTime: 12 * 60 * 60 * 1000, retry: 1,
+  });
+  const homeRoster = useQuery({
+    queryKey: ["ms-roster", sport, league ?? "na", homeCode],
+    queryFn: () => fetchMatchupRoster(sport, homeCode, league),
+    staleTime: 12 * 60 * 60 * 1000, retry: 1,
+  });
+  const [selected, setSelected] = useState<{ player: { id: number; name: string }; team: string } | null>(null);
+
+  const resolve = (name: string, team: string) => {
+    const roster = team === awayCode ? awayRoster.data : homeRoster.data;
+    const players = roster?.players ?? [];
+    const n = norm(name);
+    return players.find((p) => norm(p.name) === n) ?? null;
+  };
+
+  const unit = sport === "nhl" ? "G" : sport === "nfl" ? "TD" : sport === "nba" ? "PTS" : "G";
+  const sides = data.data ? [awayCode, homeCode] : [];
+  return <section className="likely-scorers matchup-scorers" aria-label="Matchup-rated scorers">
+    <div className="section-heading"><div><p className="kicker">MATCHUP RATING</p><h3>Who owns this matchup</h3></div><span>🎯</span></div>
+    {data.isPending ? <div className="loading"><span />Rating the matchup…</div>
+      : data.isError || !data.data ? <p className="mvb-note">Matchup ratings are unavailable right now.</p>
+      : sides.map((teamCode) => {
+        const players = data.data!.teams[teamCode] ?? [];
+        if (players.length === 0) return null;
+        const opp = teamCode === awayCode ? homeCode : awayCode;
+        return <div key={teamCode} className="ms-team">
+          <p className="ms-team-name">{teamCode}</p>
+          <ol className="scorer-list">{players.map((p) => {
+            const hit = resolve(p.name, teamCode);
+            return <li key={`${teamCode}-${p.name}`}>
+              <button type="button" className="scorer-row" disabled={!hit} onClick={() => hit && setSelected({ player: hit, team: teamCode })} aria-label={hit ? `Open ${p.name} full stat file` : p.name}>
+                <span className="scorer-rating" aria-hidden="true"><b>{p.matchupRating}</b></span>
+                <span className="scorer-player"><strong>{p.name}</strong>
+                  <small>{p.seasonStat} {unit} · {p.seasonGames} GP · {p.seasonRate.toFixed(2)}/game</small>
+                  <small className="ms-h2h">{p.h2hGames > 0 ? `${p.h2hStat} ${unit} in ${p.h2hGames} meeting${p.h2hGames === 1 ? "" : "s"} vs ${opp}` : `No meetings vs ${opp} yet this season`}</small>
+                </span>
+                <span className="scorer-open" aria-hidden="true">›</span>
+              </button>
+            </li>;
+          })}</ol>
+        </div>;
+      })}
+    {data.data && <p className="mvb-note">{data.data.blendNote}</p>}
+    {selected && sport === "nhl" && <PlayerStatsSheet player={selected.player as NhlPlayer} team={selected.team as TeamCode} onClose={() => setSelected(null)} />}
+    {selected && sport === "nfl" && <NflPlayerStatsSheet player={selected.player as NflPlayer} team={selected.team as NflTeamCode} onClose={() => setSelected(null)} />}
+    {selected && sport === "nba" && <NbaPlayerSheet player={selected.player as NbaPlayer} team={selected.team as NbaTeamCode} onClose={() => setSelected(null)} />}
+    {selected && sport === "soccer" && <SoccerPlayerSheet league={league ?? "mls"} player={selected.player as SoccerPlayer} team={selected.team} onClose={() => setSelected(null)} />}
   </section>;
 }
 
@@ -1175,7 +1230,6 @@ function MatchupCalculator() {
   const board = useQuery({ queryKey: ["premium-board", "nhl"], queryFn: () => api.getPremiumBoard({ sport: "nhl" }), retry: false });
   const boardGroups = useMemo(() => groupPremiumOffers(board.data?.offers ?? []), [board.data]);
   const result = useQuery({ queryKey: ["first-goal-matchup", matchup.away, matchup.home], queryFn: () => api.getFirstGoalMatchup({ awayTeam: matchup.away, homeTeam: matchup.home, force: false }), retry: 1 });
-  const scorers = useQuery({ queryKey: ["likely-scorers", "nhl"], queryFn: () => api.getLikelyScorers({ sport: "nhl" }), staleTime: 12 * 60 * 60 * 1000, retry: 1 });
   const injuries = useKeyInjuries("nhl");
   const refresh = useMutation({ mutationFn: () => api.getFirstGoalMatchup({ awayTeam: matchup.away, homeTeam: matchup.home, force: true }), onSuccess: () => result.refetch() });
   const data: FirstGoalMatchup | undefined = result.data;
@@ -1214,7 +1268,7 @@ function MatchupCalculator() {
         <p className="winner-explain">The winner model blends each club’s recent win rate with the opponent’s loss rate, weighting away and home splits when at least five matching games exist. Overtime and shootout winners count. This is a model estimate, not a sportsbook line.</p>
       </section>
       {data && <ModelVsBooks sport="nhl" awayCode={data.away.team} homeCode={data.home.team} awayModel={data.awayWinProbability} homeModel={data.homeWinProbability} groups={boardGroups} />}
-      {data && <LikelyScorersSection sport="nhl" awayCode={data.away.team} homeCode={data.home.team} scorers={scorers.data} />}
+      {data && <MatchupScorersSection sport="nhl" awayCode={data.away.team} homeCode={data.home.team} />}
       <section className="first-goal-card">
         <div className="section-heading"><div><p className="kicker">MODEL ESTIMATE</p><h2>First goal probability</h2></div><span>{data.edgeTeam ? `${data.edgeTeam} +${data.edgePoints?.toFixed(1) ?? "0.0"} pts` : "Insufficient sample"}</span></div>
         <div className="first-goal-score"><div><span>{data.away.team} · away</span><strong>{percentage(data.awayProbability)}</strong></div><div className="first-goal-track" role="img" aria-label={`${data.away.team} ${percentage(data.awayProbability)} and ${data.home.team} ${percentage(data.homeProbability)} to score first`}><i style={{ width: `${(data.awayProbability ?? .5) * 100}%` }}/><b style={{ width: `${(data.homeProbability ?? .5) * 100}%` }}/></div><div className="home"><span>{data.home.team} · home</span><strong>{percentage(data.homeProbability)}</strong></div></div>
@@ -1717,7 +1771,6 @@ function NflMatchupCalculator() {
   const board = useQuery({ queryKey: ["premium-board", "nfl"], queryFn: () => api.getPremiumBoard({ sport: "nfl" }), retry: false });
   const boardGroups = useMemo(() => groupPremiumOffers(board.data?.offers ?? []), [board.data]);
   const result = useQuery({ queryKey: ["nfl-matchup", matchup.away, matchup.home], queryFn: () => api.getNflMatchup({ awayTeam: matchup.away, homeTeam: matchup.home, force: false }), retry: 1 });
-  const scorers = useQuery({ queryKey: ["likely-scorers", "nfl"], queryFn: () => api.getLikelyScorers({ sport: "nfl" }), staleTime: 12 * 60 * 60 * 1000, retry: 1 });
   const injuries = useKeyInjuries("nfl");
   const refresh = useMutation({ mutationFn: () => api.getNflMatchup({ awayTeam: matchup.away, homeTeam: matchup.home, force: true }), onSuccess: () => result.refetch() });
   const data: NflMatchup | undefined = result.data;
@@ -1756,7 +1809,7 @@ function NflMatchupCalculator() {
         <p className="winner-explain">The winner model blends each club's recent win rate with the opponent's loss rate, weighting away and home splits when at least three matching games exist. This is a model estimate, not a sportsbook line.</p>
       </section>
       {data && <ModelVsBooks sport="nfl" awayCode={data.away.team} homeCode={data.home.team} awayModel={data.awayWinProbability} homeModel={data.homeWinProbability} groups={boardGroups} />}
-      {data && <LikelyScorersSection sport="nfl" awayCode={data.away.team} homeCode={data.home.team} scorers={scorers.data} />}
+      {data && <MatchupScorersSection sport="nfl" awayCode={data.away.team} homeCode={data.home.team} />}
       <section className="first-goal-card">
         <div className="section-heading"><div><p className="kicker">MODEL ESTIMATE</p><h2>First score probability</h2></div><span>{data.firstScoreEdgeTeam ? `${data.firstScoreEdgeTeam} +${data.firstScoreEdgePoints?.toFixed(1) ?? "0.0"} pts` : "Insufficient sample"}</span></div>
         <div className="first-goal-score"><div><span>{data.away.team} · away</span><strong>{percentage(data.firstScoreAwayProbability)}</strong></div><div className="first-goal-track" role="img" aria-label={`${data.away.team} ${percentage(data.firstScoreAwayProbability)} and ${data.home.team} ${percentage(data.firstScoreHomeProbability)} to score first`}><i style={{ width: `${(data.firstScoreAwayProbability ?? .5) * 100}%` }}/><b style={{ width: `${(data.firstScoreHomeProbability ?? .5) * 100}%` }}/></div><div className="home"><span>{data.home.team} · home</span><strong>{percentage(data.firstScoreHomeProbability)}</strong></div></div>
@@ -2346,7 +2399,7 @@ function NbaMatchupCalculator() {
         <p className="winner-explain">The winner model blends each club's recent win rate with the opponent's loss rate, weighting away and home splits when at least three matching games exist. This is a model estimate, not a sportsbook line.</p>
       </section>
       {data && <ModelVsBooks sport="nba" awayCode={data.away.team} homeCode={data.home.team} awayModel={data.awayWinProbability} homeModel={data.homeWinProbability} groups={boardGroups} />}
-      {data && <LikelyScorersSection sport="nba" awayCode={data.away.team} homeCode={data.home.team} scorers={scorers.data} />}
+      {data && <MatchupScorersSection sport="nba" awayCode={data.away.team} homeCode={data.home.team} />}
       <section className="first-goal-card">
         <div className="section-heading"><div><p className="kicker">MODEL ESTIMATE</p><h2>First basket probability</h2></div><span>{data.firstBasketEdgeTeam ? `${data.firstBasketEdgeTeam} +${data.firstBasketEdgePoints?.toFixed(1) ?? "0.0"} pts` : "Insufficient sample"}</span></div>
         <div className="first-goal-score"><div><span>{data.away.team} · away</span><strong>{percentage(data.firstBasketAwayProbability)}</strong></div><div className="first-goal-track" role="img" aria-label={`${data.away.team} ${percentage(data.firstBasketAwayProbability)} and ${data.home.team} ${percentage(data.firstBasketHomeProbability)} to score first`}><i style={{ width: `${(data.firstBasketAwayProbability ?? .5) * 100}%` }}/><b style={{ width: `${(data.firstBasketHomeProbability ?? .5) * 100}%` }}/></div><div className="home"><span>{data.home.team} · home</span><strong>{percentage(data.firstBasketHomeProbability)}</strong></div></div>
@@ -2856,7 +2909,6 @@ function SoccerMatchupCalculator({ league, onLeagueChange }: { league: SoccerLea
   const board = useQuery({ queryKey: ["soccer-board", league], queryFn: () => api.getSoccerBoard({ league }), retry: false });
   const boardGroups = useMemo(() => groupPremiumOffers(board.data?.offers ?? []), [board.data]);
   const result = useQuery({ queryKey: ["soccer-matchup", league, matchup.away, matchup.home], queryFn: () => api.getSoccerMatchup({ league, awayTeam: matchup.away, homeTeam: matchup.home, force: false }), retry: 1 });
-  const scorers = useQuery({ queryKey: ["soccer-likely-scorers", league], queryFn: () => api.getSoccerLikelyScorers({ league }), staleTime: 12 * 60 * 60 * 1000, retry: 1 });
   const injuries = useSoccerKeyInjuries(league);
   const refresh = useMutation({ mutationFn: () => api.getSoccerMatchup({ league, awayTeam: matchup.away, homeTeam: matchup.home, force: true }), onSuccess: () => result.refetch() });
   const data: SoccerMatchup | undefined = result.data;
@@ -2894,15 +2946,7 @@ function SoccerMatchupCalculator({ league, onLeagueChange }: { league: SoccerLea
         <p className="winner-explain">The result model blends each club's recent home/away form with goals scored and allowed, weighting venue splits when the sample allows. Draws are a real outcome here — always price all three. This is a model estimate, not a sportsbook line.</p>
       </section>
       <SoccerModelVsBooks league={league} homeCode={data.home.team} awayCode={data.away.team} homeModel={data.homeWinProbability} drawModel={data.drawProbability} awayModel={data.awayWinProbability} groups={boardGroups} />
-      <section className="likely-scorers" aria-label="Likely scorers">
-        <div className="section-heading"><div><p className="kicker">LIKELY SCORERS</p><h3>Who finds the net</h3></div><span>🎯</span></div>
-        {(() => {
-          const top = scorers.data ? topSoccerScorers(scorers.data, data.away.team, data.home.team) : [];
-          if (top.length === 0) return <p className="mvb-note">Scorer data hasn't posted for this league yet.</p>;
-          return <><ol className="scorer-list">{top.map((player, index) => <li key={`${player.team}-${player.name}`}><span className="scorer-rank">#{index + 1}</span><span className="scorer-player"><strong>{player.name}</strong><small>{player.team}</small></span><span className="scorer-stat"><b>{player.stat} G</b><small>{player.games} GP · {player.rate.toFixed(2)}/game</small></span></li>)}</ol>
-          <p className="mvb-note">Ranked by goals per game this season from official stats. A stat, not a sportsbook line or prop.</p></>;
-        })()}
-      </section>
+      {data && <MatchupScorersSection sport="soccer" awayCode={data.away.team} homeCode={data.home.team} league={league} />}
       <section className="scenario-grid" aria-label="Matchup model estimates">
         <article><span>Over 2.5 goals</span><strong>{percentage(data.over25Probability)}</strong><small>Three or more total goals</small></article>
         <article><span>Both teams to score</span><strong>{percentage(data.bttsProbability)}</strong><small>Each side scores at least once</small></article>

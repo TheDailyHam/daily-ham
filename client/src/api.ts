@@ -135,6 +135,7 @@ export const api = {
   getNflHotStreaks: (args: ActionArgs<"getNflHotStreaks">) => callAction("getNflHotStreaks", args),
   getNflColdStreaks: (args: ActionArgs<"getNflColdStreaks">) => callAction("getNflColdStreaks", args),
   getLikelyScorers: (args: ActionArgs<"getLikelyScorers">) => callAction("getLikelyScorers", args),
+  getMatchupScorers: (args: ActionArgs<"getMatchupScorers">) => callAction("getMatchupScorers", args),
   getPublicPlates: (args: ActionArgs<"getPublicPlates">) => callAction("getPublicPlates", args),
   getMyPlates: (args: ActionArgs<"getMyPlates">) => callAction("getMyPlates", args),
   savePlate: (args: ActionArgs<"savePlate">) => callAction("savePlate", args),
