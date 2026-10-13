@@ -79,6 +79,47 @@ export const codyPlates = sqliteTable("cody_plates", {
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
 });
 
+// Transparent model-vs-books tracker: one row per game per day, snapshotting
+// the pregame model probabilities and best book prices, then graded against
+// the final result. source='backtest' rows are the Oct 7-12 launch backtest
+// (model vs final scores only — historical book lines were never stored).
+export const modelSnapshots = sqliteTable(
+  "model_snapshots",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    sport: text("sport", { enum: ["nhl", "nfl", "nba", "soccer"] }).notNull(),
+    league: text("league"),
+    awayTeam: text("away_team").notNull(),
+    homeTeam: text("home_team").notNull(),
+    gameDate: text("game_date").notNull(),
+    startsAt: integer("starts_at", { mode: "timestamp_ms" }),
+    snapshotAt: integer("snapshot_at", { mode: "timestamp_ms" }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+    modelAway: real("model_away"),
+    modelHome: real("model_home"),
+    modelDraw: real("model_draw"),
+    modelPick: text("model_pick", { enum: ["away", "home", "draw"] }),
+    bookAwayPrice: integer("book_away_price"),
+    bookHomePrice: integer("book_home_price"),
+    bookDrawPrice: integer("book_draw_price"),
+    bookAwayProb: real("book_away_prob"),
+    bookHomeProb: real("book_home_prob"),
+    bookDrawProb: real("book_draw_prob"),
+    bookPick: text("book_pick", { enum: ["away", "home", "draw"] }),
+    source: text("source", { enum: ["live", "backtest"] }).notNull().default("live"),
+    winner: text("winner", { enum: ["away", "home", "draw"] }),
+    gradedAt: integer("graded_at", { mode: "timestamp_ms" }),
+    modelCorrect: integer("model_correct"),
+    bookCorrect: integer("book_correct"),
+  },
+  (table) => [
+    index("model_snapshots_identity_idx").on(
+      table.sport, table.league, table.awayTeam, table.homeTeam, table.gameDate,
+    ),
+    index("model_snapshots_graded_idx").on(table.gradedAt),
+  ],
+);
+
 // Privacy-respecting usage counts: one row per (day, anonymized visitor,
 // sport). visitor_hash is SHA-256(IP + day + user-agent) — raw IPs are never
 // stored, and hashes are unlinkable across days.

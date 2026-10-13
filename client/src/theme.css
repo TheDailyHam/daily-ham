@@ -1594,6 +1594,66 @@ html[data-dimmed="true"] .brightness-veil { display: block; }
 @media (min-width: 680px) { .jamon-spread { grid-template-columns: repeat(2, minmax(0,1fr)); } }
 @media (prefers-reduced-motion: reduce) { .jamon-hero::before { animation: none; } }
 
+/* Track Record — transparent model-vs-books ledger */
+.record-view { display: grid; gap: 18px; }
+.record-hero {
+  position: relative; overflow: hidden; border-radius: 18px; padding: 26px 20px;
+  color: var(--paper); text-align: center;
+  background:
+    radial-gradient(85% 130% at 50% 0%, color-mix(in srgb, var(--gold) 22%, transparent), transparent 60%),
+    linear-gradient(170deg, #2c2417, #14100a 78%);
+  border: 1px solid rgba(217,164,65,.45);
+  box-shadow: 0 22px 48px -18px rgba(var(--shadow-warm), .65), inset 0 1px 0 rgba(255,255,255,.16), inset 0 -3px 10px rgba(0,0,0,.4);
+}
+.record-hero .kicker { color: var(--gold-pale); }
+.record-hero h1 {
+  margin: 6px 0 8px; font-size: clamp(34px, 9vw, 52px); line-height: .95; letter-spacing: -.03em;
+  background: linear-gradient(180deg, #fff8e8 20%, var(--gold-pale) 60%, var(--gold) 95%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  filter: drop-shadow(0 3px 8px rgba(0,0,0,.55));
+}
+.record-hero p:last-child { margin: 0; color: #ddcdb9; font-size: 13px; }
+.record-era {
+  border: 1px solid var(--rule); border-radius: 16px; padding: 16px;
+  background: color-mix(in srgb, var(--card) 88%, transparent);
+  box-shadow: 0 10px 26px -18px rgba(var(--shadow-warm), .7);
+}
+.record-era .section-heading { margin-bottom: 10px; }
+.record-score { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
+.record-score > div {
+  border: 1px solid var(--rule); border-radius: 12px; padding: 10px 8px; text-align: center;
+  background: color-mix(in srgb, var(--paper) 60%, transparent);
+  display: grid; gap: 2px;
+}
+.record-score span { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); }
+.record-score strong { font-size: clamp(18px, 5vw, 24px); letter-spacing: -.02em; }
+.record-score em { font-style: normal; font-size: 12px; color: var(--dim); font-weight: 700; }
+.record-score .negative { color: #e5484d; }
+.record-sports { display: grid; gap: 6px; }
+.record-sport-row {
+  display: flex; align-items: baseline; gap: 10px; padding: 8px 10px;
+  border: 1px solid var(--rule); border-radius: 10px;
+  background: color-mix(in srgb, var(--paper) 55%, transparent);
+}
+.record-sport-row span { font-size: 11px; font-weight: 800; letter-spacing: .06em; color: var(--dim); }
+.record-sport-row b { margin-left: auto; font-size: 15px; }
+.record-sport-row em { font-style: normal; font-size: 12px; color: var(--dim); font-weight: 700; min-width: 44px; text-align: right; }
+.record-note { margin: 0; font-size: 12px; color: var(--dim); line-height: 1.5; padding: 0 4px; }
+.record-list { display: grid; gap: 8px; }
+.record-row {
+  border: 1px solid var(--rule); border-radius: 12px; padding: 10px 12px;
+  background: color-mix(in srgb, var(--card) 92%, transparent);
+  display: grid; gap: 6px;
+}
+.record-row-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.record-row-head strong { font-size: 14px; }
+.record-row-head span { font-size: 11px; color: var(--dim); margin-left: auto; }
+.record-row-body { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--dim); }
+.record-row-body b { color: var(--ink); }
+.record-row-body .positive { color: var(--green); font-style: normal; font-weight: 900; }
+.record-row-body .negative { color: #e5484d; font-style: normal; font-weight: 900; }
+@media (min-width: 680px) { .record-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
 /* Tutorial — tour CTA, swipeable sheet */
 .tour-cta {
   margin-top: 10px; align-self: flex-start; min-height: 44px; padding: 0 18px; border-radius: 999px; cursor: pointer;

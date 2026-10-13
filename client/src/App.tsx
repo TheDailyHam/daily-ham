@@ -13,7 +13,7 @@ import { EPL_TEAM_THEMES, LEAGUE_THEMES, MLS_TEAM_THEMES, NBA_TEAM_THEMES, SOCCE
 import { isWatchedPlayer, isWatchedTeam, loadWatchlist, removeWatchedEntry, toggleWatch, type WatchedEntry, type WatchedPlayer, type WatchedTeam } from "./watchlist";
 
 type Sport = League;
-type Mode = "board" | "matchup" | "rosters" | "streaks" | "standings" | "watchlist" | "parlay" | "settings" | "jamon";
+type Mode = "board" | "matchup" | "rosters" | "streaks" | "standings" | "watchlist" | "parlay" | "settings" | "jamon" | "record";
 const SPORT_KEY = "dh-sport";
 function loadSport(): Sport {
   try {
@@ -784,6 +784,86 @@ function TutorialSheet({ onClose }: { onClose: () => void }) {
       </div>
     </section>
   </div>;
+}
+
+type TrackRecord = ApiResponse<typeof api, "getTrackRecord">;
+type TrackEra = TrackRecord["backtest"];
+
+function EraCard({ title, sub, era, showBooks, emptyHint }: {
+  title: string; sub: string; era: TrackEra; showBooks: boolean; emptyHint?: string;
+}) {
+  const wl = (w: number, l: number) => `${w}–${l}`;
+  return <section className="record-era" aria-label={title}>
+    <div className="section-heading"><div><p className="kicker">{sub}</p><h3>{title}</h3></div></div>
+    {era.picks === 0 ? (
+      <div className="history-empty"><strong>No graded picks yet.</strong><span>{emptyHint ?? "Check back soon."}</span></div>
+    ) : (
+      <>
+        <div className="record-score">
+          <div><span>Model record</span><strong>{wl(era.wins, era.losses)}</strong><em>{era.winPct === null ? "—" : `${era.winPct}%`}</em></div>
+          {showBooks && <div><span>Book favorite (vig-free)</span><strong>{era.bookWins === null || era.bookLosses === null ? "—" : wl(era.bookWins, era.bookLosses)}</strong><em>{era.bookWinPct === null ? "—" : `${era.bookWinPct}%`}</em></div>}
+          {showBooks && <div><span>Model ROI (1u, best price)</span><strong className={era.roiUnits === null ? "" : era.roiUnits >= 0 ? "positive" : "negative"}>{era.roiUnits === null ? "—" : `${era.roiUnits >= 0 ? "+" : ""}${era.roiUnits}u`}</strong><em>units</em></div>}
+        </div>
+        <div className="record-sports">
+          {era.bySport.map((s) => (
+            <div key={s.sport} className="record-sport-row"><span>{plateLeagueLabel(s.sport)}</span><b>{wl(s.wins, s.losses)}</b><em>{s.winPct === null ? "—" : `${s.winPct}%`}</em></div>
+          ))}
+        </div>
+      </>
+    )}
+  </section>;
+}
+
+function RecordView() {
+  const record = useQuery({
+    queryKey: ["track-record"],
+    queryFn: () => api.getTrackRecord(),
+    staleTime: 5 * 60 * 1000,
+    retry: 1,
+  });
+  const data = record.data;
+  const pickLabel = (pick: string | null, prob: number | null) =>
+    pick === null ? "No pick" : `${pick === "away" ? "Away" : pick === "home" ? "Home" : "Draw"}${prob === null ? "" : ` ${Math.round(prob * 100)}%`}`;
+  return <section className="record-view" aria-label="Track Record — model vs the books">
+    <div className="record-hero">
+      <p className="kicker">TRANSPARENCY</p>
+      <h1>Track Record</h1>
+      <p>Every pregame model pick, graded against final scores — and against the books' own prices. Nothing hidden, nothing cherry-picked.</p>
+    </div>
+    {record.isPending ? <div className="slate-loading">Tallying the record…</div>
+      : record.isError ? <div className="history-empty"><strong>Record unavailable.</strong><span>Pull to refresh and try again.</span></div>
+      : data && <>
+        <EraCard
+          title="Since launch · backtest"
+          sub="OCT 7–12 · MODEL VS FINAL SCORES"
+          era={data.backtest}
+          showBooks={false}
+        />
+        <p className="record-note">Historical book lines were never stored, so no vs-books comparison exists for this period. That's exactly why live tracking started.</p>
+        <EraCard
+          title="Tracked vs the books · live"
+          sub="FROM OCT 13 · PREGAME SNAPSHOTS"
+          era={data.live}
+          showBooks={true}
+          emptyHint="First snapshots land with the morning refresh — check back after today's games."
+        />
+        <p className="record-note">Live picks are snapshotted every morning before games, with the model's win probability and each side's best book price (vig removed for the book comparison). ROI assumes a flat 1 unit on every model pick at the best captured price.</p>
+        {data.recent.length > 0 && <section className="record-recent" aria-label="Recent graded picks">
+          <div className="section-heading"><div><p className="kicker">RECEIPT</p><h3>Recent picks</h3></div></div>
+          <div className="record-list">
+            {data.recent.map((p) => (
+              <article key={p.id} className="record-row">
+                <div className="record-row-head"><strong>{p.awayTeam} @ {p.homeTeam}</strong><span>{p.gameDate} · {plateLeagueLabel(p.sport)}{p.source === "backtest" ? " · backtest" : ""}</span></div>
+                <div className="record-row-body">
+                  <span>Model: <b>{pickLabel(p.modelPick, p.modelProb)}</b> {p.modelCorrect === null ? null : p.modelCorrect ? <em className="positive">✓</em> : <em className="negative">✗</em>}</span>
+                  {p.bookPick !== null && <span>Book: <b>{pickLabel(p.bookPick, null)}</b> {p.bookCorrect === null ? null : p.bookCorrect ? <em className="positive">✓</em> : <em className="negative">✗</em>}</span>}
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>}
+      </>}
+  </section>;
 }
 
 function JamonView({ sport }: { sport: Sport }) {
@@ -2148,6 +2228,7 @@ export function App(){
   return isOwner ? <div className="app-shell owner-shell"><SafeAreaTopScrim backgroundColor="var(--paper)"/><ToastHost/><main><OwnerConsole/></main></div>
   : <div className="app-shell"><SafeAreaTopScrim backgroundColor="var(--paper)"/><ToastHost/><InstallPrompt/><main>{mode==="board"&&<WelcomeBanner sport={sport} onTour={() => setTutorialOpen(true)}/>}<div className="topbar"><div className="sport-switch" role="group" aria-label="League"><button type="button" className={"sport-shape" + (sport === "nhl" ? " active" : "")} onClick={() => chooseSport("nhl")} aria-pressed={sport === "nhl"} aria-label="Hockey side"><span className="shape puck" aria-hidden="true" /><em>NHL</em></button><button type="button" className={"sport-shape" + (sport === "nfl" ? " active" : "")} onClick={() => chooseSport("nfl")} aria-pressed={sport === "nfl"} aria-label="Football side"><span className="shape ball" aria-hidden="true" /><em>NFL</em></button><button type="button" className={"sport-shape" + (sport === "nba" ? " active" : "")} onClick={() => chooseSport("nba")} aria-pressed={sport === "nba"} aria-label="Basketball side"><span className="shape hoop" aria-hidden="true" /><em>NBA</em></button><button type="button" className={"sport-shape" + (sport === "soccer" ? " active" : "")} onClick={() => chooseSport("soccer")} aria-pressed={sport === "soccer"} aria-label="Soccer side"><span className="shape soccerball" aria-hidden="true" /><em>SOC</em></button></div><nav className="mode-tabs shapes" aria-label="Data view">{([
         ["board", boardLabel],
+        ["record", "Record"],
         ["jamon", "Jamón Ibérico"],
         ["parlay", parlay.length > 0 ? `Parlay (${parlay.length})` : "Parlay"],
         ["matchup", "Matchup"],
@@ -2156,7 +2237,7 @@ export function App(){
         ["standings", "League"],
         ["watchlist", "Watchlist"],
         ["settings", "Settings"],
-      ] as [Mode, string][]).map(([key, label]) => <button key={key} type="button" className={"mode-shape" + (mode === key ? " active" : "")} onClick={() => setMode(key)} aria-pressed={mode === key} aria-label={label}><span className={"rink " + (key === "jamon" ? "platter" : sport === "nhl" ? "ice" : sport === "nfl" ? "turf" : sport === "nba" ? "court" : "pitch")} aria-hidden="true"><span className={"shape " + (key === "jamon" ? "plate" : sport === "nhl" ? "puck" : sport === "nfl" ? "ball" : sport === "nba" ? "hoop" : "soccerball")} /></span>{mode === key && <i className="mode-glow" aria-hidden="true" />}<em>{label}</em></button>)}</nav></div>{mode==="board"&&<ProView parlay={parlay} setParlay={setParlay} home sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="jamon"&&<JamonView sport={sport}/>} {mode==="parlay"&&<ParlayView parlay={parlay} setParlay={setParlay} sport={sport} onGoBoard={()=>setMode("board")}/>} {mode==="matchup"&&<MatchupView sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="rosters"&&<RosterView parlay={parlay} setParlay={setParlay} sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague} teamFocus={teamFocus}/>} {mode==="streaks"&&<StreaksView sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="standings"&&<LeagueView sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="watchlist"&&<WatchlistView onViewTeam={viewTeam}/>} {mode==="settings"&&<SiteSettings/>}{tutorialOpen&&<TutorialSheet onClose={() => setTutorialOpen(false)}/>}</main></div>;
+      ] as [Mode, string][]).map(([key, label]) => <button key={key} type="button" className={"mode-shape" + (mode === key ? " active" : "")} onClick={() => setMode(key)} aria-pressed={mode === key} aria-label={label}><span className={"rink " + (key === "jamon" ? "platter" : sport === "nhl" ? "ice" : sport === "nfl" ? "turf" : sport === "nba" ? "court" : "pitch")} aria-hidden="true"><span className={"shape " + (key === "jamon" ? "plate" : sport === "nhl" ? "puck" : sport === "nfl" ? "ball" : sport === "nba" ? "hoop" : "soccerball")} /></span>{mode === key && <i className="mode-glow" aria-hidden="true" />}<em>{label}</em></button>)}</nav></div>{mode==="board"&&<ProView parlay={parlay} setParlay={setParlay} home sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="record"&&<RecordView/>} {mode==="jamon"&&<JamonView sport={sport}/>} {mode==="parlay"&&<ParlayView parlay={parlay} setParlay={setParlay} sport={sport} onGoBoard={()=>setMode("board")}/>} {mode==="matchup"&&<MatchupView sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="rosters"&&<RosterView parlay={parlay} setParlay={setParlay} sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague} teamFocus={teamFocus}/>} {mode==="streaks"&&<StreaksView sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="standings"&&<LeagueView sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="watchlist"&&<WatchlistView onViewTeam={viewTeam}/>} {mode==="settings"&&<SiteSettings/>}{tutorialOpen&&<TutorialSheet onClose={() => setTutorialOpen(false)}/>}</main></div>;
 }
 
 // NBA views. Mirror the NFL sections: schedule strip, league, matchup

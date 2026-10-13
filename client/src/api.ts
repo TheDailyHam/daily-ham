@@ -148,6 +148,7 @@ export const api = {
   getNbaRoster: (args: ActionArgs<"getNbaRoster">) => callAction("getNbaRoster", args),
   getNbaPlayerGameLog: (args: ActionArgs<"getNbaPlayerGameLog">) => callAction("getNbaPlayerGameLog", args),
   getPremiumBoard: (args: ActionArgs<"getPremiumBoard">) => callAction("getPremiumBoard", args),
+  getTrackRecord: () => callAction("getTrackRecord", {}),
   getAdminStatus: (args: ActionArgs<"getAdminStatus">) => callAction("getAdminStatus", args),
   refreshAllSportsbooks: (args: ActionArgs<"refreshAllSportsbooks">) => callAction("refreshAllSportsbooks", args),
   getSportsGameOddsKeyStatus: (args: ActionArgs<"getSportsGameOddsKeyStatus">) => callAction("getSportsGameOddsKeyStatus", args),

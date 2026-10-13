@@ -50,7 +50,7 @@ import {
   soccerTeamMeta, soccerTeams,
   type SoccerGame, type SoccerStanding, type SoccerTeamGame,
 } from "./soccer.js";
-import { and, desc, eq, gte, lt, sql } from "drizzle-orm";
+import { and, desc, eq, gte, isNull, lt, sql } from "drizzle-orm";
 import * as schema from "./schema.js";
 
 const sports = ["nhl", "nfl", "nba", "soccer"] as const;
@@ -433,6 +433,359 @@ async function loadPremium(ctx: Ctx, sport: Sport): Promise<z.infer<typeof premi
   }
 }
 
+// ---------------------------------------------------------------------------
+// Transparent model-vs-books track record.
+// Every pregame model pick is snapshotted with the books' best prices, then
+// graded against the final result. The public "Record" tab reads this table.
+// Snapshots refresh with the daily odds job; grading resolves from the free
+// official feeds. Nothing here burns extra provider quota.
+// ---------------------------------------------------------------------------
+
+function americanToDecimal(odds: number): number | null {
+  if (!Number.isFinite(odds) || odds === 0) return null;
+  return odds > 0 ? 1 + odds / 100 : 1 + 100 / Math.abs(odds);
+}
+
+function decimalToAmerican(dec: number): number | null {
+  if (!Number.isFinite(dec) || dec <= 1) return null;
+  return dec >= 2 ? Math.round((dec - 1) * 100) : Math.round(-100 / (dec - 1));
+}
+
+// Strip the sportsbook margin: normalize inverse decimal odds to sum to 1.
+function vigFreeProbs(decimals: (number | null)[]): (number | null)[] {
+  const inv: (number | null)[] = decimals.map((d) => (d !== null && d > 1 ? 1 / d : null));
+  let total = 0;
+  for (const v of inv) {
+    if (v === null) return decimals.map(() => null);
+    total += v;
+  }
+  if (total <= 0) return decimals.map(() => null);
+  return inv.map((v) => (v === null ? null : v / total));
+}
+
+type FlipRow = {
+  team: string;
+  wins: number;
+  losses: number;
+  ties?: number;
+  gamesPlayed?: number;
+  modelWinPct?: number | null;
+};
+
+// Exact server mirror of the client's flipProbability (Flip % v2): prefers the
+// server's modelWinPct when present (NFL/NBA), falls back to W/L record.
+function flipTwoWay(awayRow: FlipRow | null, homeRow: FlipRow | null): { away: number; home: number } | null {
+  if (!awayRow || !homeRow || awayRow.team === homeRow.team) return null;
+  const pct = (row: FlipRow): number | null => {
+    if (row.modelWinPct !== undefined && row.modelWinPct !== null) return row.modelWinPct;
+    const gp = row.gamesPlayed ?? row.wins + row.losses + (row.ties ?? 0);
+    if (!gp) return null;
+    return (row.wins + (row.ties ?? 0) / 2) / gp;
+  };
+  const awayPct = pct(awayRow);
+  const homePct = pct(homeRow);
+  if (awayPct === null || homePct === null) return null;
+  const awayRaw = (awayPct + (1 - homePct)) / 2;
+  const homeRaw = (homePct + (1 - awayPct)) / 2;
+  const total = awayRaw + homeRaw;
+  if (total <= 0) return null;
+  return { away: awayRaw / total, home: homeRaw / total };
+}
+
+type TrackGame = {
+  awayAbbrev: string;
+  awayName: string;
+  homeAbbrev: string;
+  homeName: string;
+  date: string; // YYYY-MM-DD
+  completed: boolean;
+  awayScore: number | null;
+  homeScore: number | null;
+  modelAway: number | null;
+  modelHome: number | null;
+  modelDraw: number | null;
+};
+
+function trackGameWinner(g: TrackGame): "away" | "home" | "draw" | null {
+  if (!g.completed || g.awayScore === null || g.homeScore === null) return null;
+  if (g.awayScore > g.homeScore) return "away";
+  if (g.homeScore > g.awayScore) return "home";
+  return "draw";
+}
+
+type BoardOffer = { matchup: string; entity: string; marketName: string; odds: string | null };
+
+function bestDec(offer: BoardOffer): number | null {
+  return offer.odds === null ? null : americanToDecimal(Number(offer.odds));
+}
+
+type Pick3 = "away" | "home" | "draw" | null;
+function topPick(probs: { away: number | null; home: number | null; draw?: number | null }): Pick3 {
+  const entries: [Pick3, number | null][] = [
+    ["away", probs.away],
+    ["home", probs.home],
+    ["draw", probs.draw ?? null],
+  ];
+  let best: Pick3 = null;
+  let bestVal = -1;
+  for (const [side, v] of entries) {
+    if (v !== null && v > bestVal) { bestVal = v; best = side; }
+  }
+  // Require a strict winner; ties mean no pick.
+  const tied = entries.filter(([, v]) => v !== null && v === bestVal).length > 1;
+  return tied ? null : best;
+}
+
+async function upsertSnapshot(ctx: Ctx, row: {
+  sport: Sport; league: string; awayTeam: string; homeTeam: string; gameDate: string;
+  modelAway: number | null; modelHome: number | null; modelDraw: number | null;
+  modelPick: Pick3; bookAwayPrice: number | null; bookHomePrice: number | null; bookDrawPrice: number | null;
+  bookAwayProb: number | null; bookHomeProb: number | null; bookDrawProb: number | null;
+  bookPick: Pick3; now: Date;
+}): Promise<boolean> {
+  const t = schema.modelSnapshots;
+  const values = {
+    sport: row.sport, league: row.league, awayTeam: row.awayTeam, homeTeam: row.homeTeam,
+    gameDate: row.gameDate, startsAt: null, snapshotAt: row.now, updatedAt: row.now,
+    modelAway: row.modelAway, modelHome: row.modelHome, modelDraw: row.modelDraw,
+    modelPick: row.modelPick, bookAwayPrice: row.bookAwayPrice, bookHomePrice: row.bookHomePrice,
+    bookDrawPrice: row.bookDrawPrice, bookAwayProb: row.bookAwayProb, bookHomeProb: row.bookHomeProb,
+    bookDrawProb: row.bookDrawProb, bookPick: row.bookPick, source: "live" as const,
+  };
+  await ctx.db.insert(t).values(values).onConflictDoUpdate({
+    target: [t.sport, t.league, t.awayTeam, t.homeTeam, t.gameDate],
+    set: {
+      updatedAt: row.now,
+      modelAway: row.modelAway, modelHome: row.modelHome, modelDraw: row.modelDraw,
+      modelPick: row.modelPick, bookAwayPrice: row.bookAwayPrice, bookHomePrice: row.bookHomePrice,
+      bookDrawPrice: row.bookDrawPrice, bookAwayProb: row.bookAwayProb, bookHomeProb: row.bookHomeProb,
+      bookDrawProb: row.bookDrawProb, bookPick: row.bookPick,
+    },
+  });
+  return true;
+}
+
+async function gradePendingSnapshots(
+  ctx: Ctx, sport: Sport, league: string, games: TrackGame[], now: Date,
+): Promise<number> {
+  const completed = new Map<string, "away" | "home" | "draw">();
+  for (const g of games) {
+    const w = trackGameWinner(g);
+    if (w) completed.set(`${g.awayAbbrev}|${g.homeAbbrev}|${g.date}`, w);
+  }
+  if (completed.size === 0) return 0;
+  const pending = await ctx.db.select().from(schema.modelSnapshots).where(
+    and(
+      eq(schema.modelSnapshots.sport, sport),
+      eq(schema.modelSnapshots.league, league),
+      isNull(schema.modelSnapshots.gradedAt),
+    ),
+  );
+  let graded = 0;
+  for (const row of pending) {
+    const w = completed.get(`${row.awayTeam}|${row.homeTeam}|${row.gameDate}`);
+    if (!w) continue;
+    await ctx.db.update(schema.modelSnapshots).set({
+      winner: w,
+      gradedAt: now,
+      modelCorrect: row.modelPick === null ? null : (row.modelPick === w ? 1 : 0),
+      bookCorrect: row.bookPick === null ? null : (row.bookPick === w ? 1 : 0),
+    }).where(eq(schema.modelSnapshots.id, row.id));
+    graded += 1;
+  }
+  return graded;
+}
+
+async function snapshotTwoWaySport(
+  ctx: Ctx, sport: "nhl" | "nfl" | "nba", standings: FlipRow[], games: TrackGame[],
+  offers: BoardOffer[], now: Date,
+): Promise<number> {
+  const ml = offers.filter((o) => o.marketName === "Moneyline");
+  const byMatchup = new Map<string, BoardOffer[]>();
+  for (const o of ml) {
+    const list = byMatchup.get(o.matchup) ?? [];
+    list.push(o);
+    byMatchup.set(o.matchup, list);
+  }
+  const gameByNames = new Map<string, TrackGame>();
+  for (const g of games) gameByNames.set(`${g.awayName.toLowerCase()}|${g.homeName.toLowerCase()}`, g);
+  let count = 0;
+  for (const [matchup, list] of byMatchup) {
+    const parts = matchup.split(" @ ");
+    const awayName = parts[0]?.trim().toLowerCase();
+    const homeName = parts[1]?.trim().toLowerCase();
+    if (!awayName || !homeName) continue;
+    const g = gameByNames.get(`${awayName}|${homeName}`);
+    if (!g || g.completed) continue;
+    const flip = flipTwoWay(
+      standings.find((r) => r.team === g.awayAbbrev) ?? null,
+      standings.find((r) => r.team === g.homeAbbrev) ?? null,
+    );
+    let awayDec: number | null = null;
+    let homeDec: number | null = null;
+    for (const o of list) {
+      const dec = bestDec(o);
+      if (dec === null) continue;
+      const e = o.entity.trim().toLowerCase();
+      if (e === g.awayName.toLowerCase()) awayDec = awayDec === null ? dec : Math.max(awayDec, dec);
+      else if (e === g.homeName.toLowerCase()) homeDec = homeDec === null ? dec : Math.max(homeDec, dec);
+    }
+    if (awayDec === null || homeDec === null) continue;
+    const vf = vigFreeProbs([awayDec, homeDec]);
+    const vfAway = vf[0] ?? null;
+    const vfHome = vf[1] ?? null;
+    const modelPick: Pick3 = flip === null ? null : topPick({ away: flip.away, home: flip.home });
+    const bookPick: Pick3 = topPick({ away: vfAway, home: vfHome });
+    await upsertSnapshot(ctx, {
+      sport, league: "", awayTeam: g.awayAbbrev, homeTeam: g.homeAbbrev, gameDate: g.date,
+      modelAway: flip?.away ?? null, modelHome: flip?.home ?? null, modelDraw: null, modelPick,
+      bookAwayPrice: decimalToAmerican(awayDec), bookHomePrice: decimalToAmerican(homeDec), bookDrawPrice: null,
+      bookAwayProb: vfAway, bookHomeProb: vfHome, bookDrawProb: null, bookPick, now,
+    });
+    count += 1;
+  }
+  return count;
+}
+
+async function snapshotSoccerLeague(
+  ctx: Ctx, league: string, games: TrackGame[], offers: BoardOffer[], now: Date,
+): Promise<number> {
+  const ml = offers.filter((o) => o.marketName === "Moneyline");
+  const byMatchup = new Map<string, BoardOffer[]>();
+  for (const o of ml) {
+    const list = byMatchup.get(o.matchup) ?? [];
+    list.push(o);
+    byMatchup.set(o.matchup, list);
+  }
+  const gameByNames = new Map<string, TrackGame>();
+  for (const g of games) gameByNames.set(`${g.awayName.toLowerCase()}|${g.homeName.toLowerCase()}`, g);
+  let count = 0;
+  for (const [matchup, list] of byMatchup) {
+    const parts = matchup.split(" @ ");
+    const awayName = parts[0]?.trim().toLowerCase();
+    const homeName = parts[1]?.trim().toLowerCase();
+    if (!awayName || !homeName) continue;
+    const g = gameByNames.get(`${awayName}|${homeName}`);
+    if (!g || g.completed) continue;
+    let awayDec: number | null = null;
+    let homeDec: number | null = null;
+    let drawDec: number | null = null;
+    for (const o of list) {
+      const dec = bestDec(o);
+      if (dec === null) continue;
+      const e = o.entity.trim().toLowerCase();
+      if (e === g.awayName.toLowerCase()) awayDec = awayDec === null ? dec : Math.max(awayDec, dec);
+      else if (e === g.homeName.toLowerCase()) homeDec = homeDec === null ? dec : Math.max(homeDec, dec);
+      else if (e === "draw") drawDec = drawDec === null ? dec : Math.max(drawDec, dec);
+    }
+    if (awayDec === null || homeDec === null || drawDec === null) continue;
+    const vf = vigFreeProbs([awayDec, homeDec, drawDec]);
+    const vfAway = vf[0] ?? null;
+    const vfHome = vf[1] ?? null;
+    const vfDraw = vf[2] ?? null;
+    const modelPick = topPick({ away: g.modelAway, home: g.modelHome, draw: g.modelDraw });
+    const bookPick = topPick({ away: vfAway, home: vfHome, draw: vfDraw });
+    await upsertSnapshot(ctx, {
+      sport: "soccer", league, awayTeam: g.awayAbbrev, homeTeam: g.homeAbbrev, gameDate: g.date,
+      modelAway: g.modelAway, modelHome: g.modelHome, modelDraw: g.modelDraw, modelPick,
+      bookAwayPrice: decimalToAmerican(awayDec), bookHomePrice: decimalToAmerican(homeDec),
+      bookDrawPrice: decimalToAmerican(drawDec),
+      bookAwayProb: vfAway, bookHomeProb: vfHome, bookDrawProb: vfDraw, bookPick, now,
+    });
+    count += 1;
+  }
+  return count;
+}
+
+function nhlTrackGames(overview: { games: { away: { abbrev: string; name: string; score: number | null }; home: { abbrev: string; name: string; score: number | null }; date: string; state: string }[] }): TrackGame[] {
+  return overview.games.map((g) => ({
+    awayAbbrev: g.away.abbrev, awayName: g.away.name, homeAbbrev: g.home.abbrev, homeName: g.home.name,
+    date: g.date.slice(0, 10),
+    completed: g.state === "FINAL" || g.state === "OFF",
+    awayScore: g.away.score, homeScore: g.home.score,
+    modelAway: null, modelHome: null, modelDraw: null,
+  }));
+}
+
+function espnTrackGames(overview: { games: { away: { abbrev: string; name: string; score: number | null }; home: { abbrev: string; name: string; score: number | null }; date: string; state: string }[] }): TrackGame[] {
+  return overview.games.map((g) => ({
+    awayAbbrev: g.away.abbrev, awayName: g.away.name, homeAbbrev: g.home.abbrev, homeName: g.home.name,
+    date: g.date.slice(0, 10),
+    completed: g.state === "final",
+    awayScore: g.away.score, homeScore: g.home.score,
+    modelAway: null, modelHome: null, modelDraw: null,
+  }));
+}
+
+function soccerTrackGames(overview: { games: { away: { abbrev: string; name: string; score: number | null }; home: { abbrev: string; name: string; score: number | null }; date: string; state: string; modelThreeWay: { home: number; draw: number; away: number } | null }[] }): TrackGame[] {
+  return overview.games.map((g) => ({
+    awayAbbrev: g.away.abbrev, awayName: g.away.name, homeAbbrev: g.home.abbrev, homeName: g.home.name,
+    date: g.date.slice(0, 10),
+    completed: g.state === "final",
+    awayScore: g.away.score, homeScore: g.home.score,
+    modelAway: g.modelThreeWay?.away ?? null, modelHome: g.modelThreeWay?.home ?? null,
+    modelDraw: g.modelThreeWay?.draw ?? null,
+  }));
+}
+
+async function snapshotTrackRecord(ctx: Ctx): Promise<{ snapshotted: number; graded: number }> {
+  await ensureBacktestSeed(ctx);
+  const now = new Date();
+  let snapshotted = 0;
+  let graded = 0;
+  const run = async (fn: () => Promise<void>) => {
+    try { await fn(); } catch { /* track record never breaks the refresh */ }
+  };
+  await run(async () => {
+    const overview = await loadNhlOverview();
+    const board = await loadPremium(ctx, "nhl");
+    snapshotted += await snapshotTwoWaySport(ctx, "nhl", overview.standings, nhlTrackGames(overview), board.offers, now);
+    graded += await gradePendingSnapshots(ctx, "nhl", "", nhlTrackGames(overview), now);
+  });
+  await run(async () => {
+    const overview = await loadNflOverview(undefined, ctx);
+    const board = await loadPremium(ctx, "nfl");
+    snapshotted += await snapshotTwoWaySport(ctx, "nfl", overview.standings, espnTrackGames(overview), board.offers, now);
+    graded += await gradePendingSnapshots(ctx, "nfl", "", espnTrackGames(overview), now);
+  });
+  await run(async () => {
+    const overview = await loadNbaOverview(ctx);
+    const board = await loadPremium(ctx, "nba");
+    snapshotted += await snapshotTwoWaySport(ctx, "nba", overview.standings, espnTrackGames(overview), board.offers, now);
+    graded += await gradePendingSnapshots(ctx, "nba", "", espnTrackGames(overview), now);
+  });
+  await run(async () => {
+    const board = await loadPremium(ctx, "soccer");
+    for (const league of soccerLeagues) {
+      const overview = await loadSoccerOverview(ctx, league);
+      const leagueOffers = board.offers.filter((o) => (o.league ?? "") === league);
+      const games = soccerTrackGames(overview);
+      snapshotted += await snapshotSoccerLeague(ctx, league, games, leagueOffers, now);
+      graded += await gradePendingSnapshots(ctx, "soccer", league, games, now);
+    }
+  });
+  return { snapshotted, graded };
+}
+
+async function ensureBacktestSeed(ctx: Ctx): Promise<void> {
+  const existing = await ctx.db.select({ id: schema.modelSnapshots.id }).from(schema.modelSnapshots).limit(1);
+  if (existing.length > 0) return;
+  const { BACKTEST_SEED } = await import("./trackRecordSeed.js");
+  const now = new Date();
+  for (const row of BACKTEST_SEED) {
+    await ctx.db.insert(schema.modelSnapshots).values({
+      sport: row.sport, league: "", awayTeam: row.away, homeTeam: row.home,
+      gameDate: row.date, startsAt: null, snapshotAt: now, updatedAt: now,
+      modelAway: row.modelAway, modelHome: row.modelHome, modelDraw: null,
+      modelPick: row.pick, bookAwayPrice: null, bookHomePrice: null, bookDrawPrice: null,
+      bookAwayProb: null, bookHomeProb: null, bookDrawProb: null, bookPick: null,
+      source: "backtest",
+      winner: row.winner, gradedAt: now,
+      modelCorrect: row.pick === row.winner ? 1 : 0, bookCorrect: null,
+    });
+  }
+}
+
 async function refreshAllPremium(ctx: Ctx): Promise<z.infer<typeof premiumRefreshResponse>> {
   const refreshedAt = new Date();
   let provider: OddsProvider;
@@ -444,6 +797,9 @@ async function refreshAllPremium(ctx: Ctx): Promise<z.infer<typeof premiumRefres
     try { await fetchPremiumAndCache(ctx, sport, provider); refreshedSports += 1; }
     catch (error) { failures.push(`${sport.toUpperCase()}: ${error instanceof Error ? error.message : "refresh failed"}`); }
   }
+  // Transparent track record: snapshot pregame model picks + book prices and
+  // grade newly completed games. Runs on the fresh odds above; never throws.
+  try { await snapshotTrackRecord(ctx); } catch { /* tracker is best-effort */ }
   return { status: refreshedSports === sports.length ? "success" : refreshedSports > 0 ? "partial" : "failed", refreshedAt: refreshedAt.toISOString(), refreshedSports, message: failures.length ? failures.join(" · ") : "All sportsbook boards updated." };
 }
 
@@ -3058,6 +3414,138 @@ async function loadUsageStats(ctx: Ctx): Promise<z.infer<typeof usageStatsRespon
   };
 }
 
+const trackRecordPickSchema = z.object({
+  id: z.number(),
+  sport: z.string(),
+  league: z.string().nullable(),
+  awayTeam: z.string(),
+  homeTeam: z.string(),
+  gameDate: z.string(),
+  modelPick: z.string().nullable(),
+  modelProb: z.number().nullable(),
+  bookPick: z.string().nullable(),
+  bookPrice: z.number().nullable(),
+  winner: z.string().nullable(),
+  modelCorrect: z.boolean().nullable(),
+  bookCorrect: z.boolean().nullable(),
+  source: z.string(),
+});
+
+const trackRecordEraSchema = z.object({
+  picks: z.number(),
+  wins: z.number(),
+  losses: z.number(),
+  winPct: z.number().nullable(),
+  bookWins: z.number().nullable(),
+  bookLosses: z.number().nullable(),
+  bookWinPct: z.number().nullable(),
+  roiUnits: z.number().nullable(),
+  bySport: z.array(z.object({
+    sport: z.string(), picks: z.number(), wins: z.number(), losses: z.number(), winPct: z.number().nullable(),
+  })),
+});
+
+const trackRecordResponse = z.object({
+  backtest: trackRecordEraSchema,
+  live: trackRecordEraSchema,
+  recent: z.array(trackRecordPickSchema),
+  lastSnapshotAt: z.string().nullable(),
+  lastGradedAt: z.string().nullable(),
+});
+
+type SnapshotRow = typeof schema.modelSnapshots.$inferSelect;
+
+function trackEra(rows: SnapshotRow[]) {
+  const graded = rows.filter((r) => r.gradedAt !== null && r.modelPick !== null);
+  const wins = graded.filter((r) => r.modelCorrect === 1).length;
+  const losses = graded.filter((r) => r.modelCorrect === 0).length;
+  const bookGraded = rows.filter((r) => r.gradedAt !== null && r.bookPick !== null);
+  const bookWins = bookGraded.filter((r) => r.bookCorrect === 1).length;
+  const bookLosses = bookGraded.filter((r) => r.bookCorrect === 0).length;
+  let roiUnits: number | null = null;
+  const liveRows = rows.filter((r) => r.source === "live");
+  if (liveRows.length > 0) {
+    roiUnits = 0;
+    for (const r of liveRows) {
+      if (r.gradedAt === null || r.modelPick === null) continue;
+      const price = r.modelPick === "away" ? r.bookAwayPrice : r.modelPick === "home" ? r.bookHomePrice : r.bookDrawPrice;
+      if (price === null || price === 0) continue;
+      if (r.modelCorrect === 1) roiUnits += price > 0 ? price / 100 : 100 / Math.abs(price);
+      else if (r.modelCorrect === 0) roiUnits -= 1;
+    }
+    roiUnits = Math.round(roiUnits * 100) / 100;
+  }
+  const bySportMap = new Map<string, { picks: number; wins: number; losses: number }>();
+  for (const r of graded) {
+    const s = bySportMap.get(r.sport) ?? { picks: 0, wins: 0, losses: 0 };
+    s.picks += 1;
+    if (r.modelCorrect === 1) s.wins += 1;
+    else s.losses += 1;
+    bySportMap.set(r.sport, s);
+  }
+  const bySport = [...bySportMap.entries()].map(([sport, s]) => ({
+    sport, picks: s.picks, wins: s.wins, losses: s.losses,
+    winPct: s.picks > 0 ? Math.round((s.wins / s.picks) * 1000) / 10 : null,
+  }));
+  return {
+    picks: graded.length, wins, losses,
+    winPct: graded.length > 0 ? Math.round((wins / graded.length) * 1000) / 10 : null,
+    bookWins: bookGraded.length > 0 ? bookWins : null,
+    bookLosses: bookGraded.length > 0 ? bookLosses : null,
+    bookWinPct: bookGraded.length > 0 ? Math.round((bookWins / bookGraded.length) * 1000) / 10 : null,
+    roiUnits,
+    bySport,
+  };
+}
+
+async function loadTrackRecord(ctx: Ctx): Promise<z.infer<typeof trackRecordResponse>> {
+  await ensureBacktestSeed(ctx);
+  const rows = await ctx.db.select().from(schema.modelSnapshots)
+    .orderBy(desc(schema.modelSnapshots.gameDate), desc(schema.modelSnapshots.id));
+  const probOf = (r: SnapshotRow): number | null => {
+    if (r.modelPick === "away") return r.modelAway;
+    if (r.modelPick === "home") return r.modelHome;
+    if (r.modelPick === "draw") return r.modelDraw;
+    return null;
+  };
+  const priceOf = (r: SnapshotRow): number | null => {
+    if (r.modelPick === "away") return r.bookAwayPrice;
+    if (r.modelPick === "home") return r.bookHomePrice;
+    if (r.modelPick === "draw") return r.bookDrawPrice;
+    return null;
+  };
+  const recent = rows.filter((r) => r.gradedAt !== null).slice(0, 20).map((r) => ({
+    id: r.id, sport: r.sport, league: r.league || null,
+    awayTeam: r.awayTeam, homeTeam: r.homeTeam, gameDate: r.gameDate,
+    modelPick: r.modelPick, modelProb: probOf(r),
+    bookPick: r.bookPick, bookPrice: priceOf(r),
+    winner: r.winner,
+    modelCorrect: r.modelCorrect === null ? null : r.modelCorrect === 1,
+    bookCorrect: r.bookCorrect === null ? null : r.bookCorrect === 1,
+    source: r.source,
+  }));
+  const snapshotted = rows.filter((r) => r.snapshotAt !== null);
+  const gradedRows = rows.filter((r) => r.gradedAt !== null);
+  const maxDate = (list: SnapshotRow[], key: "snapshotAt" | "gradedAt"): string | null => {
+    let best: number | null = null;
+    for (const r of list) {
+      const v = r[key];
+      if (v !== null) {
+        const t = v instanceof Date ? v.getTime() : Number(v);
+        if (best === null || t > best) best = t;
+      }
+    }
+    return best === null ? null : new Date(best).toISOString();
+  };
+  return {
+    backtest: trackEra(rows.filter((r) => r.source === "backtest")),
+    live: trackEra(rows.filter((r) => r.source === "live")),
+    recent,
+    lastSnapshotAt: maxDate(snapshotted, "snapshotAt"),
+    lastGradedAt: maxDate(gradedRows, "gradedAt"),
+  };
+}
+
 export const Actions = {
   getDashboard: defineAction({ request: z.object({ sport: z.enum(sports).default("nhl") }), response: dashboardResponse, async handler(ctx, args) { return loadDashboard(ctx, args.sport); } }),
   refreshDaily: defineAction({ request: z.object({}), response: z.object({ status: z.enum(["success", "partial", "failed"]), message: z.string(), rowCount: z.number(), snapshotDate: z.string() }), async handler(ctx) { const result = await refresh(ctx); try { await fetchHotStreaks(ctx, true); } catch { /* Keep odds refresh independent of free NHL insight refresh. */ } try { await fetchNflHotStreaks(ctx, true); } catch { /* Same for the NFL leg. */ } try { await fetchColdStreaks(ctx, true); } catch { /* Cold streaks refresh with the same daily job. */ } try { await fetchNflColdStreaks(ctx, true); } catch { /* Same for the NFL leg. */ } try { await fetchNbaHotStreaks(ctx, true); } catch { /* Same for the NBA leg. */ } try { await fetchNbaColdStreaks(ctx, true); } catch { /* Same for the NBA leg. */ } try { await fetchLikelyScorers(ctx, "nhl", true); } catch { /* Likely scorers warm with the same daily job. */ } try { await fetchLikelyScorers(ctx, "nfl", true); } catch { /* Same for the NFL leg. */ } try { await fetchLikelyScorers(ctx, "nba", true); } catch { /* Same for the NBA leg. */ } try { await warmNflForm(ctx); } catch { /* Flip % v2 form warms with the same daily job. */ } try { await warmNbaForm(ctx); } catch { /* Same for the NBA leg. */ } try { await fetchKeyInjuries(ctx, "nfl", true); } catch { /* Injury warnings warm with the same daily job. */ } try { await fetchKeyInjuries(ctx, "nba", true); } catch { /* Same for the NBA leg. */ } try { await fetchKeyInjuries(ctx, "nhl", true); } catch { /* Same for the NHL leg. */ } try { await fetchKeyInjuries(ctx, "soccer", true, "mls"); } catch { /* Same for the MLS leg. */ } try { await fetchKeyInjuries(ctx, "soccer", true, "epl"); } catch { /* Same for the EPL leg. */ } try { await fetchLikelyScorers(ctx, "soccer", true, "mls"); } catch { /* Same for the MLS leg. */ } try { await fetchLikelyScorers(ctx, "soccer", true, "epl"); } catch { /* Same for the EPL leg. */ } try { await fetchSoccerHotStreaks(ctx, "mls", true); } catch { /* Same for the MLS leg. */ } try { await fetchSoccerHotStreaks(ctx, "epl", true); } catch { /* Same for the EPL leg. */ } try { await fetchSoccerColdStreaks(ctx, "mls", true); } catch { /* Same for the MLS leg. */ } try { await fetchSoccerColdStreaks(ctx, "epl", true); } catch { /* Same for the EPL leg. */ } try { await loadSoccerStandings(ctx, "mls"); } catch { /* Standings warm with the same daily job. */ } try { await loadSoccerStandings(ctx, "epl"); } catch { /* Same for the EPL leg. */ } return result; } }),
@@ -3118,6 +3606,7 @@ export const Actions = {
   getSoccerRoster: defineAction({ request: z.object({ league: z.enum(soccerLeagues), team: z.string() }), response: soccerRosterResponse, async handler(ctx, args) { return loadSoccerRoster(ctx, args.league, args.team); } }),
   getSoccerPlayerGameLog: defineAction({ request: z.object({ league: z.enum(soccerLeagues), team: z.string(), playerId: z.number().int().positive() }), response: soccerGameLogResponse, async handler(ctx, args) { return loadSoccerPlayerGameLog(ctx, args.league, args.team, args.playerId); } }),
   getPremiumBoard: defineAction({ request: z.object({ sport: z.enum(sports) }), response: premiumResponse, async handler(ctx, args) { return loadPremium(ctx, args.sport); } }),
+  getTrackRecord: defineAction({ request: z.object({}), response: trackRecordResponse, async handler(ctx) { return loadTrackRecord(ctx); } }),
   getAdminStatus: defineAction({ request: z.object({}), response: z.object({ configured: z.boolean() }), async handler() { return { configured: !!process.env.ADMIN_TOKEN?.trim() }; } }),
   getUsageStats: defineAction({ request: z.object({ adminToken: adminTokenSchema }), response: usageStatsResponse, async handler(ctx, args) { requireAdmin(args); return loadUsageStats(ctx); } }),
   refreshAllSportsbooks: defineAction({ request: z.object({ adminToken: adminTokenSchema }), response: premiumRefreshResponse, async handler(ctx, args) { requireAdmin(args); return refreshAllPremium(ctx); } }),
