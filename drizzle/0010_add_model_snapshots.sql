@@ -25,5 +25,7 @@ CREATE TABLE `model_snapshots` (
   `model_correct` integer,
   `book_correct` integer
 );
+--> statement-breakpoint
 CREATE UNIQUE INDEX `model_snapshots_identity_idx` ON `model_snapshots` (`sport`,`league`,`away_team`,`home_team`,`game_date`);
+--> statement-breakpoint
 CREATE INDEX `model_snapshots_graded_idx` ON `model_snapshots` (`graded_at`);
