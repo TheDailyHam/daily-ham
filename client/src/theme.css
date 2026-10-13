@@ -1302,7 +1302,7 @@ h1, h2, h3 { font-family: Rockwell, Georgia, serif; margin: 0; }
 .mode-shape.active em { color: #fff8ea; text-shadow: 0 1px 3px rgba(0,0,0,.65), 0 0 12px color-mix(in srgb, var(--accent) 85%, transparent); position: relative; }
 .mode-shape.active .rink { transform: scale(1.05); box-shadow: 0 0 0 2px var(--gold), 0 10px 20px -8px rgba(var(--shadow-warm), .6); animation: none; }
 .mode-glow { position: absolute; inset: 0; border-radius: 16px; pointer-events: none; background: radial-gradient(60% 60% at 50% 45%, color-mix(in srgb, var(--gold) 35%, transparent), transparent 70%); }
-.mode-shape.active .mode-glow { background: radial-gradient(60% 60% at 50% 45%, color-mix(in srgb, var(--gold) 40%, transparent), color-mix(in srgb, var(--accent) 26%, #ffffff) 45%, color-mix(in srgb, var(--accent2, var(--accent)) 22%, #ffffff) 62%, transparent 72%); }
+.mode-shape.active .mode-glow { background: radial-gradient(60% 60% at 50% 45%, color-mix(in srgb, var(--gold) 40%, transparent), transparent 72%); }
 
 /* Roster cards: every stat visible, no sideways scroll — 3D tiles */
 .roster-card {
