@@ -634,7 +634,12 @@ async function snapshotTwoWaySport(
     const vf = vigFreeProbs([awayDec, homeDec]);
     const vfAway = vf[0] ?? null;
     const vfHome = vf[1] ?? null;
-    const modelPick: Pick3 = flip === null ? null : topPick({ away: flip.away, home: flip.home });
+    // Selectivity gate: the model never forces a pick. Backtest showed 9-11
+    // (45%) under 55% confidence, so below that line it passes instead of
+    // guessing — the book is probably right in those spots anyway.
+    const rawPick: Pick3 = flip === null ? null : topPick({ away: flip.away, home: flip.home });
+    const rawProb = rawPick === "away" ? flip?.away ?? null : rawPick === "home" ? flip?.home ?? null : null;
+    const modelPick: Pick3 = rawPick !== null && rawProb !== null && rawProb >= 0.55 ? rawPick : null;
     const bookPick: Pick3 = topPick({ away: vfAway, home: vfHome });
     await upsertSnapshot(ctx, {
       sport, league: "", awayTeam: g.awayAbbrev, homeTeam: g.homeAbbrev, gameDate: g.date,

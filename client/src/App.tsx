@@ -715,6 +715,11 @@ const TUTORIAL_SLIDES: { icon: string; kicker: string; title: string; points: st
     "A flip alert fires when the model likes a side more than the books do.",
     "Coin toss means it's too close to call — no edge either way.",
   ]},
+  { icon: "📜", kicker: "TRACK RECORD", title: "The receipts.", points: [
+    "The Record tab grades every pregame model pick against final scores — and against the books' own prices.",
+    "You'll see the model's win-loss record, how the book favorite did on the same games, and the model's ROI at real prices.",
+    "Nothing hidden, nothing cherry-picked: when the model is cold, it says so right here.",
+  ]},
   { icon: "🎯", kicker: "MATCHUP CALCULATOR", title: "Every angle, sliced.", points: [
     "Pick any game for the model's take: winner, first score, and situational calls — a 14+ blowout or overtime in football, first basket in hoops, home/draw/away in soccer.",
     "Every percentage is a model estimate from official game data — not a sportsbook price.",
@@ -847,7 +852,7 @@ function RecordView() {
           showBooks={true}
           emptyHint="First snapshots land with the morning refresh — check back after today's games."
         />
-        <p className="record-note">Live picks are snapshotted every morning before games, with the model's win probability and each side's best book price (vig removed for the book comparison). ROI assumes a flat 1 unit on every model pick at the best captured price.</p>
+        <p className="record-note">Live picks are snapshotted every morning before games, with the model's win probability and each side's best book price (vig removed for the book comparison). The model only picks at 55%+ confidence — below that it passes rather than guessing. ROI assumes a flat 1 unit on every model pick at the best captured price.</p>
         {data.recent.length > 0 && <section className="record-recent" aria-label="Recent graded picks">
           <div className="section-heading"><div><p className="kicker">RECEIPT</p><h3>Recent picks</h3></div></div>
           <div className="record-list">
