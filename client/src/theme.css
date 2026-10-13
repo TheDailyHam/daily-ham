@@ -1207,12 +1207,12 @@ h1, h2, h3 { font-family: Rockwell, Georgia, serif; margin: 0; }
 .streaks-toggle button.active.hot {
   border-color: var(--orange); color: #fff8ea; text-shadow: 0 1px 2px rgba(0,0,0,.4);
   background: linear-gradient(180deg, color-mix(in srgb, var(--orange) 78%, #fff 22%), var(--orange) 60%, color-mix(in srgb, var(--orange) 78%, #000 22%));
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.45), 0 0 20px color-mix(in srgb, var(--orange) 55%, transparent), 0 8px 18px -10px rgba(var(--shadow-warm), .6);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.45), inset 0 -3px 6px rgba(0,0,0,.18), 0 8px 18px -10px rgba(var(--shadow-warm), .6);
 }
 .streaks-toggle button.active.cold {
   border-color: #60a5fa; color: #eaf3ff; text-shadow: 0 1px 2px rgba(0,0,0,.4);
   background: linear-gradient(180deg, #7db4f8, #3b82d6 60%, #2b63ad);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.45), 0 0 20px rgba(96,165,250,.5), 0 8px 18px -10px rgba(var(--shadow-warm), .6);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.45), inset 0 -3px 6px rgba(0,0,0,.18), 0 8px 18px -10px rgba(var(--shadow-warm), .6);
 }
 
 @media (max-width: 768px) {
