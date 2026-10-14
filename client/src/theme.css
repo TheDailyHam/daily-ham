@@ -1641,7 +1641,7 @@ html[data-dimmed="true"] .brightness-veil { display: block; }
   border: 1px solid rgba(217,164,65,.45);
   box-shadow: 0 22px 48px -18px rgba(var(--shadow-warm), .65), inset 0 1px 0 rgba(255,255,255,.16), inset 0 -3px 10px rgba(0,0,0,.4);
 }
-.jamon-hero::before { content: ""; position: absolute; inset: -40%; pointer-events: none; background: linear-gradient(105deg, transparent 42%, color-mix(in srgb, var(--accent) 24%, #ffffff) 47%, rgba(255,255,255,.20) 50%, color-mix(in srgb, var(--accent2, var(--accent)) 24%, #ffffff) 53%, transparent 58%); animation: hero-sheen 7s ease-in-out infinite; }
+.jamon-hero::before { content: ""; position: absolute; inset: -40%; pointer-events: none; opacity: .35; background: linear-gradient(105deg, transparent 42%, color-mix(in srgb, var(--accent) 24%, #ffffff) 47%, rgba(255,255,255,.20) 50%, color-mix(in srgb, var(--accent2, var(--accent)) 24%, #ffffff) 53%, transparent 58%); animation: hero-sheen 7s ease-in-out infinite; }
 .jamon-hero .kicker { color: var(--gold-pale); position: relative; }
 .jamon-hero h1 {
   margin: 6px 0 8px; font-size: clamp(38px, 10vw, 60px); line-height: .95; letter-spacing: -.03em; position: relative;
@@ -1649,7 +1649,7 @@ html[data-dimmed="true"] .brightness-veil { display: block; }
   -webkit-background-clip: text; background-clip: text; color: transparent;
   filter: drop-shadow(0 3px 8px rgba(0,0,0,.55));
 }
-.jamon-hero p:last-child { margin: 0; color: #ddcdb9; font-size: 13px; position: relative; }
+.jamon-hero p:last-child { margin: 0; color: #f5e9d0; font-size: 13px; position: relative; text-shadow: 0 1px 3px rgba(0,0,0,.6); }
 .jamon-spread { display: grid; gap: 16px; }
 .jamon-plate.large { flex: none; max-width: none; padding: 22px 20px 24px; }
 .jamon-plate.large .plate-pick { font-size: clamp(26px, 7vw, 34px); }

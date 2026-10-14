@@ -352,11 +352,6 @@ async function loadOddsProviders(ctx: Ctx): Promise<OddsProvider[]> {
   return providers;
 }
 
-async function loadOddsProvider(ctx: Ctx): Promise<OddsProvider> {
-  const providers = await loadOddsProviders(ctx);
-  if (!providers[0]) throw new Error("No odds provider keys configured. Add a key in the owner console.");
-  return providers[0];
-}
 
 // Soccer odds cover two leagues (MLS + EPL): one provider request per
 // league per refresh (~2/day total), merged into a single "soccer" board
