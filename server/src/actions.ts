@@ -39,6 +39,11 @@ import {
   type NflGame, type NflTeamGame,
 } from "./nfl.js";
 import {
+  NCAAF_SEASON, NCAAF_TEAM_CODES, fetchNcaafGameSummary, fetchNcaafRoster,
+  fetchNcaafScoreboard, fetchNcaafStandings, fetchNcaafTeamGames, ncaafConference, ncaafTeamMeta,
+  type NcaafGame, type NcaafTeamGame,
+} from "./ncaaf.js";
+import {
   NBA_SEASON, NBA_TEAM_CODES, enrichNbaGameDetails, fetchNbaGameSummary, fetchNbaRoster,
   fetchNbaScoreboard, fetchNbaStandings, fetchNbaTeamGames, nbaTeamMeta,
   type NbaTeamGame,
@@ -53,7 +58,7 @@ import {
 import { and, desc, eq, gte, isNull, lt, sql } from "drizzle-orm";
 import * as schema from "./schema.js";
 
-const sports = ["nhl", "nfl", "nba", "soccer"] as const;
+const sports = ["nhl", "nfl", "nba", "soccer", "ncaaf"] as const;
 type Sport = (typeof sports)[number];
 // Soccer leagues bundled under the "soccer" sport (verified 2026-10-11).
 const soccerLeagues = ["mls", "epl"] as const;
@@ -62,6 +67,7 @@ const teamCodes = ["ANA", "BOS", "BUF", "CAR", "CBJ", "CGY", "CHI", "COL", "DAL"
 // ESPN NFL abbreviations (verified 2026-10-08). Note BUF/DAL/PIT collide
 // with NHL codes — the two sports never share a schema or action.
 const nflTeamCodes = ["ARI", "ATL", "BAL", "BUF", "CAR", "CHI", "CIN", "CLE", "DAL", "DEN", "DET", "GB", "HOU", "IND", "JAX", "KC", "LAC", "LAR", "LV", "MIA", "MIN", "NE", "NO", "NYG", "NYJ", "PHI", "PIT", "SEA", "SF", "TB", "TEN", "WSH"] as const;
+const ncaafTeamCodes = ["AFA", "AKR", "ALA", "APP", "ARIZ", "ARK", "ARMY", "ARST", "ASU", "AUB", "BALL", "BAY", "BC", "BGSU", "BOIS", "BUFF", "BYU", "CAL", "CCU", "CIN", "CLEM", "CLT", "CMU", "COLO", "CONN", "CSU", "DEL", "DUKE", "ECU", "EMU", "FAU", "FIU", "FLA", "FRES", "FSU", "GASO", "GAST", "GT", "HAW", "HOU", "ILL", "IOWA", "ISU", "IU", "JMU", "JXST", "KENN", "KENT", "KSU", "KU", "LIB", "LOU", "LSU", "LT", "M-OH", "MASS", "MD", "MEM", "MIA", "MICH", "MINN", "MISS", "MIZ", "MOST", "MRSH", "MSST", "MSU", "MTSU", "NAVY", "NCSU", "ND", "NDSU", "NEB", "NEV", "NIU", "NMSU", "NU", "ODU", "OHIO", "OKST", "ORE", "ORST", "OSU", "OU", "PITT", "PSU", "PUR", "RICE", "RUTG", "SAC", "SC", "SDSU", "SHSU", "SJSU", "SMU", "STAN", "SYR", "TA&M", "TCU", "TEM", "TENN", "TEX", "TLSA", "TOL", "TROY", "TTU", "TULN", "TXST", "UAB", "UCF", "UCLA", "UGA", "UK", "UL", "ULM", "UNC", "UNLV", "UNM", "UNT", "USA", "USC", "USF", "USM", "USU", "UTAH", "UTEP", "UTSA", "UVA", "VAN", "VT", "WAKE", "WASH", "WIS", "WKU", "WMU", "WSU", "WVU", "WYO"] as const;
 // ESPN NBA abbreviations (verified 2026-10-11). Note NY/UTAH and several
 // codes that collide with NHL/NFL (ATL, BOS, CHI, DAL, DET, MIA, MIL, MIN,
 // PHI, WSH) — the three sports never share a schema or action.
@@ -404,10 +410,10 @@ async function fetchPremiumAndCache(ctx: Ctx, sport: Sport, provider: OddsProvid
     const result = await fetchOddsApiEvents({ apiKey: provider.apiKey, sport });
     if (!result.ok) throw providerError(result, "theoddsapi");
     const mapped = parseOddsApiPayload(result.payload.data, { sport, marketNames: result.payload.marketNames });
-    const leagueLabel = sport === "nfl" ? "NFL" : sport === "nba" ? "NBA" : "NHL";
+    const leagueLabel = sport === "nfl" ? "NFL" : sport === "nba" ? "NBA" : sport === "ncaaf" ? "NCAAF" : "NHL";
     parsed = { sport, fetchedAt: fetchedAt.toISOString(), eventCount: mapped.eventCount, marketCount: mapped.marketCount, offerCount: mapped.offerCount, offers: mapped.offers.map((o) => ({ ...o, league: null as string | null })), cacheStatus: "fresh", healthMessage: `Odds updated successfully (The Odds API · ${leagueLabel})` };
   } else {
-    const league = sport === "nfl" ? "NFL" as const : sport === "nba" ? "NBA" as const : "NHL" as const;
+    const league = sport === "nfl" ? "NFL" as const : sport === "nba" ? "NBA" as const : sport === "ncaaf" ? "NCAAF" as const : "NHL" as const;
     let result = await fetchSportsGameOddsEvents({ apiKey: provider.apiKey, league });
     if (!result.ok && result.reason === "provider_error") result = await fetchSportsGameOddsEvents({ apiKey: provider.apiKey, league });
     if (!result.ok) throw providerError(result);
@@ -1316,6 +1322,103 @@ const nflGameLogResponse = z.object({
   games: z.array(nflGameLogRowSchema),
 });
 
+const ESPN_SITE_NCAAF = "https://site.api.espn.com/apis/site/v2/sports/football/college-football";
+
+const ncaafGameSideSchema = z.object({ abbrev: z.string(), name: z.string(), score: z.number().nullable(), winner: z.boolean() });
+const ncaafGameSchema = z.object({
+  id: z.number(), week: z.number(), date: z.string(), startsAt: z.string(), state: z.string(), detail: z.string(),
+  shortName: z.string(), away: ncaafGameSideSchema, home: ncaafGameSideSchema,
+});
+const ncaafStandingSchema = z.object({
+  team: z.string(), name: z.string(), conference: z.string(), division: z.string(),
+  wins: z.number(), losses: z.number(), ties: z.number(),
+  pointsFor: z.number(), pointsAgainst: z.number(),
+  streak: z.string().nullable(), playoffSeed: z.number().nullable(),
+  // Flip % v2: Pythagorean expectation blended with last-5 form, regressed
+  // toward .500 early in the season. Null when the sample is too thin.
+  // Always a model estimate, never a sportsbook price.
+  modelWinPct: z.number().nullable(),
+});
+const ncaafOverviewResponse = z.object({
+  week: z.number(), weeks: z.array(z.number()), season: z.number(), fetchedAt: z.string(),
+  scheduleSourceUrl: z.string(), standingsSourceUrl: z.string(),
+  games: z.array(ncaafGameSchema), standings: z.array(ncaafStandingSchema),
+});
+
+const ncaafMatchupTeamSchema = z.object({
+  team: z.string(), games: z.number(),
+  wins: z.number(), winPct: z.number().nullable(), venueGames: z.number(), venueWins: z.number(), venueWinPct: z.number().nullable(),
+  firstScoreGames: z.number(), firstScore: z.number(), firstScorePct: z.number().nullable(),
+  venueFirstScoreGames: z.number(), venueFirstScore: z.number(), venueFirstScorePct: z.number().nullable(),
+  firstHalfUnder245: z.number(), firstHalfUnder245Pct: z.number().nullable(), venueFirstHalfUnder245Pct: z.number().nullable(),
+  blowouts: z.number(), blowoutPct: z.number().nullable(), venueBlowoutPct: z.number().nullable(),
+  bothTeams20: z.number(), bothTeams20Pct: z.number().nullable(), venueBothTeams20Pct: z.number().nullable(),
+  overtimes: z.number(), overtimePct: z.number().nullable(), venueOvertimePct: z.number().nullable(),
+  avgPointsFor: z.number().nullable(), avgPointsAgainst: z.number().nullable(),
+});
+const ncaafMatchupResponse = z.object({
+  away: ncaafMatchupTeamSchema, home: ncaafMatchupTeamSchema,
+  awayWinProbability: z.number().nullable(), homeWinProbability: z.number().nullable(),
+  winnerTeam: z.string().nullable(), winnerEdgePoints: z.number().nullable(),
+  firstScoreAwayProbability: z.number().nullable(), firstScoreHomeProbability: z.number().nullable(),
+  firstScoreEdgeTeam: z.string().nullable(), firstScoreEdgePoints: z.number().nullable(),
+  firstHalfUnder245Probability: z.number().nullable(), blowoutProbability: z.number().nullable(),
+  bothTeams20Probability: z.number().nullable(), overtimeProbability: z.number().nullable(),
+  headToHead: z.object({ games: z.number(), awayWins: z.number(), homeWins: z.number() }),
+  fetchedAt: z.string(), sourceUrl: z.string(), sampleNote: z.string(),
+});
+
+const ncaafHotGameSchema = z.object({
+  gameId: z.number(), week: z.number(), date: z.string(), opponent: z.string(),
+  passYards: z.number(), passTds: z.number(), rushYards: z.number(), rushTds: z.number(),
+  recYards: z.number(), recTds: z.number(), scrimmageYards: z.number(), totalTds: z.number(),
+});
+const ncaafHotPlayerSchema = z.object({
+  playerId: z.number(), name: z.string(), team: z.string(), position: z.string(),
+  tdStreak: z.number(), yardStreak: z.number(),
+  lastThreeTds: z.number(), lastThreeYards: z.number(),
+  games: z.array(ncaafHotGameSchema), heatScore: z.number(),
+});
+const ncaafHotStreaksResponse = z.object({
+  fetchedAt: z.string(), sourceUrl: z.string(), windowStart: z.string(), windowEnd: z.string(),
+  players: z.array(ncaafHotPlayerSchema),
+});
+const ncaafColdPlayerSchema = z.object({
+  playerId: z.number(), name: z.string(), team: z.string(), position: z.string(),
+  tdDrought: z.number(), lastThreeTds: z.number(), lastThreeYards: z.number(),
+  games: z.array(ncaafHotGameSchema), coldScore: z.number(),
+});
+const ncaafColdStreaksResponse = z.object({
+  fetchedAt: z.string(), sourceUrl: z.string(), windowStart: z.string(), windowEnd: z.string(),
+  players: z.array(ncaafColdPlayerSchema), teams: z.array(coldTeamSchema),
+});
+
+const ncaafRosterPlayerSchema = z.object({
+  id: z.number(), name: z.string(), jersey: z.string().nullable(), position: z.string(), group: z.string(),
+  games: z.number().nullable(),
+  passYards: z.number().nullable(), passTds: z.number().nullable(), interceptions: z.number().nullable(),
+  rushYards: z.number().nullable(), rushTds: z.number().nullable(),
+  receptions: z.number().nullable(), recYards: z.number().nullable(), recTds: z.number().nullable(),
+});
+const ncaafRosterResponse = z.object({
+  team: z.string(), season: z.number(), fetchedAt: z.string(), sourceUrl: z.string(),
+  players: z.array(ncaafRosterPlayerSchema), groups: z.record(z.string(), z.number()),
+});
+
+const ncaafGameLogRowSchema = z.object({
+  gameId: z.number(), week: z.number(), gameDate: z.string(), opponent: z.string(), homeRoad: z.enum(["home", "away"]),
+  result: z.string().nullable(), teamScore: z.number().nullable(), oppScore: z.number().nullable(),
+  completions: z.number().nullable(), attempts: z.number().nullable(), passYards: z.number().nullable(),
+  passTds: z.number().nullable(), interceptions: z.number().nullable(),
+  rushAttempts: z.number().nullable(), rushYards: z.number().nullable(), rushTds: z.number().nullable(),
+  receptions: z.number().nullable(), targets: z.number().nullable(), recYards: z.number().nullable(), recTds: z.number().nullable(),
+});
+const ncaafGameLogResponse = z.object({
+  playerId: z.number(), team: z.string(), season: z.number(), fetchedAt: z.string(), sourceUrl: z.string(),
+  games: z.array(ncaafGameLogRowSchema),
+});
+
+
 // ---------------------------------------------------------------------------
 // Flip % v2 model engine (NFL + NBA; the NHL side keeps its existing model).
 //
@@ -1366,7 +1469,7 @@ function modelWinPct(opts: {
 type TeamForm = { wins: number; games: number };
 const FORM_TTL_MS = 12 * 60 * 60 * 1000;
 
-async function readLeagueForm(ctx: Ctx, sport: "nfl" | "nba"): Promise<Record<string, TeamForm> | null> {
+async function readLeagueForm(ctx: Ctx, sport: "nfl" | "nba" | "ncaaf"): Promise<Record<string, TeamForm> | null> {
   try {
     const rows = await ctx.db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, `${sport}-team-form`)).limit(1);
     const row = rows[0];
@@ -1378,7 +1481,7 @@ async function readLeagueForm(ctx: Ctx, sport: "nfl" | "nba"): Promise<Record<st
   }
 }
 
-async function writeLeagueForm(ctx: Ctx, sport: "nfl" | "nba", form: Record<string, TeamForm>): Promise<void> {
+async function writeLeagueForm(ctx: Ctx, sport: "nfl" | "nba" | "ncaaf", form: Record<string, TeamForm>): Promise<void> {
   const key = `${sport}-team-form`;
   await ctx.db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, key));
   await ctx.db.insert(schema.nhlInsightCache).values({
@@ -1389,6 +1492,33 @@ async function writeLeagueForm(ctx: Ctx, sport: "nfl" | "nba", form: Record<stri
 
 // NFL form, derived efficiently: fetch each recent week's scoreboard once and
 // attribute results to all 32 teams, instead of one schedule scan per team.
+async function warmNcaafForm(ctx: Ctx): Promise<void> {
+  const current = await fetchNcaafScoreboard();
+  const weeks: number[] = [];
+  for (let w = current.week; w >= Math.max(1, current.week - 6); w--) weeks.push(w);
+  const boards = new Map<number, NcaafGame[]>();
+  await pool(weeks, 3, async (w) => {
+    boards.set(w, w === current.week ? current.games : (await fetchNcaafScoreboard(w)).games);
+  });
+  const form: Record<string, TeamForm> = {};
+  for (const code of NCAAF_TEAM_CODES) {
+    const recent: { date: string; won: boolean }[] = [];
+    for (const w of weeks) {
+      for (const g of boards.get(w) ?? []) {
+        if (g.state !== "final") continue;
+        const isAway = g.away.abbr === code;
+        const isHome = g.home.abbr === code;
+        if (!isAway && !isHome) continue;
+        recent.push({ date: g.date, won: (isAway ? g.away : g.home).winner });
+      }
+    }
+    recent.sort((a, b) => b.date.localeCompare(a.date));
+    const sample = recent.slice(0, 5);
+    form[code] = { wins: sample.filter((r) => r.won).length, games: sample.length };
+  }
+  await writeLeagueForm(ctx, "ncaaf", form);
+}
+
 async function warmNflForm(ctx: Ctx): Promise<void> {
   const current = await fetchNflScoreboard();
   const weeks: number[] = [];
@@ -1435,10 +1565,10 @@ async function warmNbaForm(ctx: Ctx): Promise<void> {
 // Stale-while-revalidate for the overview: use the cached form when fresh;
 // otherwise fall back to the regressed Pythagorean value and refresh the
 // cache in the background so the next load has form.
-async function formForOverview(ctx: Ctx, sport: "nfl" | "nba"): Promise<Record<string, TeamForm> | null> {
+async function formForOverview(ctx: Ctx, sport: "nfl" | "nba" | "ncaaf"): Promise<Record<string, TeamForm> | null> {
   const form = await readLeagueForm(ctx, sport);
   if (!form) {
-    (sport === "nfl" ? warmNflForm(ctx) : warmNbaForm(ctx)).catch(() => {});
+    (sport === "nfl" ? warmNflForm(ctx) : sport === "nba" ? warmNbaForm(ctx) : warmNcaafForm(ctx)).catch(() => {});
   }
   return form;
 }
@@ -1840,7 +1970,399 @@ async function fetchNflColdStreaks(ctx: Ctx, force: boolean): Promise<z.infer<ty
 }
 
 // ---------------------------------------------------------------------------
-// NBA (ESPN keyless feeds). Mirrors the NFL insight sections: overview,
+async function loadNcaafOverview(week?: number, ctx?: Ctx): Promise<z.infer<typeof ncaafOverviewResponse>> {
+  const board = await fetchNcaafScoreboard(week);
+  const formMap = ctx ? await formForOverview(ctx, "ncaaf") : null;
+  let standings: z.infer<typeof ncaafStandingSchema>[] = [];
+  let standingsUrl = "";
+  try {
+    const data = await fetchNcaafStandings();
+    standingsUrl = data.sourceUrl;
+    standings = data.standings.map((s) => ({
+      ...s,
+      division: s.division || ncaafConference(s.team),
+      modelWinPct: modelWinPct({
+        pointsFor: s.pointsFor, pointsAgainst: s.pointsAgainst,
+        wins: s.wins, losses: s.losses, ties: s.ties, exponent: 2.37,
+        form: formMap?.[s.team] ?? null,
+      }),
+    }));
+  } catch { /* schedule still renders without standings */ }
+  const weeks = Array.from({ length: 15 }, (_, i) => i + 1);
+  const games = board.games.map((g) => ({
+    id: g.id, week: g.week, date: g.date.slice(0, 10), startsAt: g.date, state: g.state, detail: g.detail,
+    shortName: g.shortName,
+    away: { abbrev: g.away.abbr, name: g.away.name, score: g.away.score, winner: g.away.winner },
+    home: { abbrev: g.home.abbr, name: g.home.name, score: g.home.score, winner: g.home.winner },
+  }));
+  return {
+    week: board.week, weeks, season: board.season, fetchedAt: new Date().toISOString(),
+    scheduleSourceUrl: `${ESPN_SITE_NCAAF}/scoreboard?week=${board.week}`, standingsSourceUrl: standingsUrl,
+    games, standings,
+  };
+}
+
+type NcaafPlayerGameStats = {
+  completions: number | null; attempts: number | null; passYards: number | null; passTds: number | null; interceptions: number | null;
+  rushAttempts: number | null; rushYards: number | null; rushTds: number | null;
+  receptions: number | null; targets: number | null; recYards: number | null; recTds: number | null;
+};
+function parseNcaafAthleteStats(categories: { category: string; athletes: { id: number; stats: Record<string, string> }[] }[], athleteId: number): NcaafPlayerGameStats {
+  const out: NcaafPlayerGameStats = {
+    completions: null, attempts: null, passYards: null, passTds: null, interceptions: null,
+    rushAttempts: null, rushYards: null, rushTds: null,
+    receptions: null, targets: null, recYards: null, recTds: null,
+  };
+  for (const cat of categories) {
+    const row = cat.athletes.find((a) => a.id === athleteId);
+    if (!row) continue;
+    const s = row.stats;
+    if (cat.category === "passing") {
+      const comp = s["completions/passingAttempts"] ?? s["completions/completionAttempts"];
+      if (comp && comp.includes("/")) {
+        const [c, a] = comp.split("/");
+        out.completions = parseStatNumber(c);
+        out.attempts = parseStatNumber(a);
+      }
+      out.passYards = parseStatNumber(s["passingYards"]);
+      out.passTds = parseStatNumber(s["passingTouchdowns"]);
+      out.interceptions = parseStatNumber(s["interceptions"]);
+    } else if (cat.category === "rushing") {
+      out.rushAttempts = parseStatNumber(s["rushingAttempts"]);
+      out.rushYards = parseStatNumber(s["rushingYards"]);
+      out.rushTds = parseStatNumber(s["rushingTouchdowns"]);
+    } else if (cat.category === "receiving") {
+      out.receptions = parseStatNumber(s["receptions"]);
+      out.targets = parseStatNumber(s["receivingTargets"]);
+      out.recYards = parseStatNumber(s["receivingYards"]);
+      out.recTds = parseStatNumber(s["receivingTouchdowns"]);
+    }
+  }
+  return out;
+}
+
+type NcaafLoggedGame = {
+  gameId: number; week: number; date: string; opponent: string; homeRoad: "home" | "away";
+  teamScore: number; oppScore: number; won: boolean; stats: NcaafPlayerGameStats;
+};
+type NcaafTeamLogs = { players: { id: number; name: string; position: string; games: NcaafLoggedGame[] }[]; fetchedAt: string; sourceUrl: string };
+
+// Per-team per-player game logs, built from ESPN game summaries and cached
+// 24h. Powers the NCAAF roster aggregates, player files and (indirectly) the
+// matchup first-score enrichment.
+async function ncaafTeamPlayerLogs(ctx: Ctx, team: (typeof ncaafTeamCodes)[number]): Promise<NcaafTeamLogs> {
+  const cacheKey = `ncaaf-team-logs:${team}`;
+  const db = ctx.db;
+  const cachedRows = await db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey)).limit(1);
+  const cached = cachedRows[0];
+  if (cached && cached.expiresAt.getTime() > Date.now()) return JSON.parse(cached.payloadJson) as NcaafTeamLogs;
+
+  const meta = ncaafTeamMeta(team);
+  if (!meta) throw new Error(`Unknown NCAAF team ${team}`);
+  const [roster, schedule] = await Promise.all([fetchNcaafRoster(team), fetchNcaafTeamGames(team, 15)]);
+  const posById = new Map<number, string>();
+  const nameById = new Map<number, string>();
+  for (const p of roster.players) { posById.set(p.id, p.position); nameById.set(p.id, p.name); }
+
+  const byPlayer = new Map<number, { id: number; name: string; position: string; games: NcaafLoggedGame[] }>();
+  const sourceUrl = `${ESPN_SITE_NCAAF}/summary`;
+  for (let i = 0; i < schedule.games.length; i += 4) {
+    const batch = schedule.games.slice(i, i + 4);
+    const summaries = await Promise.all(batch.map(async (g) => {
+      try { return { game: g, summary: await fetchNcaafGameSummary(g.gameId) }; }
+      catch { return { game: g, summary: null }; }
+    }));
+    for (const { game, summary } of summaries) {
+      if (!summary) continue;
+      const box = summary.teams.find((t) => t.abbr === team);
+      if (!box) continue;
+      const seen = new Set<number>();
+      for (const cat of box.categories) {
+        for (const ath of cat.athletes) {
+          if (seen.has(ath.id)) continue;
+          seen.add(ath.id);
+          const stats = parseNcaafAthleteStats(box.categories, ath.id);
+          const meaningful = stats.passYards !== null || stats.rushYards !== null || stats.recYards !== null;
+          if (!meaningful) continue;
+          const entry = byPlayer.get(ath.id) ?? { id: ath.id, name: nameById.get(ath.id) ?? ath.name, position: posById.get(ath.id) ?? "—", games: [] };
+          entry.games.push({
+            gameId: game.gameId, week: game.week, date: game.date.slice(0, 10), opponent: game.opponent,
+            homeRoad: game.homeAway, teamScore: game.teamScore, oppScore: game.oppScore, won: game.won, stats,
+          });
+          byPlayer.set(ath.id, entry);
+        }
+      }
+    }
+  }
+  const logs: NcaafTeamLogs = {
+    players: Array.from(byPlayer.values()).map((p) => ({ ...p, games: p.games.sort((a, b) => b.date.localeCompare(a.date)) })),
+    fetchedAt: new Date().toISOString(), sourceUrl,
+  };
+  await db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey));
+  await db.insert(schema.nhlInsightCache).values({ key: cacheKey, payloadJson: JSON.stringify(logs), fetchedAt: new Date(logs.fetchedAt), expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) });
+  return logs;
+}
+
+async function loadNcaafRoster(ctx: Ctx, team: (typeof ncaafTeamCodes)[number]): Promise<z.infer<typeof ncaafRosterResponse>> {
+  const [roster, logs] = await Promise.all([fetchNcaafRoster(team), ncaafTeamPlayerLogs(ctx, team).catch(() => null)]);
+  const totalsById = new Map<number, { games: number; passYards: number; passTds: number; interceptions: number; rushYards: number; rushTds: number; receptions: number; recYards: number; recTds: number }>();
+  if (logs) {
+    for (const p of logs.players) {
+      const t = { games: p.games.length, passYards: 0, passTds: 0, interceptions: 0, rushYards: 0, rushTds: 0, receptions: 0, recYards: 0, recTds: 0 };
+      for (const g of p.games) {
+        t.passYards += g.stats.passYards ?? 0; t.passTds += g.stats.passTds ?? 0; t.interceptions += g.stats.interceptions ?? 0;
+        t.rushYards += g.stats.rushYards ?? 0; t.rushTds += g.stats.rushTds ?? 0;
+        t.receptions += g.stats.receptions ?? 0; t.recYards += g.stats.recYards ?? 0; t.recTds += g.stats.recTds ?? 0;
+      }
+      totalsById.set(p.id, t);
+    }
+  }
+  const players = roster.players
+    .filter((p) => p.group === "offense" || p.group === "specialTeam")
+    .map((p) => {
+      const t = totalsById.get(p.id);
+      const has = (v: number) => (t && (t.games > 0 || v > 0) ? v : null);
+      return {
+        id: p.id, name: p.name, jersey: p.jersey, position: p.position, group: p.group,
+        games: t ? t.games : null,
+        passYards: has(t?.passYards ?? 0), passTds: has(t?.passTds ?? 0), interceptions: has(t?.interceptions ?? 0),
+        rushYards: has(t?.rushYards ?? 0), rushTds: has(t?.rushTds ?? 0),
+        receptions: has(t?.receptions ?? 0), recYards: has(t?.recYards ?? 0), recTds: has(t?.recTds ?? 0),
+      };
+    })
+    .sort((a, b) => (b.passYards ?? 0) + (b.rushYards ?? 0) + (b.recYards ?? 0) - ((a.passYards ?? 0) + (a.rushYards ?? 0) + (a.recYards ?? 0)));
+  return { team, season: NCAAF_SEASON, fetchedAt: roster.fetchedAt, sourceUrl: roster.sourceUrl, players, groups: roster.groups };
+}
+
+async function loadNcaafPlayerGameLog(ctx: Ctx, team: (typeof ncaafTeamCodes)[number], playerId: number): Promise<z.infer<typeof ncaafGameLogResponse>> {
+  const logs = await ncaafTeamPlayerLogs(ctx, team);
+  const player = logs.players.find((p) => p.id === playerId);
+  if (!player) throw new Error("No game log found for this player yet this season.");
+  return {
+    playerId, team, season: NCAAF_SEASON, fetchedAt: logs.fetchedAt, sourceUrl: logs.sourceUrl,
+    games: player.games.map((g) => ({
+      gameId: g.gameId, week: g.week, gameDate: g.date, opponent: g.opponent, homeRoad: g.homeRoad,
+      result: g.won ? "W" : "L", teamScore: g.teamScore, oppScore: g.oppScore,
+      completions: g.stats.completions, attempts: g.stats.attempts, passYards: g.stats.passYards,
+      passTds: g.stats.passTds, interceptions: g.stats.interceptions,
+      rushAttempts: g.stats.rushAttempts, rushYards: g.stats.rushYards, rushTds: g.stats.rushTds,
+      receptions: g.stats.receptions, targets: g.stats.targets, recYards: g.stats.recYards, recTds: g.stats.recTds,
+    })),
+  };
+}
+
+function ncaafTeamMatchupStats(team: (typeof ncaafTeamCodes)[number], venue: "away" | "home", games: NcaafTeamGame[]): z.infer<typeof ncaafMatchupTeamSchema> {
+  const venueGames = games.filter((g) => g.homeAway === venue);
+  const wins = games.filter((g) => g.won).length;
+  const venueWins = venueGames.filter((g) => g.won).length;
+  const scored = games.filter((g) => g.firstScoringTeam !== null);
+  const venueScored = venueGames.filter((g) => g.firstScoringTeam !== null);
+  const firstScore = scored.filter((g) => g.firstScoringTeam === team).length;
+  const venueFirstScore = venueScored.filter((g) => g.firstScoringTeam === team).length;
+  const under = games.filter((g) => g.firstHalfFor + g.firstHalfAgainst <= 24).length;
+  const venueUnder = venueGames.filter((g) => g.firstHalfFor + g.firstHalfAgainst <= 24).length;
+  const blowouts = games.filter((g) => g.margin >= 14).length;
+  const venueBlowouts = venueGames.filter((g) => g.margin >= 14).length;
+  const both20 = games.filter((g) => g.teamScore >= 20 && g.oppScore >= 20).length;
+  const venueBoth20 = venueGames.filter((g) => g.teamScore >= 20 && g.oppScore >= 20).length;
+  const overtimes = games.filter((g) => g.overtime).length;
+  const venueOvertimes = venueGames.filter((g) => g.overtime).length;
+  const pct = (n: number, d: number) => d > 0 ? n / d : null;
+  return {
+    team, games: games.length,
+    wins, winPct: pct(wins, games.length), venueGames: venueGames.length, venueWins, venueWinPct: pct(venueWins, venueGames.length),
+    firstScoreGames: scored.length, firstScore, firstScorePct: pct(firstScore, scored.length),
+    venueFirstScoreGames: venueScored.length, venueFirstScore, venueFirstScorePct: pct(venueFirstScore, venueScored.length),
+    firstHalfUnder245: under, firstHalfUnder245Pct: pct(under, games.length), venueFirstHalfUnder245Pct: pct(venueUnder, venueGames.length),
+    blowouts, blowoutPct: pct(blowouts, games.length), venueBlowoutPct: pct(venueBlowouts, venueGames.length),
+    bothTeams20: both20, bothTeams20Pct: pct(both20, games.length), venueBothTeams20Pct: pct(venueBoth20, venueGames.length),
+    overtimes, overtimePct: pct(overtimes, games.length), venueOvertimePct: pct(venueOvertimes, venueGames.length),
+    avgPointsFor: games.length ? games.reduce((s, g) => s + g.teamScore, 0) / games.length : null,
+    avgPointsAgainst: games.length ? games.reduce((s, g) => s + g.oppScore, 0) / games.length : null,
+  };
+}
+
+async function loadNcaafMatchup(ctx: Ctx, awayTeam: (typeof ncaafTeamCodes)[number], homeTeam: (typeof ncaafTeamCodes)[number], force: boolean): Promise<z.infer<typeof ncaafMatchupResponse>> {
+  const cacheKey = `ncaaf-matchup:${awayTeam}:${homeTeam}`;
+  const db = ctx.db;
+  const cachedRows = await db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey)).limit(1);
+  const cached = cachedRows[0];
+  if (!force && cached && cached.expiresAt.getTime() > Date.now()) return ncaafMatchupResponse.parse(JSON.parse(cached.payloadJson));
+
+  const [awayData, homeData] = await Promise.all([fetchNcaafTeamGames(awayTeam, 8), fetchNcaafTeamGames(homeTeam, 8)]);
+  const seen = new Map<number, NcaafTeamGame>();
+  for (const g of [...awayData.games, ...homeData.games]) if (!seen.has(g.gameId)) seen.set(g.gameId, g);
+  await enrichFirstScores(Array.from(seen.values()));
+
+  const away = ncaafTeamMatchupStats(awayTeam, "away", awayData.games);
+  const home = ncaafTeamMatchupStats(homeTeam, "home", homeData.games);
+  // NCAAF samples are small (one game a week): trust venue splits at 3+ games.
+  const venueBlend = (overall: number | null, venueRate: number | null, venueGames: number): number | null =>
+    overall === null ? null : venueGames >= 3 && venueRate !== null ? overall * .4 + venueRate * .6 : overall;
+  const mean = (a: number | null, b: number | null): number | null => a !== null && b !== null ? (a + b) / 2 : a ?? b;
+
+  const awayWinForm = venueBlend(away.winPct, away.venueWinPct, away.venueGames);
+  const homeWinForm = venueBlend(home.winPct, home.venueWinPct, home.venueGames);
+  const awayWinRaw = awayWinForm !== null && homeWinForm !== null ? (awayWinForm + (1 - homeWinForm)) / 2 : null;
+  const homeWinRaw = awayWinForm !== null && homeWinForm !== null ? (homeWinForm + (1 - awayWinForm)) / 2 : null;
+  const winTotal = awayWinRaw !== null && homeWinRaw !== null ? awayWinRaw + homeWinRaw : null;
+  const awayWinProbability = awayWinRaw !== null && winTotal !== null && winTotal > 0 ? awayWinRaw / winTotal : null;
+  const homeWinProbability = homeWinRaw !== null && winTotal !== null && winTotal > 0 ? homeWinRaw / winTotal : null;
+  const winnerTeam = awayWinProbability === null || homeWinProbability === null ? null : awayWinProbability >= homeWinProbability ? awayTeam : homeTeam;
+  const winnerEdgePoints = awayWinProbability === null || homeWinProbability === null ? null : Math.abs(awayWinProbability - homeWinProbability) * 100;
+
+  const awayFirstForm = venueBlend(away.firstScorePct, away.venueFirstScorePct, away.venueFirstScoreGames);
+  const homeFirstForm = venueBlend(home.firstScorePct, home.venueFirstScorePct, home.venueFirstScoreGames);
+  const awayFirstAllowed = home.firstScoreGames > 0 ? 1 - (home.firstScore / home.firstScoreGames) : null;
+  const homeFirstAllowed = away.firstScoreGames > 0 ? 1 - (away.firstScore / away.firstScoreGames) : null;
+  const awayFirstRaw = awayFirstForm !== null && awayFirstAllowed !== null ? (awayFirstForm + awayFirstAllowed) / 2 : null;
+  const homeFirstRaw = homeFirstForm !== null && homeFirstAllowed !== null ? (homeFirstForm + homeFirstAllowed) / 2 : null;
+  const firstTotal = awayFirstRaw !== null && homeFirstRaw !== null ? awayFirstRaw + homeFirstRaw : null;
+  const firstScoreAwayProbability = awayFirstRaw !== null && firstTotal !== null && firstTotal > 0 ? awayFirstRaw / firstTotal : null;
+  const firstScoreHomeProbability = homeFirstRaw !== null && firstTotal !== null && firstTotal > 0 ? homeFirstRaw / firstTotal : null;
+  const firstScoreEdgeTeam = firstScoreAwayProbability === null || firstScoreHomeProbability === null ? null : firstScoreAwayProbability >= firstScoreHomeProbability ? awayTeam : homeTeam;
+  const firstScoreEdgePoints = firstScoreAwayProbability === null || firstScoreHomeProbability === null ? null : Math.abs(firstScoreAwayProbability - firstScoreHomeProbability) * 100;
+
+  const firstHalfUnder245Probability = mean(venueBlend(away.firstHalfUnder245Pct, away.venueFirstHalfUnder245Pct, away.venueGames), venueBlend(home.firstHalfUnder245Pct, home.venueFirstHalfUnder245Pct, home.venueGames));
+  const blowoutProbability = mean(venueBlend(away.blowoutPct, away.venueBlowoutPct, away.venueGames), venueBlend(home.blowoutPct, home.venueBlowoutPct, home.venueGames));
+  const bothTeams20Probability = mean(venueBlend(away.bothTeams20Pct, away.venueBothTeams20Pct, away.venueGames), venueBlend(home.bothTeams20Pct, home.venueBothTeams20Pct, home.venueGames));
+  const overtimeProbability = mean(venueBlend(away.overtimePct, away.venueOvertimePct, away.venueGames), venueBlend(home.overtimePct, home.venueOvertimePct, home.venueGames));
+
+  // Head-to-head from the two teams' game lists: games where they played each other.
+  const h2h = awayData.games.filter((g) => g.opponent === homeTeam);
+  const response: z.infer<typeof ncaafMatchupResponse> = {
+    away, home, awayWinProbability, homeWinProbability, winnerTeam, winnerEdgePoints,
+    firstScoreAwayProbability, firstScoreHomeProbability, firstScoreEdgeTeam, firstScoreEdgePoints,
+    firstHalfUnder245Probability, blowoutProbability, bothTeams20Probability, overtimeProbability,
+    headToHead: { games: h2h.length, awayWins: h2h.filter((g) => g.won).length, homeWins: h2h.filter((g) => !g.won).length },
+    fetchedAt: new Date().toISOString(), sourceUrl: awayData.sourceUrl,
+    sampleNote: `Last ${away.games} ${awayTeam} and ${home.games} ${homeTeam} completed regular-season games from the official ESPN scoreboard.`,
+  };
+  await db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey));
+  await db.insert(schema.nhlInsightCache).values({ key: cacheKey, payloadJson: JSON.stringify(response), fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(Date.now() + 12 * 60 * 60 * 1000) });
+  return response;
+}
+
+type NcaafRecentGame = z.infer<typeof ncaafHotGameSchema>;
+type NcaafPlayerAcc = { playerId: number; name: string; team: string; games: NcaafRecentGame[] };
+
+async function collectNcaafRecentGames(): Promise<{ byPlayer: Map<number, NcaafPlayerAcc> }> {
+  const current = await fetchNcaafScoreboard();
+  const weeks = [current.week, current.week - 1, current.week - 2, current.week - 3].filter((w) => w >= 1);
+  const gameIds = new Map<number, { week: number; date: string; away: string; home: string }>();
+  for (const week of weeks) {
+    const board = week === current.week ? current : await fetchNcaafScoreboard(week);
+    for (const g of board.games) {
+      if (g.state !== "final") continue;
+      gameIds.set(g.id, { week: g.week, date: g.date.slice(0, 10), away: g.away.abbr, home: g.home.abbr });
+    }
+  }
+  const byPlayer = new Map<number, NcaafPlayerAcc>();
+  const ids = Array.from(gameIds.entries());
+  for (let i = 0; i < ids.length; i += 8) {
+    const batch = ids.slice(i, i + 8);
+    const summaries = await Promise.all(batch.map(async ([id, meta]) => {
+      try { return { id, meta, summary: await fetchNcaafGameSummary(id) }; }
+      catch { return { id, meta, summary: null }; }
+    }));
+    for (const { id, meta, summary } of summaries) {
+      if (!summary) continue;
+      for (const teamBox of summary.teams) {
+        const opponent = teamBox.abbr === meta.away ? meta.home : meta.away;
+        const seen = new Set<number>();
+        for (const cat of teamBox.categories) {
+          for (const ath of cat.athletes) {
+            if (seen.has(ath.id)) continue;
+            seen.add(ath.id);
+            const stats = parseNcaafAthleteStats(teamBox.categories, ath.id);
+            const passYards = stats.passYards ?? 0; const passTds = stats.passTds ?? 0;
+            const rushYards = stats.rushYards ?? 0; const rushTds = stats.rushTds ?? 0;
+            const recYards = stats.recYards ?? 0; const recTds = stats.recTds ?? 0;
+            const scrimmage = rushYards + recYards;
+            const totalTds = passTds + rushTds + recTds;
+            if (passYards === 0 && scrimmage === 0 && totalTds === 0) continue;
+            const acc = byPlayer.get(ath.id) ?? { playerId: ath.id, name: ath.name, team: teamBox.abbr, games: [] };
+            acc.games.push({ gameId: id, week: meta.week, date: meta.date, opponent, passYards, passTds, rushYards, rushTds, recYards, recTds, scrimmageYards: scrimmage, totalTds });
+            byPlayer.set(ath.id, acc);
+          }
+        }
+      }
+    }
+  }
+  return { byPlayer };
+}
+
+async function fetchNcaafHotStreaks(ctx: Ctx, force: boolean): Promise<z.infer<typeof ncaafHotStreaksResponse>> {
+  const db = ctx.db;
+  const cachedRows = await db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, "ncaaf-hot-streaks")).limit(1);
+  const cached = cachedRows[0];
+  if (!force && cached && cached.expiresAt.getTime() > Date.now()) return ncaafHotStreaksResponse.parse(JSON.parse(cached.payloadJson));
+  const { byPlayer } = await collectNcaafRecentGames();
+  const players = Array.from(byPlayer.values()).flatMap((player) => {
+    const recent = player.games.sort((a, b) => b.date.localeCompare(a.date) || b.week - a.week).slice(0, 3);
+    if (recent.length < 2) return [];
+    let tdStreak = 0;
+    for (const g of recent) { if (g.totalTds <= 0) break; tdStreak += 1; }
+    let yardStreak = 0;
+    for (const g of recent) { if (g.scrimmageYards < 100 && g.passYards < 250) break; yardStreak += 1; }
+    const lastThreeTds = recent.reduce((s, g) => s + g.totalTds, 0);
+    const lastThreeYards = recent.reduce((s, g) => s + g.scrimmageYards + g.passYards, 0);
+    const hot = tdStreak >= 2 || yardStreak >= 2 || lastThreeTds >= 4 || lastThreeYards >= 600;
+    if (!hot) return [];
+    const heatScore = tdStreak * 8 + yardStreak * 6 + lastThreeTds * 3 + lastThreeYards / 50;
+    return [{ playerId: player.playerId, name: player.name, team: player.team, position: "—", tdStreak, yardStreak, lastThreeTds, lastThreeYards, games: recent, heatScore }];
+  }).sort((a, b) => b.heatScore - a.heatScore);
+  const response: z.infer<typeof ncaafHotStreaksResponse> = {
+    fetchedAt: new Date().toISOString(), sourceUrl: `${ESPN_SITE_NCAAF}/scoreboard`,
+    windowStart: `${NCAAF_SEASON}-08-01`, windowEnd: new Date().toISOString().slice(0, 10), players,
+  };
+  await db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, "ncaaf-hot-streaks"));
+  await db.insert(schema.nhlInsightCache).values({ key: "ncaaf-hot-streaks", payloadJson: JSON.stringify(response), fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) });
+  return response;
+}
+
+async function fetchNcaafColdStreaks(ctx: Ctx, force: boolean): Promise<z.infer<typeof ncaafColdStreaksResponse>> {
+  const db = ctx.db;
+  const cachedRows = await db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, "ncaaf-cold-streaks")).limit(1);
+  const cached = cachedRows[0];
+  if (!force && cached && cached.expiresAt.getTime() > Date.now()) return ncaafColdStreaksResponse.parse(JSON.parse(cached.payloadJson));
+  const { byPlayer } = await collectNcaafRecentGames();
+  const players = Array.from(byPlayer.values()).flatMap((player) => {
+    const recent = player.games.sort((a, b) => b.date.localeCompare(a.date) || b.week - a.week).slice(0, 3);
+    if (recent.length < 2) return [];
+    let tdDrought = 0;
+    for (const g of recent) { if (g.totalTds > 0) break; tdDrought += 1; }
+    const lastThreeTds = recent.reduce((sum, g) => sum + g.totalTds, 0);
+    const lastThreeYards = recent.reduce((sum, g) => sum + g.scrimmageYards + g.passYards, 0);
+    const lastThreePassYards = recent.reduce((sum, g) => sum + g.passYards, 0);
+    // Only real contributors: need meaningful recent workload, not benchwarmers.
+    const involved = lastThreeYards >= 120 || lastThreePassYards >= 400;
+    const cold = involved && (tdDrought >= 2 || (recent.length >= 3 && lastThreeTds === 0 && lastThreeYards < 200));
+    if (!cold) return [];
+    const coldScore = tdDrought * 8 + Math.max(0, 300 - lastThreeYards) / 25 + (lastThreeTds === 0 ? 6 : 0);
+    return [{ playerId: player.playerId, name: player.name, team: player.team, position: "—", tdDrought, lastThreeTds, lastThreeYards, games: recent, coldScore }];
+  }).sort((a, b) => b.coldScore - a.coldScore);
+  let teams: z.infer<typeof coldTeamSchema>[] = [];
+  try {
+    const { standings } = await fetchNcaafStandings();
+    teams = standings.flatMap((row) => {
+      const match = /^L(\d+)$/.exec(row.streak ?? "");
+      const losses = match ? Number(match[1]) : 0;
+      if (losses < 2) return [];
+      return [{ team: row.team, name: row.name, streak: row.streak ?? `L${losses}`, losses, gamesPlayed: row.wins + row.losses + row.ties }];
+    }).sort((a, b) => b.losses - a.losses);
+  } catch { /* team slumps are best-effort */ }
+  const response: z.infer<typeof ncaafColdStreaksResponse> = {
+    fetchedAt: new Date().toISOString(), sourceUrl: `${ESPN_SITE_NCAAF}/scoreboard`,
+    windowStart: `${NCAAF_SEASON}-08-01`, windowEnd: new Date().toISOString().slice(0, 10), players, teams,
+  };
+  await db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, "ncaaf-cold-streaks"));
+  await db.insert(schema.nhlInsightCache).values({ key: "ncaaf-cold-streaks", payloadJson: JSON.stringify(response), fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) });
+  return response;
+}
+
+// ---------------------------------------------------------------------------
+// NBA (ESPN keyless feeds). Mirrors the NCAAF insight sections: overview,
 // matchup calculator, hot streaks, rosters and player game logs.
 // ---------------------------------------------------------------------------
 
@@ -1944,6 +2466,7 @@ const nbaGameLogResponse = z.object({
   playerId: z.number(), team: z.string(), season: z.number(), fetchedAt: z.string(), sourceUrl: z.string(),
   games: z.array(nbaGameLogRowSchema),
 });
+
 
 async function loadNbaOverview(ctx?: Ctx): Promise<z.infer<typeof nbaOverviewResponse>> {
   const board = await fetchNbaScoreboard();
@@ -3528,6 +4051,7 @@ const INJURY_LEAGUE_PATH: Record<Exclude<Sport, "soccer">, string> = {
   nhl: "hockey/leagues/nhl",
   nfl: "football/leagues/nfl",
   nba: "basketball/leagues/nba",
+  ncaaf: "football/leagues/college-football",
 };
 function injuryLeaguePath(sport: Sport, league?: SoccerLeagueParam): string {
   if (sport === "soccer") return `soccer/leagues/${league === "epl" ? "eng.1" : "usa.1"}`;
@@ -3993,7 +4517,7 @@ async function loadTrackRecord(ctx: Ctx): Promise<z.infer<typeof trackRecordResp
 
 export const Actions = {
   getDashboard: defineAction({ request: z.object({ sport: z.enum(sports).default("nhl") }), response: dashboardResponse, async handler(ctx, args) { return loadDashboard(ctx, args.sport); } }),
-  refreshDaily: defineAction({ request: z.object({}), response: z.object({ status: z.enum(["success", "partial", "failed"]), message: z.string(), rowCount: z.number(), snapshotDate: z.string() }), async handler(ctx) { const result = await refresh(ctx); try { await fetchHotStreaks(ctx, true); } catch { /* Keep odds refresh independent of free NHL insight refresh. */ } try { await fetchNflHotStreaks(ctx, true); } catch { /* Same for the NFL leg. */ } try { await fetchColdStreaks(ctx, true); } catch { /* Cold streaks refresh with the same daily job. */ } try { await fetchNflColdStreaks(ctx, true); } catch { /* Same for the NFL leg. */ } try { await fetchNbaHotStreaks(ctx, true); } catch { /* Same for the NBA leg. */ } try { await fetchNbaColdStreaks(ctx, true); } catch { /* Same for the NBA leg. */ } try { await fetchLikelyScorers(ctx, "nhl", true); } catch { /* Likely scorers warm with the same daily job. */ } try { await fetchLikelyScorers(ctx, "nfl", true); } catch { /* Same for the NFL leg. */ } try { await fetchLikelyScorers(ctx, "nba", true); } catch { /* Same for the NBA leg. */ } try { await warmNflForm(ctx); } catch { /* Flip % v2 form warms with the same daily job. */ } try { await warmNbaForm(ctx); } catch { /* Same for the NBA leg. */ } try { await fetchKeyInjuries(ctx, "nfl", true); } catch { /* Injury warnings warm with the same daily job. */ } try { await fetchKeyInjuries(ctx, "nba", true); } catch { /* Same for the NBA leg. */ } try { await fetchKeyInjuries(ctx, "nhl", true); } catch { /* Same for the NHL leg. */ } try { await fetchKeyInjuries(ctx, "soccer", true, "mls"); } catch { /* Same for the MLS leg. */ } try { await fetchKeyInjuries(ctx, "soccer", true, "epl"); } catch { /* Same for the EPL leg. */ } try { await fetchLikelyScorers(ctx, "soccer", true, "mls"); } catch { /* Same for the MLS leg. */ } try { await fetchLikelyScorers(ctx, "soccer", true, "epl"); } catch { /* Same for the EPL leg. */ } try { await fetchSoccerHotStreaks(ctx, "mls", true); } catch { /* Same for the MLS leg. */ } try { await fetchSoccerHotStreaks(ctx, "epl", true); } catch { /* Same for the EPL leg. */ } try { await fetchSoccerColdStreaks(ctx, "mls", true); } catch { /* Same for the MLS leg. */ } try { await fetchSoccerColdStreaks(ctx, "epl", true); } catch { /* Same for the EPL leg. */ } try { await loadSoccerStandings(ctx, "mls"); } catch { /* Standings warm with the same daily job. */ } try { await loadSoccerStandings(ctx, "epl"); } catch { /* Same for the EPL leg. */ } return result; } }),
+  refreshDaily: defineAction({ request: z.object({}), response: z.object({ status: z.enum(["success", "partial", "failed"]), message: z.string(), rowCount: z.number(), snapshotDate: z.string() }), async handler(ctx) { const result = await refresh(ctx); try { await fetchHotStreaks(ctx, true); } catch { /* Keep odds refresh independent of free NHL insight refresh. */ } try { await fetchNflHotStreaks(ctx, true); } catch { /* Same for the NFL leg. */ } try { await fetchColdStreaks(ctx, true); } catch { /* Cold streaks refresh with the same daily job. */ } try { await fetchNflColdStreaks(ctx, true); } catch { /* Same for the NFL leg. */ } try { await fetchNcaafHotStreaks(ctx, true); } catch { /* Same for the NCAAF leg. */ } try { await fetchNcaafColdStreaks(ctx, true); } catch { /* Same for the NCAAF leg. */ } try { await fetchNbaHotStreaks(ctx, true); } catch { /* Same for the NBA leg. */ } try { await fetchNbaColdStreaks(ctx, true); } catch { /* Same for the NBA leg. */ } try { await fetchLikelyScorers(ctx, "nhl", true); } catch { /* Likely scorers warm with the same daily job. */ } try { await fetchLikelyScorers(ctx, "nfl", true); } catch { /* Same for the NFL leg. */ } try { await fetchLikelyScorers(ctx, "ncaaf", true); } catch { /* Same for the NCAAF leg. */ } try { await fetchLikelyScorers(ctx, "nba", true); } catch { /* Same for the NBA leg. */ } try { await warmNflForm(ctx); } catch { /* Flip % v2 form warms with the same daily job. */ } try { await warmNcaafForm(ctx); } catch { /* Same for the NCAAF leg. */ } try { await warmNbaForm(ctx); } catch { /* Same for the NBA leg. */ } try { await fetchKeyInjuries(ctx, "nfl", true); } catch { /* Injury warnings warm with the same daily job. */ } try { await fetchKeyInjuries(ctx, "ncaaf", true); } catch { /* Same for the NCAAF leg. */ } try { await fetchKeyInjuries(ctx, "nba", true); } catch { /* Same for the NBA leg. */ } try { await fetchKeyInjuries(ctx, "nhl", true); } catch { /* Same for the NHL leg. */ } try { await fetchKeyInjuries(ctx, "soccer", true, "mls"); } catch { /* Same for the MLS leg. */ } try { await fetchKeyInjuries(ctx, "soccer", true, "epl"); } catch { /* Same for the EPL leg. */ } try { await fetchLikelyScorers(ctx, "soccer", true, "mls"); } catch { /* Same for the MLS leg. */ } try { await fetchLikelyScorers(ctx, "soccer", true, "epl"); } catch { /* Same for the EPL leg. */ } try { await fetchSoccerHotStreaks(ctx, "mls", true); } catch { /* Same for the MLS leg. */ } try { await fetchSoccerHotStreaks(ctx, "epl", true); } catch { /* Same for the EPL leg. */ } try { await fetchSoccerColdStreaks(ctx, "mls", true); } catch { /* Same for the MLS leg. */ } try { await fetchSoccerColdStreaks(ctx, "epl", true); } catch { /* Same for the EPL leg. */ } try { await loadSoccerStandings(ctx, "mls"); } catch { /* Standings warm with the same daily job. */ } try { await loadSoccerStandings(ctx, "epl"); } catch { /* Same for the EPL leg. */ } return result; } }),
   getNhlOverview: defineAction({ request: z.object({}), response: nhlOverviewResponse, async handler() { return loadNhlOverview(); } }),
   getFirstGoalMatchup: defineAction({ request: z.object({ awayTeam: z.enum(teamCodes), homeTeam: z.enum(teamCodes), force: z.boolean().default(false) }).refine((value) => value.awayTeam !== value.homeTeam, { message: "Choose two different teams" }), response: firstGoalMatchupResponse, async handler(ctx, args) { return loadFirstGoalMatchup(ctx, args.awayTeam, args.homeTeam, args.force); } }),
   getHotStreaks: defineAction({ request: z.object({ force: z.boolean().default(false) }), response: hotStreaksResponse, async handler(ctx, args) { return fetchHotStreaks(ctx, args.force); } }),
@@ -4004,6 +4528,8 @@ export const Actions = {
   getNflHotStreaks: defineAction({ request: z.object({ force: z.boolean().default(false) }), response: nflHotStreaksResponse, async handler(ctx, args) { return fetchNflHotStreaks(ctx, args.force); } }),
   getColdStreaks: defineAction({ request: z.object({ force: z.boolean().default(false) }), response: coldStreaksResponse, async handler(ctx, args) { return fetchColdStreaks(ctx, args.force); } }),
   getNflColdStreaks: defineAction({ request: z.object({ force: z.boolean().default(false) }), response: nflColdStreaksResponse, async handler(ctx, args) { return fetchNflColdStreaks(ctx, args.force); } }),
+  getNcaafHotStreaks: defineAction({ request: z.object({ force: z.boolean().default(false) }), response: ncaafHotStreaksResponse, async handler(ctx, args) { return fetchNcaafHotStreaks(ctx, args.force); } }),
+  getNcaafColdStreaks: defineAction({ request: z.object({ force: z.boolean().default(false) }), response: ncaafColdStreaksResponse, async handler(ctx, args) { return fetchNcaafColdStreaks(ctx, args.force); } }),
   getNbaOverview: defineAction({ request: z.object({}), response: nbaOverviewResponse, async handler(ctx) { return loadNbaOverview(ctx); } }),
   getKeyInjuries: defineAction({ request: z.object({ sport: z.enum(sports), league: z.enum(soccerLeagues).optional() }), response: keyInjuriesResponse, async handler(ctx, args) { return fetchKeyInjuries(ctx, args.sport, false, args.league); } }),
   getNbaMatchup: defineAction({ request: z.object({ awayTeam: z.enum(nbaTeamCodes), homeTeam: z.enum(nbaTeamCodes), force: z.boolean().default(false) }).refine((value) => value.awayTeam !== value.homeTeam, { message: "Choose two different teams" }), response: nbaMatchupResponse, async handler(ctx, args) { return loadNbaMatchup(ctx, args.awayTeam, args.homeTeam, args.force); } }),
@@ -4041,6 +4567,10 @@ export const Actions = {
     },
   }),  getNflRoster: defineAction({ request: z.object({ team: z.enum(nflTeamCodes) }), response: nflRosterResponse, async handler(ctx, args) { return loadNflRoster(ctx, args.team); } }),
   getNflPlayerGameLog: defineAction({ request: z.object({ team: z.enum(nflTeamCodes), playerId: z.number().int().positive() }), response: nflGameLogResponse, async handler(ctx, args) { return loadNflPlayerGameLog(ctx, args.team, args.playerId); } }),
+  getNcaafOverview: defineAction({ request: z.object({ week: z.number().int().min(1).max(15).optional() }), response: ncaafOverviewResponse, async handler(ctx, args) { return loadNcaafOverview(args.week, ctx); } }),
+  getNcaafMatchup: defineAction({ request: z.object({ awayTeam: z.enum(ncaafTeamCodes), homeTeam: z.enum(ncaafTeamCodes), force: z.boolean().default(false) }).refine((value) => value.awayTeam !== value.homeTeam, { message: "Choose two different teams" }), response: ncaafMatchupResponse, async handler(ctx, args) { return loadNcaafMatchup(ctx, args.awayTeam, args.homeTeam, args.force); } }),
+  getNcaafRoster: defineAction({ request: z.object({ team: z.enum(ncaafTeamCodes) }), response: ncaafRosterResponse, async handler(ctx, args) { return loadNcaafRoster(ctx, args.team); } }),
+  getNcaafPlayerGameLog: defineAction({ request: z.object({ team: z.enum(ncaafTeamCodes), playerId: z.number().int().positive() }), response: ncaafGameLogResponse, async handler(ctx, args) { return loadNcaafPlayerGameLog(ctx, args.team, args.playerId); } }),
   getNbaRoster: defineAction({ request: z.object({ team: z.enum(nbaTeamCodes) }), response: nbaRosterResponse, async handler(ctx, args) { return loadNbaRoster(ctx, args.team); } }),
   getNbaPlayerGameLog: defineAction({ request: z.object({ team: z.enum(nbaTeamCodes), playerId: z.number().int().positive() }), response: nbaGameLogResponse, async handler(ctx, args) { return loadNbaPlayerGameLog(ctx, args.team, args.playerId); } }),
   getSoccerOverview: defineAction({ request: z.object({ league: z.enum(soccerLeagues) }), response: soccerOverviewResponse, async handler(ctx, args) { return loadSoccerOverview(ctx, args.league); } }),

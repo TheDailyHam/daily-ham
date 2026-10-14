@@ -4,7 +4,7 @@ export const projections = sqliteTable(
   "projections",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
-    sport: text("sport", { enum: ["nhl", "nfl", "nba", "soccer"] }).notNull(),
+    sport: text("sport", { enum: ["nhl", "nfl", "nba", "soccer", "ncaaf"] }).notNull(),
     player: text("player").notNull(),
     market: text("market").notNull(),
     statKey: text("stat_key").notNull(),
@@ -54,7 +54,7 @@ export const providerCredentials = sqliteTable("provider_credentials", {
 });
 
 export const premiumOddsCache = sqliteTable("premium_odds_cache", {
-  sport: text("sport", { enum: ["nhl", "nfl", "nba", "soccer"] }).primaryKey(),
+  sport: text("sport", { enum: ["nhl", "nfl", "nba", "soccer", "ncaaf"] }).primaryKey(),
   payloadJson: text("payload_json").notNull(),
   fetchedAt: integer("fetched_at", { mode: "timestamp_ms" }).notNull(),
   expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
@@ -71,7 +71,7 @@ export const nhlInsightCache = sqliteTable("nhl_insight_cache", {
 
 export const codyPlates = sqliteTable("cody_plates", {
   id: text("id").primaryKey(),
-  sport: text("sport", { enum: ["nhl", "nfl", "nba", "soccer"] }).notNull(),
+  sport: text("sport", { enum: ["nhl", "nfl", "nba", "soccer", "ncaaf"] }).notNull(),
   matchup: text("matchup").notNull(),
   pick: text("pick").notNull(),
   note: text("note"),
@@ -98,7 +98,7 @@ export const modelSnapshots = sqliteTable(
   "model_snapshots",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
-    sport: text("sport", { enum: ["nhl", "nfl", "nba", "soccer"] }).notNull(),
+    sport: text("sport", { enum: ["nhl", "nfl", "nba", "soccer", "ncaaf"] }).notNull(),
     league: text("league"),
     awayTeam: text("away_team").notNull(),
     homeTeam: text("home_team").notNull(),
@@ -139,7 +139,7 @@ export const usageDaily = sqliteTable(
   {
     date: text("date").notNull(),
     visitorHash: text("visitor_hash").notNull(),
-    sport: text("sport", { enum: ["nhl", "nfl", "nba", "soccer", "other"] }).notNull(),
+    sport: text("sport", { enum: ["nhl", "nfl", "nba", "soccer", "ncaaf", "other"] }).notNull(),
     views: integer("views").notNull().default(1),
   },
   (table) => [primaryKey({ columns: [table.date, table.visitorHash, table.sport] })],

@@ -38,7 +38,7 @@ const FETCH_WINDOW_DAYS_BEFORE = 1;
 const FETCH_WINDOW_DAYS_AFTER = 3;
 const MAX_EVENTS = 300;
 
-export async function fetchSportsGameOddsEvents(args: { apiKey: string; league?: "NHL" | "NFL" | "NBA" | "MLS" | "EPL" }) {
+export async function fetchSportsGameOddsEvents(args: { apiKey: string; league?: "NHL" | "NFL" | "NBA" | "MLS" | "EPL" | "NCAAF" }) {
   const league = args.league ?? "NHL";
   const now = new Date();
   const startsAfter = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - FETCH_WINDOW_DAYS_BEFORE)).toISOString();

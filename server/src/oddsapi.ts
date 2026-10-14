@@ -64,16 +64,16 @@ const NBA_TEAM_CODES: Record<string, string> = {
   "phoenix suns": "PHX", "portland trail blazers": "POR", "sacramento kings": "SAC", "san antonio spurs": "SA",
   "toronto raptors": "TOR", "utah jazz": "UTAH", "washington wizards": "WSH",
 };
-export function oddsApiTeamCode(name: string, sport: "nhl" | "nfl" | "nba" = "nhl"): string | null {
+export function oddsApiTeamCode(name: string, sport: "nhl" | "nfl" | "nba" | "ncaaf" = "nhl"): string | null {
   const map = sport === "nfl" ? NFL_TEAM_CODES : sport === "nba" ? NBA_TEAM_CODES : NHL_TEAM_CODES;
   return map[normalizeTeamName(name)] ?? null;
 }
 
-function marketNames(sport: "nhl" | "nfl" | "nba"): Record<string, string> {
+function marketNames(sport: "nhl" | "nfl" | "nba" | "ncaaf"): Record<string, string> {
   if (sport === "nhl") return { h2h: "Moneyline", spreads: "Puck Line", totals: "Total Goals" };
   return { h2h: "Moneyline", spreads: "Spread", totals: "Total Points" };
 }
-const SPORT_KEYS = { nhl: "icehockey_nhl", nfl: "americanfootball_nfl", nba: "basketball_nba" } as const;
+const SPORT_KEYS = { nhl: "icehockey_nhl", nfl: "americanfootball_nfl", nba: "basketball_nba", ncaaf: "americanfootball_ncaaf" } as const;
 
 // Soccer is per-LEAGUE (two leagues under one "soccer" sport): one Odds API
 // request per league per refresh, ~2/day total — well inside the 500/month.
@@ -96,7 +96,7 @@ export async function validateOddsApiKey(args: { apiKey: string }) {
 const WINDOW_DAYS_BEFORE = 1;
 const WINDOW_DAYS_AFTER = 3;
 
-export async function fetchOddsApiEvents(args: { apiKey: string; sport?: "nhl" | "nfl" | "nba" }) {
+export async function fetchOddsApiEvents(args: { apiKey: string; sport?: "nhl" | "nfl" | "nba" | "ncaaf" }) {
   const sport = args.sport ?? "nhl";
   const sportKey = SPORT_KEYS[sport];
   const names = marketNames(sport);
@@ -143,7 +143,7 @@ export type OddsApiOffer = {
   openingOdds: string | null; openingLine: string | null;
 };
 
-export function parseOddsApiPayload(raw: unknown, opts?: { sport?: "nhl" | "nfl" | "nba"; marketNames?: Record<string, string> }): { eventCount: number; marketCount: number; offerCount: number; offers: OddsApiOffer[] } {
+export function parseOddsApiPayload(raw: unknown, opts?: { sport?: "nhl" | "nfl" | "nba" | "ncaaf"; marketNames?: Record<string, string> }): { eventCount: number; marketCount: number; offerCount: number; offers: OddsApiOffer[] } {
   const sport = opts?.sport ?? "nhl";
   const names = opts?.marketNames ?? marketNames(sport);
   const events = Array.isArray(raw) ? raw : [];

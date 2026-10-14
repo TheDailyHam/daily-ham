@@ -134,6 +134,12 @@ export const api = {
   getNflMatchup: (args: ActionArgs<"getNflMatchup">) => callAction("getNflMatchup", args),
   getNflHotStreaks: (args: ActionArgs<"getNflHotStreaks">) => callAction("getNflHotStreaks", args),
   getNflColdStreaks: (args: ActionArgs<"getNflColdStreaks">) => callAction("getNflColdStreaks", args),
+  getNcaafOverview: (args: ActionArgs<"getNcaafOverview">) => callAction("getNcaafOverview", args),
+  getNcaafMatchup: (args: ActionArgs<"getNcaafMatchup">) => callAction("getNcaafMatchup", args),
+  getNcaafHotStreaks: (args: ActionArgs<"getNcaafHotStreaks">) => callAction("getNcaafHotStreaks", args),
+  getNcaafColdStreaks: (args: ActionArgs<"getNcaafColdStreaks">) => callAction("getNcaafColdStreaks", args),
+  getNcaafRoster: (args: ActionArgs<"getNcaafRoster">) => callAction("getNcaafRoster", args),
+  getNcaafPlayerGameLog: (args: ActionArgs<"getNcaafPlayerGameLog">) => callAction("getNcaafPlayerGameLog", args),
   getLikelyScorers: (args: ActionArgs<"getLikelyScorers">) => callAction("getLikelyScorers", args),
   getMatchupScorers: (args: ActionArgs<"getMatchupScorers">) => callAction("getMatchupScorers", args),
   getBookRead: (args: ActionArgs<"getBookRead">) => callAction("getBookRead", args),
@@ -158,7 +164,7 @@ export const api = {
   saveOddsApiKey: (args: ActionArgs<"saveOddsApiKey">) => callAction("saveOddsApiKey", args),
   removeOddsApiKey: (args: ActionArgs<"removeOddsApiKey">) => callAction("removeOddsApiKey", args),
   // Pending server actions (see callPending above): fail gracefully client-side until the server lands them.
-  getKeyInjuries: (args: { sport: "nhl" | "nfl" | "nba" }) => callPending<KeyInjuries>("getKeyInjuries", args),
+  getKeyInjuries: (args: { sport: "nhl" | "nfl" | "nba" | "ncaaf" }) => callPending<KeyInjuries>("getKeyInjuries", args),
   getUsageStats: (args: { adminToken?: string }) => callPending<UsageStats>("getUsageStats", args),
   // Soccer leg (server landing in parallel): every view hides gracefully until these resolve.
   getSoccerOverview: (args: { league: SoccerLeague }) => callPending<SoccerOverview>("getSoccerOverview", args),

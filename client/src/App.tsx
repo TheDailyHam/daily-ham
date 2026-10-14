@@ -18,7 +18,7 @@ const SPORT_KEY = "dh-sport";
 function loadSport(): Sport {
   try {
     const raw = localStorage.getItem(SPORT_KEY);
-    return raw === "nfl" ? "nfl" : raw === "nba" ? "nba" : raw === "soccer" ? "soccer" : "nhl";
+    return raw === "nfl" ? "nfl" : raw === "nba" ? "nba" : raw === "soccer" ? "soccer" : raw === "ncaaf" ? "ncaaf" : "nhl";
   } catch {
     return "nhl";
   }
@@ -47,9 +47,12 @@ type NflMatchup = ApiResponse<typeof api, "getNflMatchup">;
 type NflRoster = ApiResponse<typeof api, "getNflRoster">;
 type NflPlayer = NflRoster["players"][number];
 type NflPlayerGameLog = ApiResponse<typeof api, "getNflPlayerGameLog">;
+type NcaafPlayerGameLog = ApiResponse<typeof api, "getNcaafPlayerGameLog">;
 type NflHotStreaks = ApiResponse<typeof api, "getNflHotStreaks">;
+type NcaafHotStreaks = ApiResponse<typeof api, "getNcaafHotStreaks">;
 type NhlColdStreaks = ApiResponse<typeof api, "getColdStreaks">;
 type NflColdStreaks = ApiResponse<typeof api, "getNflColdStreaks">;
+type NcaafColdStreaks = ApiResponse<typeof api, "getNcaafColdStreaks">;
 type NbaOverview = ApiResponse<typeof api, "getNbaOverview">;
 type NbaMatchup = ApiResponse<typeof api, "getNbaMatchup">;
 type NbaRoster = ApiResponse<typeof api, "getNbaRoster">;
@@ -94,6 +97,15 @@ const nflTeams: { code: string; name: string }[] = [
   ["ARI","Arizona Cardinals"],["ATL","Atlanta Falcons"],["BAL","Baltimore Ravens"],["BUF","Buffalo Bills"],["CAR","Carolina Panthers"],["CHI","Chicago Bears"],["CIN","Cincinnati Bengals"],["CLE","Cleveland Browns"],["DAL","Dallas Cowboys"],["DEN","Denver Broncos"],["DET","Detroit Lions"],["GB","Green Bay Packers"],["HOU","Houston Texans"],["IND","Indianapolis Colts"],["JAX","Jacksonville Jaguars"],["KC","Kansas City Chiefs"],["LAC","Los Angeles Chargers"],["LAR","Los Angeles Rams"],["LV","Las Vegas Raiders"],["MIA","Miami Dolphins"],["MIN","Minnesota Vikings"],["NE","New England Patriots"],["NO","New Orleans Saints"],["NYG","New York Giants"],["NYJ","New York Jets"],["PHI","Philadelphia Eagles"],["PIT","Pittsburgh Steelers"],["SEA","Seattle Seahawks"],["SF","San Francisco 49ers"],["TB","Tampa Bay Buccaneers"],["TEN","Tennessee Titans"],["WSH","Washington Commanders"],
 ].map(([code,name]) => ({ code: code as string, name: name as string }));
 type NflTeamCode = ApiRequest<typeof api, "getNflMatchup">["awayTeam"];
+
+const ncaafTeams: { code: string; name: string }[] = [
+  ["AFA","Air Force Falcons"],["AKR","Akron Zips"],["ALA","Alabama Crimson Tide"],["APP","App State Mountaineers"],["ARIZ","Arizona Wildcats"],["ARK","Arkansas Razorbacks"],["ARMY","Army Black Knights"],["ARST","Arkansas State Red Wolves"],["ASU","Arizona State Sun Devils"],["AUB","Auburn Tigers"],["BALL","Ball State Cardinals"],["BAY","Baylor Bears"],["BC","Boston College Eagles"],["BGSU","Bowling Green Falcons"],["BOIS","Boise State Broncos"],["BUFF","Buffalo Bulls"],["BYU","BYU Cougars"],["CAL","California Golden Bears"],["CCU","Coastal Carolina Chanticleers"],["CIN","Cincinnati Bearcats"],["CLEM","Clemson Tigers"],["CLT","Charlotte 49ers"],["CMU","Central Michigan Chippewas"],["COLO","Colorado Buffaloes"],["CONN","UConn Huskies"],["CSU","Colorado State Rams"],["DEL","Delaware Blue Hens"],["DUKE","Duke Blue Devils"],["ECU","East Carolina Pirates"],["EMU","Eastern Michigan Eagles"],["FAU","Florida Atlantic Owls"],["FIU","Florida International Panthers"],["FLA","Florida Gators"],["FRES","Fresno State Bulldogs"],["FSU","Florida State Seminoles"],["GASO","Georgia Southern Eagles"],["GAST","Georgia State Panthers"],["GT","Georgia Tech Yellow Jackets"],["HAW","Hawai'i Rainbow Warriors"],["HOU","Houston Cougars"],["ILL","Illinois Fighting Illini"],["IOWA","Iowa Hawkeyes"],["ISU","Iowa State Cyclones"],["IU","Indiana Hoosiers"],["JMU","James Madison Dukes"],["JXST","Jacksonville State Gamecocks"],["KENN","Kennesaw State Owls"],["KENT","Kent State Golden Flashes"],["KSU","Kansas State Wildcats"],["KU","Kansas Jayhawks"],["LIB","Liberty Flames"],["LOU","Louisville Cardinals"],["LSU","LSU Tigers"],["LT","Louisiana Tech Bulldogs"],["M-OH","Miami (OH) RedHawks"],["MASS","Massachusetts Minutemen"],["MD","Maryland Terrapins"],["MEM","Memphis Tigers"],["MIA","Miami Hurricanes"],["MICH","Michigan Wolverines"],["MINN","Minnesota Golden Gophers"],["MISS","Ole Miss Rebels"],["MIZ","Missouri Tigers"],["MOST","Missouri State Bears"],["MRSH","Marshall Thundering Herd"],["MSST","Mississippi State Bulldogs"],["MSU","Michigan State Spartans"],["MTSU","Middle Tennessee Blue Raiders"],["NAVY","Navy Midshipmen"],["NCSU","NC State Wolfpack"],["ND","Notre Dame Fighting Irish"],["NDSU","North Dakota State Bison"],["NEB","Nebraska Cornhuskers"],["NEV","Nevada Wolf Pack"],["NIU","Northern Illinois Huskies"],["NMSU","New Mexico State Aggies"],["NU","Northwestern Wildcats"],["ODU","Old Dominion Monarchs"],["OHIO","Ohio Bobcats"],["OKST","Oklahoma State Cowboys"],["ORE","Oregon Ducks"],["ORST","Oregon State Beavers"],["OSU","Ohio State Buckeyes"],["OU","Oklahoma Sooners"],["PITT","Pittsburgh Panthers"],["PSU","Penn State Nittany Lions"],["PUR","Purdue Boilermakers"],["RICE","Rice Owls"],["RUTG","Rutgers Scarlet Knights"],["SAC","Sacramento State Hornets"],["SC","South Carolina Gamecocks"],["SDSU","San Diego State Aztecs"],["SHSU","Sam Houston Bearkats"],["SJSU","San José State Spartans"],["SMU","SMU Mustangs"],["STAN","Stanford Cardinal"],["SYR","Syracuse Orange"],["TA&M","Texas A&M Aggies"],["TCU","TCU Horned Frogs"],["TEM","Temple Owls"],["TENN","Tennessee Volunteers"],["TEX","Texas Longhorns"],["TLSA","Tulsa Golden Hurricane"],["TOL","Toledo Rockets"],["TROY","Troy Trojans"],["TTU","Texas Tech Red Raiders"],["TULN","Tulane Green Wave"],["TXST","Texas State Bobcats"],["UAB","UAB Blazers"],["UCF","UCF Knights"],["UCLA","UCLA Bruins"],["UGA","Georgia Bulldogs"],["UK","Kentucky Wildcats"],["UL","Louisiana Ragin' Cajuns"],["ULM","UL Monroe Warhawks"],["UNC","North Carolina Tar Heels"],["UNLV","UNLV Rebels"],["UNM","New Mexico Lobos"],["UNT","North Texas Mean Green"],["USA","South Alabama Jaguars"],["USC","USC Trojans"],["USF","South Florida Bulls"],["USM","Southern Miss Golden Eagles"],["USU","Utah State Aggies"],["UTAH","Utah Utes"],["UTEP","UTEP Miners"],["UTSA","UTSA Roadrunners"],["UVA","Virginia Cavaliers"],["VAN","Vanderbilt Commodores"],["VT","Virginia Tech Hokies"],["WAKE","Wake Forest Demon Deacons"],["WASH","Washington Huskies"],["WIS","Wisconsin Badgers"],["WKU","Western Kentucky Hilltoppers"],["WMU","Western Michigan Broncos"],["WSU","Washington State Cougars"],["WVU","West Virginia Mountaineers"],["WYO","Wyoming Cowboys"],
+].map(([code,name]) => ({ code: code as string, name: name as string }));
+type NcaafTeamCode = ApiRequest<typeof api, "getNcaafMatchup">["awayTeam"];
+type NcaafOverview = ApiResponse<typeof api, "getNcaafOverview">;
+type NcaafMatchup = ApiResponse<typeof api, "getNcaafMatchup">;
+type NcaafPlayer = ApiResponse<typeof api, "getNcaafRoster">["players"][number];
+
 
 const nbaTeams: { code: string; name: string }[] = NBA_TEAM_THEMES.map((theme) => ({ code: theme.code, name: theme.name }));
 type NbaTeamCode = ApiRequest<typeof api, "getNbaMatchup">["awayTeam"];
@@ -298,6 +310,7 @@ function PlayerStatsSheet({ player, team, onClose }: { player: NhlPlayer; team: 
 
 function RosterView({ parlay, setParlay, sport, soccerLeague, onSoccerLeague, teamFocus }: { parlay: ParlayPick[]; setParlay: (next: ParlayPick[]) => void; sport: Sport; soccerLeague?: SoccerLeague; onSoccerLeague?: (l: SoccerLeague) => void; teamFocus: { sport: League; team: string; nonce: number } | null }) {
   if (sport === "nfl") return <NflRosterView parlay={parlay} setParlay={setParlay} teamFocus={teamFocus} />;
+  if (sport === "ncaaf") return <NcaafRosterView parlay={parlay} setParlay={setParlay} teamFocus={teamFocus} />;
   if (sport === "nba") return <NbaRosterView parlay={parlay} setParlay={setParlay} teamFocus={teamFocus} />;
   if (sport === "soccer") return <SoccerRosterView league={soccerLeague ?? "mls"} onLeagueChange={onSoccerLeague} parlay={parlay} setParlay={setParlay} teamFocus={teamFocus} />;
   const [team, setTeam] = useState<TeamCode>("WSH");
@@ -442,14 +455,15 @@ function SlateFlipCard({ awayAbbrev, homeAbbrev, standings, active, onPick }: {
   </button>;
 }
 
-function FlipMeter({ sport, market, nhlStandings, nflStandings, nbaStandings }: {
+function FlipMeter({ sport, market, nhlStandings, nflStandings, nbaStandings, ncaafStandings }: {
   sport: Sport;
   market: MarketGroup;
   nhlStandings: NhlOverview["standings"] | null;
   nflStandings: NflOverview["standings"] | null;
   nbaStandings: NbaOverview["standings"] | null;
+  ncaafStandings?: NcaafOverview["standings"] | null;
 }) {
-  const standings = sport === "nba" ? nbaStandings : sport === "nfl" ? nflStandings : nhlStandings;
+  const standings = sport === "nba" ? nbaStandings : sport === "nfl" ? nflStandings : sport === "ncaaf" ? (ncaafStandings ?? null) : nhlStandings;
   if (!standings || standings.length === 0) return null;
   // Pull the two teams straight from the moneyline sides (or the "Away @ Home" matchup line).
   const sideNames = market.sides.map((side) => side.side).filter(Boolean);
@@ -589,7 +603,7 @@ function ParlayView({ parlay, setParlay, sport, onGoBoard }: { parlay: ParlayPic
     { id: "best", label: "Best price" },
   ];
   return <section className="parlay-section">
-    <div className="roster-title"><div><p className="kicker">ODDS & PARLAY CALCULATOR</p><h2>Your slip</h2><p className="roster-intro">Add legs from the {sport === "nfl" ? "gridiron" : sport === "nba" ? "hardwood" : sport === "soccer" ? "pitch" : "ice"} board, then price the slip below.</p></div><span>{parlay.length} legs</span></div>
+    <div className="roster-title"><div><p className="kicker">ODDS & PARLAY CALCULATOR</p><h2>Your slip</h2><p className="roster-intro">Add legs from the {sport === "nfl" || sport === "ncaaf" ? "gridiron" : sport === "nba" ? "hardwood" : sport === "soccer" ? "pitch" : "ice"} board, then price the slip below.</p></div><span>{parlay.length} legs</span></div>
     {parlay.length === 0 ? <div className="history-empty"><strong>Your slip is empty.</strong><span>Head to the board and tap <b>Add</b> on any market — moneylines, spreads, totals — and they'll stack up here with live combined odds.</span><button className="refresh" onClick={onGoBoard}>Open the board →</button></div> :
     <div className="slip-card" aria-label="Parlay builder">
       <div className="slip-head"><div><p className="kicker">PARLAY BUILDER</p><h3>{parlay.length} leg{parlay.length === 1 ? "" : "s"}</h3></div><strong className="slip-combined">{combined}</strong></div>
@@ -605,7 +619,7 @@ function ParlayView({ parlay, setParlay, sport, onGoBoard }: { parlay: ParlayPic
 // Plate league label. Cast to string: the server widens the sport enum as
 // new sides land; unknown values render uppercased rather than crashing.
 function plateLeagueLabel(sport: string): string {
-  return sport === "nhl" ? "NHL" : sport === "nfl" ? "NFL" : sport === "nba" ? "NBA" : sport === "soccer" ? "SOCCER" : sport.toUpperCase();
+  return sport === "nhl" ? "NHL" : sport === "nfl" ? "NFL" : sport === "nba" ? "NBA" : sport === "soccer" ? "SOCCER" : sport === "ncaaf" ? "NCAAF" : sport.toUpperCase();
 }
 
 const TUTORIAL_SLIDES: { icon: string; kicker: string; title: string; points: string[] }[] = [
@@ -915,6 +929,7 @@ function ProView({ parlay, setParlay, home = false, sport, soccerLeague, onSocce
   const board = useQuery({ queryKey: ["premium-board", sport], queryFn: () => api.getPremiumBoard({ sport }), retry: false });
   const overview = useQuery({ queryKey: ["nhl-overview"], queryFn: () => api.getNhlOverview({}), staleTime: 15 * 60 * 1000, retry: 1, enabled: sport === "nhl" });
   const nflOverview = useQuery({ queryKey: ["nfl-overview", "current"], queryFn: () => api.getNflOverview({}), staleTime: 15 * 60 * 1000, retry: 1, enabled: sport === "nfl" });
+  const ncaafOverview = useQuery({ queryKey: ["ncaaf-overview", "current"], queryFn: () => api.getNcaafOverview({}), staleTime: 15 * 60 * 1000, retry: 1, enabled: sport === "ncaaf" });
   const nbaOverview = useQuery({ queryKey: ["nba-overview", "current"], queryFn: () => api.getNbaOverview({}), staleTime: 15 * 60 * 1000, retry: 1, enabled: sport === "nba" });
   const scorers = useQuery({ queryKey: ["likely-scorers", sport], queryFn: () => api.getLikelyScorers({ sport }), staleTime: 12 * 60 * 60 * 1000, retry: 1 });
   const injuries = useKeyInjuries(sport);
@@ -941,10 +956,10 @@ function ProView({ parlay, setParlay, home = false, sport, soccerLeague, onSocce
     {board.data && <section className="pro-board">
       <div className="roster-title"><div><p className="kicker">{home ? "TODAY'S COMPLETE BOARD" : "LIVE SPORTSBOOK BOARD"}</p><h2>{groups.length.toLocaleString()} markets · {board.data.offerCount.toLocaleString()} book prices</h2><p className="roster-intro">Every market returned by the feed, paired across sides when both are offered.</p></div><span>{board.data.eventCount} events · {dateTime(board.data.fetchedAt)}</span></div>
       <div className={board.data.cacheStatus === "fresh" ? "refresh-health fresh" : "refresh-health stale"} role="status"><span className="health-dot"/><div><strong>{board.data.cacheStatus === "fresh" ? "Odds feed healthy" : "Showing last successful update"}</strong><small>{board.data.healthMessage} · Updated {dateTime(board.data.fetchedAt)}</small></div></div>
-      {moneylines.length > 0 && <section className="moneyline-rail" aria-labelledby="moneyline-title"><div className="section-heading"><div><p className="kicker">FIRST LOOK</p><h3 id="moneyline-title">Moneyline picks</h3></div><span>Best · DraftKings · FanDuel · BetMGM</span></div><div className="moneyline-grid">{moneylines.map((group) => { const side = strongestSide(group); if (!side) return null; const added = parlay.some((item) => item.id === side.id); const positiveEv = side.evPercent !== null && side.evPercent > 0; const codes = marketTeamCodes(sport, group, overview.data?.standings ?? null, nflOverview.data?.standings ?? null, nbaOverview.data?.standings ?? null); return <article className="moneyline-card" key={group.id}><button className="moneyline-open" onClick={() => setSelectedMarket(group)} aria-label={`Open moneyline prices for ${group.entity}`}><small>{group.matchup}</small><h4>{group.entity}</h4><div><span>Best <b>{bookName(side.best.book)} {formatAmerican(side.best.odds)}</b></span><span>DraftKings <b>{formatAmerican(side.draftKings?.odds ?? null)}</b></span><span>FanDuel <b>{formatAmerican(side.fanDuel?.odds ?? null)}</b></span><span>BetMGM <b>{formatAmerican(side.betMGM?.odds ?? null)}</b></span></div>{sport === "nhl" && <GameGoalieLine market={group} games={overview.data?.games ?? []}/>}
-<FlipMeter sport={sport} market={group} nhlStandings={overview.data?.standings ?? null} nflStandings={nflOverview.data?.standings ?? null} nbaStandings={nbaOverview.data?.standings ?? null} />
+      {moneylines.length > 0 && <section className="moneyline-rail" aria-labelledby="moneyline-title"><div className="section-heading"><div><p className="kicker">FIRST LOOK</p><h3 id="moneyline-title">Moneyline picks</h3></div><span>Best · DraftKings · FanDuel · BetMGM</span></div><div className="moneyline-grid">{moneylines.map((group) => { const side = strongestSide(group); if (!side) return null; const added = parlay.some((item) => item.id === side.id); const positiveEv = side.evPercent !== null && side.evPercent > 0; const codes = marketTeamCodes(sport, group, overview.data?.standings ?? null, nflOverview.data?.standings ?? null, nbaOverview.data?.standings ?? null, ncaafOverview.data?.standings ?? null); return <article className="moneyline-card" key={group.id}><button className="moneyline-open" onClick={() => setSelectedMarket(group)} aria-label={`Open moneyline prices for ${group.entity}`}><small>{group.matchup}</small><h4>{group.entity}</h4><div><span>Best <b>{bookName(side.best.book)} {formatAmerican(side.best.odds)}</b></span><span>DraftKings <b>{formatAmerican(side.draftKings?.odds ?? null)}</b></span><span>FanDuel <b>{formatAmerican(side.fanDuel?.odds ?? null)}</b></span><span>BetMGM <b>{formatAmerican(side.betMGM?.odds ?? null)}</b></span></div>{sport === "nhl" && <GameGoalieLine market={group} games={overview.data?.games ?? []}/>}
+<FlipMeter sport={sport} market={group} nhlStandings={overview.data?.standings ?? null} nflStandings={nflOverview.data?.standings ?? null} nbaStandings={nbaOverview.data?.standings ?? null} ncaafStandings={ncaafOverview.data?.standings ?? null} />
 {codes && <InjuryChips sport={sport} awayCode={codes[0]} homeCode={codes[1]} injuries={injuries.data ?? null} scorers={scorers.data ?? null} />}
-<LikelyScorersStrip sport={sport} market={group} nhlStandings={overview.data?.standings ?? null} nflStandings={nflOverview.data?.standings ?? null} nbaStandings={nbaOverview.data?.standings ?? null} scorers={scorers.data ?? null} />
+<LikelyScorersStrip sport={sport} market={group} nhlStandings={overview.data?.standings ?? null} nflStandings={nflOverview.data?.standings ?? null} nbaStandings={nbaOverview.data?.standings ?? null} ncaafStandings={ncaafOverview.data?.standings ?? null} scorers={scorers.data ?? null} />
 <p className={positiveEv ? "signal positive" : "signal"}>{positiveEv ? `+${side.evPercent?.toFixed(1)}% fair-odds EV` : "Market favorite"}</p></button><button className={added ? "pick-button added" : "pick-button"} onClick={() => toggleParlay(group, side)}>{added ? "Remove" : "Add ML"}</button></article>;})}</div></section>}
       {parlay.length>0&&<aside className="parlay-panel" aria-label="Parlay builder"><div><p className="kicker">PARLAY BUILDER</p><h3>{parlay.length} legs · {combined}</h3></div><label>Price at<select value={priceMode} onChange={(event)=>setPriceMode(event.target.value as PriceMode)} aria-label="Parlay sportsbook"><option value="draftkings">DraftKings</option><option value="fanduel">FanDuel</option><option value="betmgm">BetMGM</option><option value="best">Best price</option></select></label><label>Stake<input inputMode="decimal" value={stake} onChange={(event)=>setStake(event.target.value)} aria-label="Parlay stake"/></label><div><small>Estimated return</small><strong>${payout.toFixed(2)}</strong></div><button onClick={()=>setParlay([])}>Clear</button><ul>{parlay.map((item)=>{const priced=offerForMode(item.side,priceMode);return <li key={item.id}><span>{item.entity} · {titleCase(item.side.side)} {item.side.line??""}</span><b>{priced ? `${bookName(priced.book)} ${formatAmerican(priced.odds)}` : "Not offered"}</b></li>;})}</ul><p>Planning tool only. Every leg must be offered by the selected sportsbook; unavailable legs are never substituted.</p></aside>}
       <div className="pro-controls"><input className="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search player, team or market" aria-label="Search live odds"/><select value={category} onChange={(event) => setCategory(event.target.value)} aria-label="Filter market type">{categories.map((name) => <option key={name}>{name}</option>)}</select><button onClick={() => board.refetch()} disabled={board.isFetching}>{board.isFetching ? "Refreshing…" : "Refresh lines"}</button></div>
@@ -960,6 +975,7 @@ function GoalieIndicator({ label, goalie }: { label: string; goalie: NhlOverview
 
 function ScheduleStrip({ compact = false, sport, soccerLeague }: { compact?: boolean; sport: Sport; soccerLeague?: SoccerLeague }) {
   if (sport === "nfl") return <NflScheduleStrip compact={compact} />;
+  if (sport === "ncaaf") return <NcaafScheduleStrip compact={compact} />;
   if (sport === "nba") return <NbaScheduleStrip compact={compact} />;
   if (sport === "soccer") return <SoccerScheduleStrip compact={compact} league={soccerLeague ?? "mls"} />;
   return <NhlScheduleStrip compact={compact} />;
@@ -976,6 +992,7 @@ function NhlScheduleStrip({ compact = false }: { compact?: boolean }) {
 
 function LeagueView({ sport, soccerLeague, onSoccerLeague }: { sport: Sport; soccerLeague?: SoccerLeague; onSoccerLeague?: (l: SoccerLeague) => void }) {
   if (sport === "nfl") return <NflLeagueView />;
+  if (sport === "ncaaf") return <NcaafLeagueView />;
   if (sport === "nba") return <NbaLeagueView />;
   if (sport === "soccer") return <SoccerLeagueView league={soccerLeague ?? "mls"} onLeagueChange={onSoccerLeague} />;
   const overview = useQuery({ queryKey: ["nhl-overview"], queryFn: () => api.getNhlOverview({}), staleTime: 15 * 60 * 1000, retry: 1 });
@@ -992,6 +1009,7 @@ function hotPlayerRef(row: HotStreaks["players"][number] | NhlColdStreaks["playe
 
 function HotStreaksView({ sport, soccerLeague, onSoccerLeague }: { sport: Sport; soccerLeague?: SoccerLeague; onSoccerLeague?: (l: SoccerLeague) => void }) {
   if (sport === "nfl") return <NflHotStreaksView />;
+  if (sport === "ncaaf") return <NcaafHotStreaksView />;
   if (sport === "nba") return <NbaHotStreaksView />;
   if (sport === "soccer") return <SoccerHotStreaksView league={soccerLeague ?? "mls"} onLeagueChange={onSoccerLeague} />;
   const [category, setCategory] = useState("Heat index");
@@ -1011,6 +1029,7 @@ function HotStreaksView({ sport, soccerLeague, onSoccerLeague }: { sport: Sport;
 
 function CuttingBoardView({ sport, soccerLeague, onSoccerLeague }: { sport: Sport; soccerLeague?: SoccerLeague; onSoccerLeague?: (l: SoccerLeague) => void }) {
   if (sport === "nfl") return <NflCuttingBoard />;
+  if (sport === "ncaaf") return <NcaafCuttingBoard />;
   if (sport === "nba") return <NbaCuttingBoard />;
   if (sport === "soccer") return <SoccerCuttingBoard league={soccerLeague ?? "mls"} onLeagueChange={onSoccerLeague} />;
   return <NhlCuttingBoard />;
@@ -1047,6 +1066,7 @@ function percentage(value: number | null): string { return value === null ? "—
 
 function MatchupView({ sport, soccerLeague, onSoccerLeague }: { sport: Sport; soccerLeague?: SoccerLeague; onSoccerLeague?: (l: SoccerLeague) => void }) {
   if (sport === "nfl") return <NflMatchupCalculator />;
+  if (sport === "ncaaf") return <NcaafMatchupCalculator />;
   if (sport === "nba") return <NbaMatchupCalculator />;
   if (sport === "soccer") return <SoccerMatchupCalculator league={soccerLeague ?? "mls"} onLeagueChange={onSoccerLeague} />;
   return <MatchupCalculator />;
@@ -1105,8 +1125,8 @@ function ModelVsBooks({ sport, awayCode, homeCode, awayModel, homeModel, groups 
 type LikelyScorers = ApiResponse<typeof api, "getLikelyScorers">;
 type LikelyScorer = LikelyScorers["teams"][string][number];
 
-function marketTeamCodes(sport: Sport, market: MarketGroup, nhlStandings: NhlOverview["standings"] | null, nflStandings: NflOverview["standings"] | null, nbaStandings: NbaOverview["standings"] | null): [string, string] | null {
-  const standings = sport === "nba" ? nbaStandings : sport === "nfl" ? nflStandings : nhlStandings;
+function marketTeamCodes(sport: Sport, market: MarketGroup, nhlStandings: NhlOverview["standings"] | null, nflStandings: NflOverview["standings"] | null, nbaStandings: NbaOverview["standings"] | null, ncaafStandings?: NcaafOverview["standings"] | null): [string, string] | null {
+  const standings = sport === "nba" ? nbaStandings : sport === "nfl" ? nflStandings : sport === "ncaaf" ? (ncaafStandings ?? null) : nhlStandings;
   if (!standings || standings.length === 0) return null;
   const sideNames = market.sides.map((side) => side.side).filter(Boolean);
   const matchupParts = market.matchup.split("@").map((part) => part.trim()).filter(Boolean);
@@ -1133,22 +1153,23 @@ function topGameScorers(scorers: LikelyScorers, awayCode: string, homeCode: stri
     .slice(0, 2);
 }
 
-function LikelyScorersStrip({ sport, market, nhlStandings, nflStandings, nbaStandings, scorers }: {
+function LikelyScorersStrip({ sport, market, nhlStandings, nflStandings, nbaStandings, ncaafStandings, scorers }: {
   sport: Sport;
   market: MarketGroup;
   nhlStandings: NhlOverview["standings"] | null;
   nflStandings: NflOverview["standings"] | null;
   nbaStandings: NbaOverview["standings"] | null;
+  ncaafStandings?: NcaafOverview["standings"] | null;
   scorers: LikelyScorers | null;
 }) {
-  const codes = marketTeamCodes(sport, market, nhlStandings, nflStandings, nbaStandings);
+  const codes = marketTeamCodes(sport, market, nhlStandings, nflStandings, nbaStandings, ncaafStandings);
   if (!codes || !scorers) return null;
   const top = topGameScorers(scorers, codes[0], codes[1]);
   if (top.length === 0) return null;
-  const unit = sport === "nhl" ? "G" : sport === "nfl" ? "TD" : "PTS";
-  const thing = sport === "nhl" ? "goals" : sport === "nfl" ? "touchdowns" : "points";
+  const unit = sport === "nhl" ? "G" : sport === "nfl" || sport === "ncaaf" ? "TD" : "PTS";
+  const thing = sport === "nhl" ? "goals" : sport === "nfl" || sport === "ncaaf" ? "touchdowns" : "points";
   return <div className="scorer-strip">
-    <div className="scorer-head"><span>🎯 {sport === "nfl" ? "Likely TD scorers" : "Likely scorers"}</span><em>season leaders</em></div>
+    <div className="scorer-head"><span>🎯 {sport === "nfl" || sport === "ncaaf" ? "Likely TD scorers" : "Likely scorers"}</span><em>season leaders</em></div>
     <div className="scorer-names">{top.map((player) => <span key={`${player.team}-${player.name}`}><b>{player.name}</b><i>{player.team} · {player.stat}{unit}</i></span>)}</div>
     <small className="scorer-note">Most {thing} per game this season — a stat, not a sportsbook line.</small>
   </div>;
@@ -1192,7 +1213,7 @@ function MatchupScorersSection({ sport, awayCode, homeCode, league }: {
     return players.find((p) => norm(p.name) === n) ?? null;
   };
 
-  const unit = sport === "nhl" ? "G" : sport === "nfl" ? "TD" : sport === "nba" ? "PTS" : "G";
+  const unit = sport === "nhl" ? "G" : sport === "nfl" || sport === "ncaaf" ? "TD" : sport === "nba" ? "PTS" : "G";
   const sides = data.data ? [awayCode, homeCode] : [];
   return <section className="likely-scorers matchup-scorers" aria-label="Matchup-rated scorers">
     <div className="section-heading"><div><p className="kicker">MATCHUP RATING</p><h3>Who owns this matchup</h3></div><span>🎯</span></div>
@@ -1766,9 +1787,9 @@ function TeamThemePicker({ sport }: { sport: Sport }) {
     {open && <div className="team-modal-backdrop" onClick={() => setOpen(false)}>
       <div className="team-modal" role="dialog" aria-modal="true" aria-label="Pick your favorite teams" onClick={(e) => e.stopPropagation()}>
         <div className="team-modal-head"><h3>Your team, your colors</h3><button type="button" className="team-modal-close" onClick={() => setOpen(false)} aria-label="Close">×</button></div>
-        <p>Pick your favorite {sport === "nhl" ? "NHL" : sport === "nfl" ? "NFL" : sport === "nba" ? "NBA" : "soccer"} club — this side of the site dresses in its colors. Switch to another side to pick a team there. Saved on this device.</p>
+        <p>Pick your favorite {sport === "nhl" ? "NHL" : sport === "nfl" ? "NFL" : sport === "nba" ? "NBA" : sport === "ncaaf" ? "college football" : "soccer"} club — this side of the site dresses in its colors. Switch to another side to pick a team there. Saved on this device.</p>
         <div>
-          <p className="team-league-label">{sport === "nhl" ? "NHL" : sport === "nfl" ? "NFL" : sport === "nba" ? "NBA" : "SOCCER"}</p>
+          <p className="team-league-label">{sport === "nhl" ? "NHL" : sport === "nfl" ? "NFL" : sport === "nba" ? "NBA" : sport === "ncaaf" ? "NCAAF" : "SOCCER"}</p>
           {sport === "soccer" && <div className="metric-tabs" role="tablist" aria-label="Soccer league">{SOCCER_LEAGUES.map((l) => <button key={l.code} type="button" role="tab" aria-selected={pickerSoccerLeague === l.code} className={pickerSoccerLeague === l.code ? "active" : ""} onClick={() => setPickerSoccerLeague(l.code)}>{l.name}</button>)}</div>}
           <div className="team-grid">
             {(sport === "soccer" ? (pickerSoccerLeague === "epl" ? EPL_TEAM_THEMES : MLS_TEAM_THEMES) : LEAGUE_THEMES[sport]).map((t) => <button key={`${sport}-${t.code}`} type="button" className={"team-cell" + (favs[sport] === t.code ? " sel" : "")} onClick={() => pick(sport, t.code)} aria-pressed={favs[sport] === t.code}>
@@ -1790,6 +1811,7 @@ function TeamThemePicker({ sport }: { sport: Sport }) {
 // ---------------------------------------------------------------------------
 
 function nflGameDate(value: string) { return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(`${value}T12:00:00`)); }
+function ncaafGameDate(value: string) { return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(`${value}T12:00:00`)); }
 
 function NflScheduleStrip({ compact = false }: { compact?: boolean }) {
   const [week, setWeek] = useState<number | undefined>(undefined);
@@ -1813,6 +1835,28 @@ function NflScheduleStrip({ compact = false }: { compact?: boolean }) {
   </section>;
 }
 
+function NcaafScheduleStrip({ compact = false }: { compact?: boolean }) {
+  const [week, setWeek] = useState<number | undefined>(undefined);
+  const overview = useQuery({ queryKey: ["ncaaf-overview", week ?? "current"], queryFn: () => api.getNcaafOverview(week ? { week } : {}), staleTime: 15 * 60 * 1000, retry: 1 });
+  const injuries = useKeyInjuries("ncaaf");
+  if (overview.isPending) return <div className="slate-loading">Loading the official NCAAF slate…</div>;
+  if (overview.isError || !overview.data) return <div className="inline-error slate-error"><strong>NCAAF schedule unavailable.</strong><button onClick={() => overview.refetch()}>Retry</button></div>;
+  const data = overview.data;
+  const live = data.games.filter((g) => g.state === "live");
+  const games = compact ? [...live, ...data.games.filter((g) => g.state !== "live")].slice(0, 6) : data.games;
+  const stateLabel = (g: NcaafOverview["games"][number]) => g.state === "final" ? "Final" : g.state === "live" ? g.detail || "Live" : dateTime(g.startsAt);
+  return <section className="slate-section">
+    <div className="section-heading"><div><p className="kicker">OFFICIAL NCAAF SCHEDULE</p><h3>{compact ? "This week on the gridiron" : `Week ${data.week} scores & schedule`}</h3></div><span>Updated {dateTime(data.fetchedAt)}</span></div>
+    {!compact && <div className="metric-tabs week-tabs" aria-label="Select week">{data.weeks.map((w) => <button key={w} className={(week ?? data.week) === w ? "active" : ""} onClick={() => setWeek(w)}>{w}</button>)}</div>}
+    {games.length ? <div className="slate-grid">{games.map((game) => <article className="game-tile" key={game.id}>
+      <div className="game-time"><span>Week {game.week} · {ncaafGameDate(game.date)}</span><b>{stateLabel(game)}</b></div>
+      <div className="score-team"><strong>{game.away.name}</strong><TeamWatchStar sport="ncaaf" team={game.away.abbrev} name={game.away.name} /><b>{game.away.score ?? "—"}</b></div>
+      <div className="score-team"><strong>{game.home.name}</strong><TeamWatchStar sport="ncaaf" team={game.home.abbrev} name={game.home.name} /><b>{game.home.score ?? "—"}</b></div><InjuryChips sport="ncaaf" awayCode={game.away.abbrev} homeCode={game.home.abbrev} injuries={injuries.data ?? null} />
+    </article>)}</div> : <div className="history-empty"><strong>No games posted for this week yet.</strong><span>Check another week.</span></div>}
+    <div className="source-box"><span>Source</span><a href={data.scheduleSourceUrl} target="_blank" rel="noreferrer">ESPN NCAAF scoreboard ↗</a><small>2026 regular season · keyless feed</small></div>
+  </section>;
+}
+
 function NflLeagueView() {
   const overview = useQuery({ queryKey: ["nfl-overview", "current"], queryFn: () => api.getNflOverview({}), staleTime: 15 * 60 * 1000, retry: 1 });
   const [conference, setConference] = useState("All");
@@ -1827,6 +1871,23 @@ function NflLeagueView() {
       {standings.map((row, index) => <div className="standings-row" role="row" key={row.team}><span><b>{index + 1}</b><strong>{row.name}</strong><small>{row.division}</small><span className="standings-star"><TeamWatchStar sport="nfl" team={row.team} name={row.name} /></span></span><span><b>{row.wins}</b></span><span>{row.losses}</span><span>{row.ties}</span><span>{row.pointsFor}</span><span>{row.pointsAgainst}</span><span className={row.pointsFor - row.pointsAgainst > 0 ? "positive" : ""}>{row.pointsFor - row.pointsAgainst > 0 ? "+" : ""}{row.pointsFor - row.pointsAgainst}</span></div>)}
     </div></div>
     <div className="source-box"><span>Source</span><a href={overview.data.standingsSourceUrl} target="_blank" rel="noreferrer">ESPN NFL standings ↗</a><small>Point differential is computed from the listed official totals.</small></div>
+  </section></>;
+}
+
+function NcaafLeagueView() {
+  const overview = useQuery({ queryKey: ["ncaaf-overview", "current"], queryFn: () => api.getNcaafOverview({}), staleTime: 15 * 60 * 1000, retry: 1 });
+  const [conference, setConference] = useState("All");
+  if (overview.isPending) return <div className="loading"><span />Loading college football schedule and standings…</div>;
+  if (overview.isError || !overview.data) return <div className="error-state"><h2>League center is between downs.</h2><p>The ESPN feed did not answer.</p><button onClick={() => overview.refetch()}>Retry</button></div>;
+  const standings = overview.data.standings.filter((row) => conference === "All" || row.conference === conference);
+  return <><NcaafScheduleStrip/><section className="standings-section">
+    <div className="section-heading"><div><p className="kicker">LEAGUE TABLE</p><h3>2026 standings</h3></div><span>{overview.data.standings.length} clubs</span></div>
+    <div className="metric-tabs"><button className={conference === "All" ? "active" : ""} onClick={() => setConference("All")}>All</button>{["SEC", "Big Ten", "Big 12", "ACC"].map((name) => <button key={name} className={conference === name ? "active" : ""} onClick={() => setConference(name)}>{name}</button>)}</div>
+    <div className="standings-scroll"><div className="standings-table" role="table">
+      <div className="standings-row header" role="row"><span>Team</span><span>W</span><span>L</span><span>T</span><span>PF</span><span>PA</span><span>DIFF</span></div>
+      {standings.map((row, index) => <div className="standings-row" role="row" key={row.team}><span><b>{index + 1}</b><strong>{row.name}</strong><small>{row.division}</small><span className="standings-star"><TeamWatchStar sport="ncaaf" team={row.team} name={row.name} /></span></span><span><b>{row.wins}</b></span><span>{row.losses}</span><span>{row.ties}</span><span>{row.pointsFor}</span><span>{row.pointsAgainst}</span><span className={row.pointsFor - row.pointsAgainst > 0 ? "positive" : ""}>{row.pointsFor - row.pointsAgainst > 0 ? "+" : ""}{row.pointsFor - row.pointsAgainst}</span></div>)}
+    </div></div>
+    <div className="source-box"><span>Source</span><a href={overview.data.standingsSourceUrl} target="_blank" rel="noreferrer">ESPN college football standings ↗</a><small>Point differential is computed from the listed official totals.</small></div>
   </section></>;
 }
 
@@ -1899,6 +1960,80 @@ function NflMatchupCalculator() {
   </section>;
 }
 
+function NcaafMatchupCalculator() {
+  const [awayTeam, setAwayTeam] = useState<NcaafTeamCode>("UGA");
+  const [homeTeam, setHomeTeam] = useState<NcaafTeamCode>("ALA");
+  const [matchup, setMatchup] = useState<{ away: NcaafTeamCode; home: NcaafTeamCode }>({ away: "UGA", home: "ALA" });
+  const overview = useQuery({ queryKey: ["ncaaf-overview", "current"], queryFn: () => api.getNcaafOverview({}), staleTime: 15 * 60 * 1000, retry: 1 });
+  const board = useQuery({ queryKey: ["premium-board", "ncaaf"], queryFn: () => api.getPremiumBoard({ sport: "ncaaf" }), retry: false });
+  const boardGroups = useMemo(() => groupPremiumOffers(board.data?.offers ?? []), [board.data]);
+  const result = useQuery({ queryKey: ["ncaaf-matchup", matchup.away, matchup.home], queryFn: () => api.getNcaafMatchup({ awayTeam: matchup.away, homeTeam: matchup.home, force: false }), retry: 1 });
+  const injuries = useKeyInjuries("ncaaf");
+  const refresh = useMutation({ mutationFn: () => api.getNcaafMatchup({ awayTeam: matchup.away, homeTeam: matchup.home, force: true }), onSuccess: () => result.refetch() });
+  const data: NcaafMatchup | undefined = result.data;
+  const chooseGame = (away: string, home: string) => {
+    if (!ncaafTeams.some((t) => t.code === away) || !ncaafTeams.some((t) => t.code === home)) return;
+    const next = { away: away as NcaafTeamCode, home: home as NcaafTeamCode };
+    setAwayTeam(next.away); setHomeTeam(next.home); setMatchup(next);
+  };
+  const submit = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); if (awayTeam !== homeTeam) setMatchup({ away: awayTeam, home: homeTeam }); };
+  const modelChart = data ? [
+    { metric: "1H under 24.5", probability: Number(((data.firstHalfUnder245Probability ?? 0) * 100).toFixed(1)) },
+    { metric: "Blowout 14+", probability: Number(((data.blowoutProbability ?? 0) * 100).toFixed(1)) },
+    { metric: "Both 20+", probability: Number(((data.bothTeams20Probability ?? 0) * 100).toFixed(1)) },
+    { metric: "Overtime", probability: Number(((data.overtimeProbability ?? 0) * 100).toFixed(1)) },
+  ] : [];
+  const teamChart = data ? [
+    { team: data.away.team, "Score first": Number(((data.away.firstScorePct ?? 0) * 100).toFixed(1)), "Allow first": Number((((data.away.firstScoreGames - data.away.firstScore) / Math.max(1, data.away.firstScoreGames)) * 100).toFixed(1)) },
+    { team: data.home.team, "Score first": Number(((data.home.firstScorePct ?? 0) * 100).toFixed(1)), "Allow first": Number((((data.home.firstScoreGames - data.home.firstScore) / Math.max(1, data.home.firstScoreGames)) * 100).toFixed(1)) },
+  ] : [];
+  const weekGames = overview.data?.games.filter((g) => g.state !== "final") ?? [];
+  return <section className="matchup-lab">
+    <div className="matchup-heading"><div><p className="kicker">MATCHUP CALCULATOR</p><h1>Who takes it?</h1><p>Predict the winner, compare first-score chances, and read first-half and full-game scripts from official recent results.</p></div>{data && <button className="refresh" onClick={() => refresh.mutate()} disabled={refresh.isPending}>{refresh.isPending ? "Recalculating…" : "Refresh data"}</button>}</div>
+    {weekGames.length > 0 && <div className="slate-flips" aria-label="This week's NCAAF matchups with model flip percentages">{weekGames.slice(0, 12).map((game) => <SlateFlipCard key={game.id} awayAbbrev={game.away.abbrev} homeAbbrev={game.home.abbrev} standings={overview.data?.standings ?? null} active={matchup.away === game.away.abbrev && matchup.home === game.home.abbrev} onPick={() => chooseGame(game.away.abbrev, game.home.abbrev)} />)}</div>}
+    <form className="matchup-form" onSubmit={submit}>
+      <label>Away team<select value={awayTeam} onChange={(event) => setAwayTeam(event.target.value as NcaafTeamCode)}>{ncaafTeams.map((team) => <option key={team.code} value={team.code}>{team.name}</option>)}</select></label>
+      <span aria-hidden="true">@</span>
+      <label>Home team<select value={homeTeam} onChange={(event) => setHomeTeam(event.target.value as NcaafTeamCode)}>{ncaafTeams.map((team) => <option key={team.code} value={team.code}>{team.name}</option>)}</select></label>
+      <button className="primary" type="submit" disabled={awayTeam === homeTeam || result.isFetching}>{result.isFetching ? "Calculating…" : "Calculate matchup"}</button>
+    </form>
+    {awayTeam === homeTeam && <p className="calculator-note error" role="alert">Choose two different teams.</p>}
+    {result.isPending ? <div className="loading calculator-loading"><span />Reading recent game data…</div> : result.isError ? <div className="error-state calculator-error"><h2>Matchup data is unavailable.</h2><p>{result.error instanceof Error ? result.error.message : "The ESPN feed did not answer."}</p><button onClick={() => result.refetch()}>Retry</button></div> : data ? <>
+      <section className="winner-card">
+        <div className="section-heading"><div><p className="kicker">GAME WINNER</p><h2>{data.winnerTeam ? `${data.winnerTeam} to win` : "Insufficient sample"}</h2></div><span>{data.winnerTeam ? `${data.winnerTeam} +${data.winnerEdgePoints?.toFixed(1) ?? "0.0"} pts` : "No model edge"}</span></div>
+        <div className="winner-score"><div><span>{data.away.team} · away</span><strong>{percentage(data.awayWinProbability)}</strong><small>{data.away.wins}/{data.away.games} recent wins</small></div><div className="winner-track" role="img" aria-label={`${data.away.team} ${percentage(data.awayWinProbability)} and ${data.home.team} ${percentage(data.homeWinProbability)} predicted win probability`}><i style={{ width: `${(data.awayWinProbability ?? .5) * 100}%` }}/><b style={{ width: `${(data.homeWinProbability ?? .5) * 100}%` }}/></div><div className="home"><span>{data.home.team} · home</span><strong>{percentage(data.homeWinProbability)}</strong><small>{data.home.wins}/{data.home.games} recent wins</small></div></div>
+        <InjuryChips sport="ncaaf" awayCode={matchup.away} homeCode={matchup.home} injuries={injuries.data ?? null} />
+        <p className="winner-explain">The winner model blends each club's recent win rate with the opponent's loss rate, weighting away and home splits when at least three matching games exist. This is a model estimate, not a sportsbook line.</p>
+      </section>
+      {data && <ModelVsBooks sport="ncaaf" awayCode={data.away.team} homeCode={data.home.team} awayModel={data.awayWinProbability} homeModel={data.homeWinProbability} groups={boardGroups} />}
+      {data && <MatchupScorersSection sport="ncaaf" awayCode={data.away.team} homeCode={data.home.team} />}
+      {data && <BookReadSection sport="ncaaf" awayCode={data.away.team} homeCode={data.home.team} />}
+      <section className="first-goal-card">
+        <div className="section-heading"><div><p className="kicker">MODEL ESTIMATE</p><h2>First score probability</h2></div><span>{data.firstScoreEdgeTeam ? `${data.firstScoreEdgeTeam} +${data.firstScoreEdgePoints?.toFixed(1) ?? "0.0"} pts` : "Insufficient sample"}</span></div>
+        <div className="first-goal-score"><div><span>{data.away.team} · away</span><strong>{percentage(data.firstScoreAwayProbability)}</strong></div><div className="first-goal-track" role="img" aria-label={`${data.away.team} ${percentage(data.firstScoreAwayProbability)} and ${data.home.team} ${percentage(data.firstScoreHomeProbability)} to score first`}><i style={{ width: `${(data.firstScoreAwayProbability ?? .5) * 100}%` }}/><b style={{ width: `${(data.firstScoreHomeProbability ?? .5) * 100}%` }}/></div><div className="home"><span>{data.home.team} · home</span><strong>{percentage(data.firstScoreHomeProbability)}</strong></div></div>
+        <p className="model-explain">Estimate blends each club's recent first-score rate, venue split when at least three matching games exist, and how often the opponent allowed the opening score. It is a statistical model, not a sportsbook line.</p>
+      </section>
+      <section className="scenario-grid" aria-label="Matchup model estimates">
+        <article><span>1st half under 24.5</span><strong>{percentage(data.firstHalfUnder245Probability)}</strong><small>24 or fewer first-half points</small></article>
+        <article><span>Blowout game</span><strong>{percentage(data.blowoutProbability)}</strong><small>Final margin of 14 or more</small></article>
+        <article><span>Both teams 20+</span><strong>{percentage(data.bothTeams20Probability)}</strong><small>Each club scores at least 20</small></article>
+        <article><span>Overtime</span><strong>{percentage(data.overtimeProbability)}</strong><small>Game goes beyond regulation</small></article>
+      </section>
+      <section className="matchup-chart-panel"><div className="section-heading"><div><p className="kicker">GAME SCRIPT</p><h3>Matchup probabilities</h3></div><span>Model estimates</span></div><div className="scenario-chart" role="img" aria-label="Bar chart of first half under 24.5, blowout, both teams 20 plus, and overtime probabilities"><ResponsiveContainer width="100%" height="100%"><BarChart data={modelChart} layout="vertical" margin={{ top: 4, right: 26, bottom: 4, left: 12 }}><CartesianGrid stroke="var(--rule)" horizontal={false}/><XAxis type="number" domain={[0,100]} tickFormatter={(value) => `${value}%`} axisLine={false} tickLine={false}/><YAxis type="category" dataKey="metric" width={92} axisLine={false} tickLine={false}/><Tooltip formatter={(value) => [`${value}%`, "Model estimate"]}/><Bar dataKey="probability" fill="var(--orange)" radius={[0,4,4,0]}/></BarChart></ResponsiveContainer></div></section>
+      <section className="matchup-chart-panel"><div className="section-heading"><div><p className="kicker">RECENT TENDENCY</p><h3>First-score profile</h3></div><span>Last {Math.max(data.away.games, data.home.games)} games max</span></div><div className="team-tendency-chart" role="img" aria-label="Team scored first and allowed first percentages"><ResponsiveContainer width="100%" height="100%"><BarChart data={teamChart} margin={{ top: 10, right: 8, bottom: 0, left: -18 }}><CartesianGrid stroke="var(--rule)" vertical={false}/><XAxis dataKey="team" axisLine={false} tickLine={false}/><YAxis domain={[0,100]} tickFormatter={(value) => `${value}%`} axisLine={false} tickLine={false}/><Tooltip formatter={(value) => [`${value}%`]}/><Legend/><Bar dataKey="Score first" fill="var(--green)" radius={[3,3,0,0]}/><Bar dataKey="Allow first" fill="var(--red)" radius={[3,3,0,0]}/></BarChart></ResponsiveContainer></div>
+        <div className="team-sample-grid"><div><strong>{data.away.team}</strong><span>{data.away.firstScore}/{data.away.firstScoreGames} scored first</span><small>{data.away.venueGames} recent away games in venue split</small></div><div><strong>{data.home.team}</strong><span>{data.home.firstScore}/{data.home.firstScoreGames} scored first</span><small>{data.home.venueGames} recent home games in venue split</small></div></div>
+      </section>
+      <section className="head-to-head"><div><span>Recent head-to-head</span><strong>{data.headToHead.games ? `${data.away.team} ${data.headToHead.awayWins} · ${data.home.team} ${data.headToHead.homeWins}` : "No games in sample"}</strong></div><p>{data.sampleNote}</p></section>
+      <div className="source-box"><span>Source</span><a href={data.sourceUrl} target="_blank" rel="noreferrer">ESPN NCAAF scoreboard ↗</a><small>Calculated {dateTime(data.fetchedAt)} · cached 12 hours</small></div>
+    </> : null}
+  </section>;
+}
+
+function ncaafPrimaryMetric(player: NcaafPlayer): { id: string; label: string } {
+  if ((player.rushYards ?? 0) >= (player.passYards ?? 0) && (player.rushYards ?? 0) >= (player.recYards ?? 0)) return { id: "rushYards", label: "Rush yds" };
+  if ((player.passYards ?? 0) >= (player.recYards ?? 0)) return { id: "passYards", label: "Pass yds" };
+  return { id: "recYards", label: "Rec yds" };
+}
 function nflPrimaryMetric(player: NflPlayer): { id: string; label: string } {
   const pass = player.passYards ?? 0;
   const rush = player.rushYards ?? 0;
@@ -1982,6 +2117,80 @@ function NflPlayerStatsSheet({ player, team, onClose }: { player: NflPlayer; tea
   </div>;
 }
 
+function NcaafPlayerStatsSheet({ player, team, onClose }: { player: NcaafPlayer; team: NcaafTeamCode; onClose: () => void }) {
+  const log = useQuery({ queryKey: ["ncaaf-player-log", team, player.id], queryFn: () => api.getNcaafPlayerGameLog({ team, playerId: player.id }), retry: false });
+  const primary = ncaafPrimaryMetric(player);
+  const metrics = [
+    { id: "passYards", label: "Pass yds" }, { id: "passTds", label: "Pass TD" },
+    { id: "rushYards", label: "Rush yds" }, { id: "rushTds", label: "Rush TD" },
+    { id: "recYards", label: "Rec yds" }, { id: "receptions", label: "Rec" }, { id: "totalTds", label: "Total TD" },
+  ];
+  const [metric, setMetric] = useState(primary.id);
+  const games = log.data?.games ?? [];
+  const metricValue = (game: NcaafPlayerGameLog["games"][number], id: string): number | null => {
+    if (id === "passYards") return game.passYards;
+    if (id === "passTds") return game.passTds;
+    if (id === "rushYards") return game.rushYards;
+    if (id === "rushTds") return game.rushTds;
+    if (id === "recYards") return game.recYards;
+    if (id === "receptions") return game.receptions;
+    if (id === "totalTds") return (game.passTds ?? 0) + (game.rushTds ?? 0) + (game.recTds ?? 0);
+    return null;
+  };
+  const chartData = games.slice(0, 8).reverse().map((game) => ({
+    date: ncaafGameDate(game.gameDate),
+    passYards: game.passYards, passTds: game.passTds, rushYards: game.rushYards, rushTds: game.rushTds,
+    recYards: game.recYards, receptions: game.receptions,
+    totalTds: (game.passTds ?? 0) + (game.rushTds ?? 0) + (game.recTds ?? 0),
+  }));
+  const lastFive = games.slice(0, 5);
+  const seasonAverage = average(games.map((game) => metricValue(game, metric)));
+  const lastFiveAverage = average(lastFive.map((game) => metricValue(game, metric)));
+  const modelProjection = seasonAverage === null ? null : seasonAverage * .5 + (lastFiveAverage ?? seasonAverage) * .5;
+  const metricLabel = metrics.find((item) => item.id === metric)?.label ?? "Stat";
+  const totals = (fn: (g: NcaafPlayerGameLog["games"][number]) => number | null) => lastFive.reduce((s, g) => s + (fn(g) ?? 0), 0);
+  const [sheetTab, setSheetTab] = useState<"overview" | "trend" | "last5" | "log">("overview");
+
+  return <div className="sheet-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <section className="sheet player-sheet" role="dialog" aria-modal="true" aria-labelledby="ncaaf-player-stats-title">
+      <button className="close" onClick={onClose} aria-label="Close player stats">×</button>
+      <p className="kicker">{team} PLAYER FILE · NCAAF</p>
+      <div className="sheet-title-row"><h2 id="ncaaf-player-stats-title">{player.name}</h2><PlayerWatchStar sport="ncaaf" playerId={player.id} team={team} name={player.name} position={player.position} /></div>
+      <p className="matchup">{player.jersey ? `#${player.jersey} · ` : ""}{player.position} · 2026 regular season</p>
+      <div className="player-season-line">
+        <div><span>Games</span><strong>{player.games ?? "—"}</strong></div>
+        <div><span>Pass yds</span><strong>{player.passYards ?? "—"}</strong></div>
+        <div><span>Rush yds</span><strong>{player.rushYards ?? "—"}</strong></div>
+        <div><span>Rec yds</span><strong>{player.recYards ?? "—"}</strong></div>
+        <div><span>Total TD</span><strong>{(player.passTds ?? 0) + (player.rushTds ?? 0) + (player.recTds ?? 0)}</strong></div>
+      </div>
+      <div className="sheet-tabs" role="tablist" aria-label="Player stat sections">
+        {(["overview", "trend", "last5", "log"] as const).map((tab) => <button key={tab} role="tab" aria-selected={sheetTab === tab} className={sheetTab === tab ? "active" : ""} onClick={() => setSheetTab(tab)}>{tab === "overview" ? "Overview" : tab === "trend" ? "Trend" : tab === "last5" ? "Last 5" : "Game log"}</button>)}
+      </div>
+      {log.isPending ? <div className="player-log-loading"><span />Loading game-by-game stats…</div> : log.isError ? <div className="inline-log-error"><strong>Game log unavailable.</strong><span>{log.error instanceof Error ? log.error.message : "Try again shortly."}</span><button onClick={() => log.refetch()}>Retry</button></div> : games.length === 0 ? <div className="history-empty"><strong>No games logged yet.</strong><span>The graph, projection and last-five record will populate after official game data posts.</span></div> : <>
+        {sheetTab === "overview" && <section className="model-panel">
+          <div><p className="kicker">DAILY HAM MODEL</p><h3>{metricLabel} projection</h3><span>Statistical projection — not a market lean</span></div>
+          <strong>{modelProjection === null ? "—" : modelProjection.toFixed(1)}</strong>
+          <div className="model-inputs"><span>Season <b>{seasonAverage?.toFixed(1) ?? "—"}</b></span><span>Last 5 <b>{lastFiveAverage?.toFixed(1) ?? "—"}</b></span></div>
+          <p>Weighted from official season and last-5 game logs. Missing context stays neutral.</p>
+        </section>}
+        {sheetTab === "trend" && <section className="trend-section">
+          <div className="section-heading"><div><p className="kicker">RECENT TREND</p><h3>Last {Math.min(8, games.length)} games</h3></div><span>{metricLabel}</span></div>
+          <div className="metric-tabs" aria-label="Chart stat">{metrics.map((item) => <button key={item.id} className={metric === item.id ? "active" : ""} onClick={() => setMetric(item.id)}>{item.label}</button>)}</div>
+          <div className="player-trend-chart" role="img" aria-label={`${player.name} ${metricLabel} over the last ${Math.min(8, games.length)} games`}><ResponsiveContainer width="100%" height="100%"><LineChart data={chartData} margin={{ top: 14, right: 10, bottom: 0, left: -22 }}><CartesianGrid stroke="var(--rule)" vertical={false}/><XAxis dataKey="date" axisLine={false} tickLine={false}/><YAxis domain={[0, "auto"]} axisLine={false} tickLine={false}/><Tooltip formatter={(value) => [value, metricLabel]}/><Line type="monotone" dataKey={metric} stroke="var(--green)" strokeWidth={3} dot={{ r: 4, fill: "var(--paper)", strokeWidth: 2 }} connectNulls /></LineChart></ResponsiveContainer></div>
+        </section>}
+        {sheetTab === "last5" && <section className="last-five-section">
+          <div className="section-heading"><div><p className="kicker">FORM CHECK</p><h3>Last five</h3></div><span>{lastFive.length} official games</span></div>
+          <div className="last-five-summary"><div><span>Pass yds</span><strong>{totals((g) => g.passYards)}</strong></div><div><span>Rush yds</span><strong>{totals((g) => g.rushYards)}</strong></div><div><span>Rec yds</span><strong>{totals((g) => g.recYards)}</strong></div><div><span>Total TD</span><strong>{totals((g) => (g.passTds ?? 0) + (g.rushTds ?? 0) + (g.recTds ?? 0))}</strong></div></div>
+          <div className="game-card-list">{lastFive.map((game) => <article className="game-card" key={game.gameId}><div className="game-card-head"><div><strong>{game.homeRoad === "away" ? "@" : "vs"} {game.opponent}</strong><span>Week {game.week} · {ncaafGameDate(game.gameDate)} · {game.result} {game.teamScore}-{game.oppScore}</span></div></div><div className="game-stat-grid"><div><span>Pass</span><b>{game.passYards ?? "—"} yds · {game.passTds ?? 0} TD</b></div><div><span>Rush</span><b>{game.rushYards ?? "—"} yds · {game.rushTds ?? 0} TD</b></div><div><span>Rec</span><b>{game.receptions ?? "—"} rec · {game.recYards ?? "—"} yds</b></div></div></article>)}</div>
+        </section>}
+        {sheetTab === "log" && <details className="full-log" open><summary>Full season game log <span>{games.length} games</span></summary><div className="game-card-list compact">{games.map((game) => <article className="game-card" key={`full-${game.gameId}`}><div className="game-card-head"><div><strong>{game.homeRoad === "away" ? "@" : "vs"} {game.opponent}</strong><span>Week {game.week} · {ncaafGameDate(game.gameDate)} · {game.result} {game.teamScore}-{game.oppScore}</span></div></div><div className="game-stat-grid"><div><span>Pass</span><b>{game.completions ?? "—"}/{game.attempts ?? "—"} · {game.passYards ?? "—"} yds · {game.passTds ?? 0} TD · {game.interceptions ?? 0} INT</b></div><div><span>Rush</span><b>{game.rushAttempts ?? "—"} att · {game.rushYards ?? "—"} yds · {game.rushTds ?? 0} TD</b></div><div><span>Rec</span><b>{game.receptions ?? "—"}/{game.targets ?? "—"} · {game.recYards ?? "—"} yds · {game.recTds ?? 0} TD</b></div></div></article>)}</div></details>}
+        <div className="source-box"><span>Source</span><a href={log.data?.sourceUrl} target="_blank" rel="noreferrer">ESPN NCAAF game data ↗</a><small>Fetched {log.data ? dateTime(log.data.fetchedAt) : "—"}</small></div>
+      </>}
+    </section>
+  </div>;
+}
+
 function NflRosterView({ parlay, setParlay, teamFocus }: { parlay: ParlayPick[]; setParlay: (next: ParlayPick[]) => void; teamFocus: { sport: League; team: string; nonce: number } | null }) {
   const [team, setTeam] = useState<NflTeamCode>("KC");
   useEffect(() => {
@@ -2038,6 +2247,62 @@ function NflRosterView({ parlay, setParlay, teamFocus }: { parlay: ParlayPick[];
   );
 }
 
+function NcaafRosterView({ parlay, setParlay, teamFocus }: { parlay: ParlayPick[]; setParlay: (next: ParlayPick[]) => void; teamFocus: { sport: League; team: string; nonce: number } | null }) {
+  const [team, setTeam] = useState<NcaafTeamCode>("UGA");
+  useEffect(() => {
+    if (teamFocus && teamFocus.sport === "ncaaf" && ncaafTeams.some((t) => t.code === teamFocus.team)) setTeam(teamFocus.team as NcaafTeamCode);
+  }, [teamFocus]);
+  const [selectedPlayer, setSelectedPlayer] = useState<NcaafPlayer | null>(null);
+  const [watched, setWatched] = useState(0);
+  const ncaaf = useQuery({ queryKey: ["ncaaf-roster", team], queryFn: () => api.getNcaafRoster({ team }) });
+  const teamBoard = useQuery({ queryKey: ["premium-board", "ncaaf"], queryFn: () => api.getPremiumBoard({ sport: "ncaaf" }), retry: false });
+  const ncaafOverview = useQuery({ queryKey: ["ncaaf-overview", "current"], queryFn: () => api.getNcaafOverview({}), staleTime: 15 * 60 * 1000, retry: 1 });
+  const selectedTeamName = ncaafTeams.find((item) => item.code === team)?.name ?? team;
+  const teamMoneylines = useMemo(() => moneylinePicks(groupPremiumOffers(teamBoard.data?.offers ?? [])).filter((group) => group.matchup.includes(selectedTeamName)), [teamBoard.data, selectedTeamName]);
+  useEffect(() => {
+    const onChange = () => setWatched((w) => w + 1);
+    window.addEventListener("dh-watchlist-change", onChange);
+    return () => window.removeEventListener("dh-watchlist-change", onChange);
+  }, []);
+  void watched;
+
+  return (
+    <>
+    <section className="roster-panel">
+      <div className="roster-title"><div><p className="kicker">OFFICIAL NCAAF ROSTERS</p><h2>Team stats & player trends</h2><p className="roster-intro">Tap any player to open graphs, last-five form and the complete game log. Star a player to add them to your Watchlist.</p></div>{ncaaf.data && <span>Updated {dateTime(ncaaf.data.fetchedAt)}</span>}</div>
+      <label className="select-label" htmlFor="ncaaf-team">Team</label>
+      <select id="ncaaf-team" value={team} onChange={(e) => { setTeam(e.target.value as NcaafTeamCode); setSelectedPlayer(null); }}>{ncaafTeams.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select>
+      {teamMoneylines.length > 0 && <section className="team-moneyline"><div className="section-heading"><div><p className="kicker">NEXT GAME</p><h3>Moneyline board</h3></div><span>Best · DraftKings · FanDuel · BetMGM</span></div><div className="moneyline-grid">{teamMoneylines.map((group) => { const side = strongestSide(group); if (!side) return null; const added = parlay.some((item) => item.id === side.id); const pick: ParlayPick = { id: side.id, groupId: group.id, matchup: group.matchup, entity: group.entity, marketName: group.marketName, side }; return <article className="moneyline-card" key={group.id}><div className="moneyline-open"><small>{group.matchup}</small><h4>{group.entity}</h4><div><span>Best <b>{bookName(side.best.book)} {formatAmerican(side.best.odds)}</b></span><span>DraftKings <b>{formatAmerican(side.draftKings?.odds ?? null)}</b></span><span>FanDuel <b>{formatAmerican(side.fanDuel?.odds ?? null)}</b></span><span>BetMGM <b>{formatAmerican(side.betMGM?.odds ?? null)}</b></span></div><FlipMeter sport="ncaaf" market={group} nhlStandings={null} nflStandings={null} nbaStandings={null} ncaafStandings={ncaafOverview.data?.standings ?? null} /><p className={side.evPercent !== null && side.evPercent > 0 ? "signal positive" : "signal"}>{side.evPercent !== null && side.evPercent > 0 ? `+${side.evPercent.toFixed(1)}% fair-odds EV` : "Market favorite"}</p></div><button className={added ? "pick-button added" : "pick-button"} onClick={() => setParlay(added ? parlay.filter((item) => item.id !== side.id) : [...parlay, pick])}>{added ? "Remove" : "Add ML"}</button></article>;})}</div></section>}
+      {ncaaf.isPending ? (
+        <div className="loading"><span />Loading official roster…</div>
+      ) : ncaaf.isError ? (
+        <div className="inline-error">Official NCAAF data is temporarily unavailable. <button onClick={() => ncaaf.refetch()}>Retry</button></div>
+      ) : ncaaf.data ? (
+        <>
+          <div className="roster-summary"><div><b>{ncaaf.data.players.length}</b><span>skill players</span></div><div><b>{ncaaf.data.groups.offense ?? 0}</b><span>offense</span></div><div><b>{ncaaf.data.groups.specialTeam ?? 0}</b><span>special teams</span></div></div>
+          <div className="table-scroll"><div className="roster-table ncaaf-roster-table" role="table">
+            <div className="roster-header" role="row"><span>Player</span><span>GP</span><span>Pass yds</span><span>Rush yds</span><span>Rec yds</span><span>TD</span></div>
+            {ncaaf.data.players.map((player) => {
+              const starredEntry = { playerId: player.id, team, name: player.name, position: player.position };
+              const ncaafStats: [string, string][] = [["GP", `${player.games ?? "—"}`], ["Pass yds", `${player.passYards ?? "—"}`], ["Rush yds", `${player.rushYards ?? "—"}`], ["Rec yds", `${player.recYards ?? "—"}`], ["TD", `${(player.passTds ?? 0) + (player.rushTds ?? 0) + (player.recTds ?? 0)}`]];
+              return <div className="roster-card" key={player.id}>
+                <button className="roster-card-main" onClick={() => setSelectedPlayer(player)} aria-label={`Open ${player.name} game log and charts`}>
+                  <span className="roster-card-head"><b>{player.jersey ? `#${player.jersey} ` : ""}{player.name}</b><small>{player.position}</small></span>
+                  <span className="roster-stat-grid">{ncaafStats.map(([label, value]) => <span key={label} className="roster-stat"><small>{label}</small><b>{value}</b></span>)}</span>
+                </button>
+                <PlayerWatchStar sport="ncaaf" playerId={starredEntry.playerId} team={starredEntry.team} name={starredEntry.name} position={starredEntry.position} />
+              </div>;
+            })}
+          </div></div>
+          <div className="source-box"><span>Source</span><a href={ncaaf.data.sourceUrl} target="_blank" rel="noreferrer">ESPN NCAAF data ↗</a><small>2026 regular season · aggregated from official game logs</small></div>
+        </>
+      ) : null}
+    </section>
+    {selectedPlayer && <NcaafPlayerStatsSheet key={selectedPlayer.id} player={selectedPlayer} team={team} onClose={() => setSelectedPlayer(null)} />}
+    </>
+  );
+}
+
 function NflHotStreaksView() {
   const [category, setCategory] = useState("Heat index");
   const [selected, setSelected] = useState<{ player: NflPlayer; team: NflTeamCode } | null>(null);
@@ -2056,6 +2321,26 @@ function NflHotStreaksView() {
     receptions: null, recYards: row.games.reduce((s, g) => s + g.recYards, 0), recTds: row.games.reduce((s, g) => s + g.recTds, 0),
   });
   return <section className="hot-section"><div className="roster-title"><div><p className="kicker">HOT STREAKS · NFL</p><h2>Who's cooking right now</h2><p className="roster-intro">Every qualifying streak is calculated from official recent NFL game data. Tap a player for the full stat file.</p></div>{hot.data && <div className="roster-update"><span>Updated {dateTime(hot.data.fetchedAt)}</span><button className="refresh" onClick={() => refresh.mutate()} disabled={refresh.isPending}>{refresh.isPending ? "Refreshing…" : "Refresh streaks"}</button></div>}</div><div className="metric-tabs hot-tabs">{["Heat index", "TD streak", "Yard streak", "Last-3 TDs"].map((name) => <button key={name} className={category === name ? "active" : ""} onClick={() => setCategory(name)}>{name}</button>)}</div>{hot.isPending ? <div className="loading"><span />Reading recent NFL game data…</div> : hot.isError ? <div className="error-state"><h2>Streak board unavailable.</h2><p>The ESPN feed did not answer.</p><button onClick={() => hot.refetch()}>Retry</button></div> : players.length === 0 ? <div className="history-empty"><strong>No qualifying streaks in the official window.</strong><span>Only real players with at least two recent appearances and a qualifying hot signal are shown.</span></div> : <div className="hot-list">{players.map((row, index) => <div className="hot-row-wrap" key={row.playerId}><button className="hot-row" onClick={() => setSelected({ player: toPlayer(row), team: row.team as NflTeamCode })} aria-label={`Open ${row.name} full stat file`}><span className="hot-rank">#{index + 1}</span><span className="hot-player"><strong>{row.name}</strong><small>{row.team} · NFL</small></span><span className="streak-badges">{row.tdStreak >= 2 && <b>{row.tdStreak}G TD streak</b>}{row.yardStreak >= 2 && <b>{row.yardStreak}G 100+ yd</b>}</span><span className="hot-totals"><b>{row.lastThreeTds} TD</b><small>{row.lastThreeYards} yds · last {row.games.length}</small></span><span className="spark-games">{row.games.map((game) => <i key={game.gameId} title={`Week ${game.week} vs ${game.opponent}`}>{game.totalTds} TD · {game.scrimmageYards + game.passYards} yds</i>)}</span></button><PlayerWatchStar sport="nfl" playerId={row.playerId} team={row.team} name={row.name} position={row.position} /></div>)}</div>}{hot.data && <div className="source-box"><span>Source</span><a href={hot.data.sourceUrl} target="_blank" rel="noreferrer">ESPN NFL game data ↗</a><small>{nflGameDate(hot.data.windowStart)}–{nflGameDate(hot.data.windowEnd)} · refreshed daily without sportsbook quota</small></div>}{selected && <NflPlayerStatsSheet player={selected.player} team={selected.team} onClose={() => setSelected(null)} />}</section>;
+}
+
+function NcaafHotStreaksView() {
+  const [category, setCategory] = useState("Heat index");
+  const [selected, setSelected] = useState<{ player: NcaafPlayer; team: NcaafTeamCode } | null>(null);
+  const hot = useQuery({ queryKey: ["ncaaf-hot-streaks"], queryFn: () => api.getNcaafHotStreaks({ force: false }), staleTime: 12 * 60 * 60 * 1000, retry: 1 });
+  const refresh = useMutation({ mutationFn: () => api.getNcaafHotStreaks({ force: true }), onSuccess: () => hot.refetch() });
+  const players = [...(hot.data?.players ?? [])].sort((a, b) => {
+    if (category === "TD streak") return b.tdStreak - a.tdStreak || b.lastThreeTds - a.lastThreeTds;
+    if (category === "Yard streak") return b.yardStreak - a.yardStreak || b.lastThreeYards - a.lastThreeYards;
+    if (category === "Last-3 TDs") return b.lastThreeTds - a.lastThreeTds;
+    return b.heatScore - a.heatScore;
+  });
+  const toPlayer = (row: NcaafHotStreaks["players"][number]): NcaafPlayer => ({
+    id: row.playerId, name: row.name, jersey: null, position: row.position, group: "offense",
+    games: row.games.length, passYards: row.games.reduce((s, g) => s + g.passYards, 0), passTds: row.games.reduce((s, g) => s + g.passTds, 0),
+    interceptions: null, rushYards: row.games.reduce((s, g) => s + g.rushYards, 0), rushTds: row.games.reduce((s, g) => s + g.rushTds, 0),
+    receptions: null, recYards: row.games.reduce((s, g) => s + g.recYards, 0), recTds: row.games.reduce((s, g) => s + g.recTds, 0),
+  });
+  return <section className="hot-section"><div className="roster-title"><div><p className="kicker">HOT STREAKS · NCAAF</p><h2>Who's cooking right now</h2><p className="roster-intro">Every qualifying streak is calculated from official recent NCAAF game data. Tap a player for the full stat file.</p></div>{hot.data && <div className="roster-update"><span>Updated {dateTime(hot.data.fetchedAt)}</span><button className="refresh" onClick={() => refresh.mutate()} disabled={refresh.isPending}>{refresh.isPending ? "Refreshing…" : "Refresh streaks"}</button></div>}</div><div className="metric-tabs hot-tabs">{["Heat index", "TD streak", "Yard streak", "Last-3 TDs"].map((name) => <button key={name} className={category === name ? "active" : ""} onClick={() => setCategory(name)}>{name}</button>)}</div>{hot.isPending ? <div className="loading"><span />Reading recent NCAAF game data…</div> : hot.isError ? <div className="error-state"><h2>Streak board unavailable.</h2><p>The ESPN feed did not answer.</p><button onClick={() => hot.refetch()}>Retry</button></div> : players.length === 0 ? <div className="history-empty"><strong>No qualifying streaks in the official window.</strong><span>Only real players with at least two recent appearances and a qualifying hot signal are shown.</span></div> : <div className="hot-list">{players.map((row, index) => <div className="hot-row-wrap" key={row.playerId}><button className="hot-row" onClick={() => setSelected({ player: toPlayer(row), team: row.team as NcaafTeamCode })} aria-label={`Open ${row.name} full stat file`}><span className="hot-rank">#{index + 1}</span><span className="hot-player"><strong>{row.name}</strong><small>{row.team} · NCAAF</small></span><span className="streak-badges">{row.tdStreak >= 2 && <b>{row.tdStreak}G TD streak</b>}{row.yardStreak >= 2 && <b>{row.yardStreak}G 100+ yd</b>}</span><span className="hot-totals"><b>{row.lastThreeTds} TD</b><small>{row.lastThreeYards} yds · last {row.games.length}</small></span><span className="spark-games">{row.games.map((game) => <i key={game.gameId} title={`Week ${game.week} vs ${game.opponent}`}>{game.totalTds} TD · {game.scrimmageYards + game.passYards} yds</i>)}</span></button><PlayerWatchStar sport="ncaaf" playerId={row.playerId} team={row.team} name={row.name} position={row.position} /></div>)}</div>}{hot.data && <div className="source-box"><span>Source</span><a href={hot.data.sourceUrl} target="_blank" rel="noreferrer">ESPN NCAAF game data ↗</a><small>{ncaafGameDate(hot.data.windowStart)}–{ncaafGameDate(hot.data.windowEnd)} · refreshed daily without sportsbook quota</small></div>}{selected && <NcaafPlayerStatsSheet player={selected.player} team={selected.team} onClose={() => setSelected(null)} />}</section>;
 }
 
 function NflCuttingBoard() {
@@ -2077,6 +2362,27 @@ function NflCuttingBoard() {
     receptions: null, recYards: row.games.reduce((s, g) => s + g.recYards, 0), recTds: row.games.reduce((s, g) => s + g.recTds, 0),
   });
   return <section className="hot-section cutting-board"><div className="roster-title"><div><p className="kicker">THE CUTTING BOARD · NFL</p><h2>Who's gone cold</h2><p className="roster-intro">Every slump is calculated from official recent NFL game data. Tap a player for the full stat file.</p></div>{cold.data && <div className="roster-update"><span>Updated {dateTime(cold.data.fetchedAt)}</span><button className="refresh" onClick={() => refresh.mutate()} disabled={refresh.isPending}>{refresh.isPending ? "Refreshing…" : "Refresh board"}</button></div>}</div><div className="metric-tabs hot-tabs">{["Coldest", "TD drought", "Last-3 yards", "Teams"].map((name) => <button key={name} className={category === name ? "active" : ""} onClick={() => setCategory(name)}>{name}</button>)}</div>{cold.isPending ? <div className="loading"><span />Reading recent NFL game data…</div> : cold.isError ? <div className="error-state"><h2>Cutting board unavailable.</h2><p>The ESPN feed did not answer.</p><button onClick={() => cold.refetch()}>Retry</button></div> : showTeams ? (teams.length === 0 ? <div className="history-empty"><strong>No team on a 2+ game slide right now.</strong><span>Every team has won at least one of its last two.</span></div> : <div className="hot-list">{teams.map((row, index) => <div className="hot-row-wrap" key={row.team}><div className="hot-row"><span className="hot-rank">#{index + 1}</span><span className="hot-player"><strong>{row.name}</strong><small>{row.team} · {row.gamesPlayed} GP</small></span><span className="streak-badges cold"><b>{row.streak} skid</b></span></div><TeamWatchStar sport="nfl" team={row.team} name={row.name} /></div>)}</div>) : players.length === 0 ? <div className="history-empty"><strong>No qualifying slumps in the official window.</strong><span>Only real players with at least two recent appearances and a qualifying cold signal are shown.</span></div> : <div className="hot-list">{players.map((row, index) => <div className="hot-row-wrap" key={row.playerId}><button className="hot-row" onClick={() => setSelected({ player: toPlayer(row), team: row.team as NflTeamCode })} aria-label={`Open ${row.name} full stat file`}><span className="hot-rank">#{index + 1}</span><span className="hot-player"><strong>{row.name}</strong><small>{row.team} · NFL</small></span><span className="streak-badges cold">{row.tdDrought >= 2 && <b>{row.tdDrought}G TD drought</b>}</span><span className="hot-totals"><b>{row.lastThreeTds} TD</b><small>{row.lastThreeYards} yds · last {row.games.length}</small></span><span className="spark-games">{row.games.map((game) => <i key={game.gameId} title={`Week ${game.week} vs ${game.opponent}`}>{game.totalTds} TD · {game.scrimmageYards + game.passYards} yds</i>)}</span></button><PlayerWatchStar sport="nfl" playerId={row.playerId} team={row.team} name={row.name} position={row.position} /></div>)}</div>}{cold.data && <div className="source-box"><span>Source</span><a href={cold.data.sourceUrl} target="_blank" rel="noreferrer">ESPN NFL game data ↗</a><small>{nflGameDate(cold.data.windowStart)}–{nflGameDate(cold.data.windowEnd)} · refreshed daily without sportsbook quota</small></div>}{selected && <NflPlayerStatsSheet player={selected.player} team={selected.team} onClose={() => setSelected(null)} />}</section>;
+}
+
+function NcaafCuttingBoard() {
+  const [category, setCategory] = useState("Coldest");
+  const [selected, setSelected] = useState<{ player: NcaafPlayer; team: NcaafTeamCode } | null>(null);
+  const cold = useQuery({ queryKey: ["ncaaf-cold-streaks"], queryFn: () => api.getNcaafColdStreaks({ force: false }), staleTime: 12 * 60 * 60 * 1000, retry: 1 });
+  const refresh = useMutation({ mutationFn: () => api.getNcaafColdStreaks({ force: true }), onSuccess: () => cold.refetch() });
+  const showTeams = category === "Teams";
+  const players = [...(cold.data?.players ?? [])].sort((a, b) => {
+    if (category === "TD drought") return b.tdDrought - a.tdDrought || b.coldScore - a.coldScore;
+    if (category === "Last-3 yards") return a.lastThreeYards - b.lastThreeYards;
+    return b.coldScore - a.coldScore;
+  });
+  const teams = [...(cold.data?.teams ?? [])].sort((a, b) => b.losses - a.losses);
+  const toPlayer = (row: NcaafColdStreaks["players"][number]): NcaafPlayer => ({
+    id: row.playerId, name: row.name, jersey: null, position: row.position, group: "offense",
+    games: row.games.length, passYards: row.games.reduce((s, g) => s + g.passYards, 0), passTds: row.games.reduce((s, g) => s + g.passTds, 0),
+    interceptions: null, rushYards: row.games.reduce((s, g) => s + g.rushYards, 0), rushTds: row.games.reduce((s, g) => s + g.rushTds, 0),
+    receptions: null, recYards: row.games.reduce((s, g) => s + g.recYards, 0), recTds: row.games.reduce((s, g) => s + g.recTds, 0),
+  });
+  return <section className="hot-section cutting-board"><div className="roster-title"><div><p className="kicker">THE CUTTING BOARD · NCAAF</p><h2>Who's gone cold</h2><p className="roster-intro">Every slump is calculated from official recent NCAAF game data. Tap a player for the full stat file.</p></div>{cold.data && <div className="roster-update"><span>Updated {dateTime(cold.data.fetchedAt)}</span><button className="refresh" onClick={() => refresh.mutate()} disabled={refresh.isPending}>{refresh.isPending ? "Refreshing…" : "Refresh board"}</button></div>}</div><div className="metric-tabs hot-tabs">{["Coldest", "TD drought", "Last-3 yards", "Teams"].map((name) => <button key={name} className={category === name ? "active" : ""} onClick={() => setCategory(name)}>{name}</button>)}</div>{cold.isPending ? <div className="loading"><span />Reading recent NCAAF game data…</div> : cold.isError ? <div className="error-state"><h2>Cutting board unavailable.</h2><p>The ESPN feed did not answer.</p><button onClick={() => cold.refetch()}>Retry</button></div> : showTeams ? (teams.length === 0 ? <div className="history-empty"><strong>No team on a 2+ game slide right now.</strong><span>Every team has won at least one of its last two.</span></div> : <div className="hot-list">{teams.map((row, index) => <div className="hot-row-wrap" key={row.team}><div className="hot-row"><span className="hot-rank">#{index + 1}</span><span className="hot-player"><strong>{row.name}</strong><small>{row.team} · {row.gamesPlayed} GP</small></span><span className="streak-badges cold"><b>{row.streak} skid</b></span></div><TeamWatchStar sport="ncaaf" team={row.team} name={row.name} /></div>)}</div>) : players.length === 0 ? <div className="history-empty"><strong>No qualifying slumps in the official window.</strong><span>Only real players with at least two recent appearances and a qualifying cold signal are shown.</span></div> : <div className="hot-list">{players.map((row, index) => <div className="hot-row-wrap" key={row.playerId}><button className="hot-row" onClick={() => setSelected({ player: toPlayer(row), team: row.team as NcaafTeamCode })} aria-label={`Open ${row.name} full stat file`}><span className="hot-rank">#{index + 1}</span><span className="hot-player"><strong>{row.name}</strong><small>{row.team} · NCAAF</small></span><span className="streak-badges cold">{row.tdDrought >= 2 && <b>{row.tdDrought}G TD drought</b>}</span><span className="hot-totals"><b>{row.lastThreeTds} TD</b><small>{row.lastThreeYards} yds · last {row.games.length}</small></span><span className="spark-games">{row.games.map((game) => <i key={game.gameId} title={`Week ${game.week} vs ${game.opponent}`}>{game.totalTds} TD · {game.scrimmageYards + game.passYards} yds</i>)}</span></button><PlayerWatchStar sport="ncaaf" playerId={row.playerId} team={row.team} name={row.name} position={row.position} /></div>)}</div>}{cold.data && <div className="source-box"><span>Source</span><a href={cold.data.sourceUrl} target="_blank" rel="noreferrer">ESPN NCAAF game data ↗</a><small>{ncaafGameDate(cold.data.windowStart)}–{ncaafGameDate(cold.data.windowEnd)} · refreshed daily without sportsbook quota</small></div>}{selected && <NcaafPlayerStatsSheet player={selected.player} team={selected.team} onClose={() => setSelected(null)} />}</section>;
 }
 
 function WatchlistView({ onViewTeam }: { onViewTeam: (sport: League, team: string) => void }) {
@@ -2352,7 +2658,7 @@ export function App(){
     try { localStorage.setItem(SOCCER_LEAGUE_KEY, next); } catch { /* private mode */ }
   }
   return isOwner ? <div className="app-shell owner-shell"><SafeAreaTopScrim backgroundColor="var(--paper)"/><ToastHost/><main><OwnerConsole/></main></div>
-  : <div className="app-shell"><SafeAreaTopScrim backgroundColor="var(--paper)"/><ToastHost/><InstallPrompt/><main>{mode==="board"&&<WelcomeBanner sport={sport} onTour={() => setTutorialOpen(true)}/>}<div className="topbar"><div className="sport-switch" role="group" aria-label="League"><button type="button" className={"sport-shape" + (sport === "nhl" ? " active" : "")} onClick={() => chooseSport("nhl")} aria-pressed={sport === "nhl"} aria-label="Hockey side"><span className="shape puck" aria-hidden="true" /><em>NHL</em></button><button type="button" className={"sport-shape" + (sport === "nfl" ? " active" : "")} onClick={() => chooseSport("nfl")} aria-pressed={sport === "nfl"} aria-label="Football side"><span className="shape ball" aria-hidden="true" /><em>NFL</em></button><button type="button" className={"sport-shape" + (sport === "nba" ? " active" : "")} onClick={() => chooseSport("nba")} aria-pressed={sport === "nba"} aria-label="Basketball side"><span className="shape hoop" aria-hidden="true" /><em>NBA</em></button><button type="button" className={"sport-shape" + (sport === "soccer" ? " active" : "")} onClick={() => chooseSport("soccer")} aria-pressed={sport === "soccer"} aria-label="Soccer side"><span className="shape soccerball" aria-hidden="true" /><em>SOC</em></button></div><nav className="mode-tabs shapes" aria-label="Data view">{([
+  : <div className="app-shell"><SafeAreaTopScrim backgroundColor="var(--paper)"/><ToastHost/><InstallPrompt/><main>{mode==="board"&&<WelcomeBanner sport={sport} onTour={() => setTutorialOpen(true)}/>}<div className="topbar"><div className="sport-switch" role="group" aria-label="League"><button type="button" className={"sport-shape" + (sport === "nhl" ? " active" : "")} onClick={() => chooseSport("nhl")} aria-pressed={sport === "nhl"} aria-label="Hockey side"><span className="shape puck" aria-hidden="true" /><em>NHL</em></button><button type="button" className={"sport-shape" + (sport === "nfl" ? " active" : "")} onClick={() => chooseSport("nfl")} aria-pressed={sport === "nfl"} aria-label="Football side"><span className="shape ball" aria-hidden="true" /><em>NFL</em></button><button type="button" className={"sport-shape" + (sport === "ncaaf" ? " active" : "")} onClick={() => chooseSport("ncaaf")} aria-pressed={sport === "ncaaf"} aria-label="College football side"><span className="shape gradcap" aria-hidden="true">🎓</span><em>NCAAF</em></button><button type="button" className={"sport-shape" + (sport === "nba" ? " active" : "")} onClick={() => chooseSport("nba")} aria-pressed={sport === "nba"} aria-label="Basketball side"><span className="shape hoop" aria-hidden="true" /><em>NBA</em></button><button type="button" className={"sport-shape" + (sport === "soccer" ? " active" : "")} onClick={() => chooseSport("soccer")} aria-pressed={sport === "soccer"} aria-label="Soccer side"><span className="shape soccerball" aria-hidden="true" /><em>SOC</em></button></div><nav className="mode-tabs shapes" aria-label="Data view">{([
         ["board", boardLabel],
         ["record", "Record"],
         ["jamon", "Ham Selection"],
