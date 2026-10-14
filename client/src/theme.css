@@ -1660,19 +1660,30 @@ html[data-dimmed="true"] .brightness-veil { display: block; }
 @media (prefers-reduced-motion: reduce) { .jamon-hero::before { animation: none; } }
 
 /* Ham Selection — three tiered plates */
-.ham-spread { display: grid; gap: 14px; }
-.ham-plate { text-align: left; cursor: pointer; border: 1px solid var(--border); border-radius: 16px; padding: 18px 18px 16px;
-  background: linear-gradient(180deg, rgba(255,255,255,.6), rgba(255,255,255,0) 60%), var(--surface);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.6), 0 10px 22px -12px rgba(var(--shadow-warm), .6);
-  transition: transform .12s ease; color: var(--text); font: inherit; width: 100%; }
-.ham-plate:active { transform: scale(.98); }
-.ham-plate-tier { display: inline-block; font-size: 13px; font-weight: 900; letter-spacing: .08em; color: var(--gold-deep);
-  border: 1px solid color-mix(in srgb, var(--gold) 55%, var(--border)); border-radius: 999px; padding: 3px 10px; margin-bottom: 8px;
-  background: color-mix(in srgb, var(--gold) 12%, transparent); }
-.ham-plate-name { display: block; font-size: 19px; margin-bottom: 2px; }
-.ham-plate-label { display: block; font-size: 12px; color: var(--dim); font-weight: 700; letter-spacing: .04em; text-transform: uppercase; margin-bottom: 6px; }
+.ham-spread { display: grid; gap: 18px; }
+/* Rectangular serving platter: ivory porcelain, gold rim, corner flourishes */
+.ham-plate { position: relative; text-align: left; cursor: pointer; width: 100%; font: inherit; color: var(--text);
+  border-radius: 10px; padding: 22px 26px 20px;
+  border: 2px solid color-mix(in srgb, var(--gold) 65%, #8a6a2f);
+  outline: 1px solid color-mix(in srgb, var(--gold) 35%, transparent);
+  outline-offset: 3px;
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='72' height='72' viewBox='0 0 72 72'%3E%3Cg fill='none' stroke='%23c9a227' stroke-width='1.4' opacity='.55'%3E%3Cpath d='M6 66 C 6 34, 34 6, 66 6'/%3E%3Cpath d='M12 66 C 12 40, 40 12, 66 12' opacity='.5'/%3E%3Ccircle cx='14' cy='58' r='2.2' fill='%23c9a227' stroke='none' opacity='.7'/%3E%3Ccircle cx='58' cy='14' r='2.2' fill='%23c9a227' stroke='none' opacity='.7'/%3E%3Cpath d='M20 66 q 4 -10 12 -12' opacity='.6'/%3E%3Cpath d='M66 20 q -10 4 -12 12' opacity='.6'/%3E%3C/g%3E%3C/svg%3E") top left / 72px 72px no-repeat,
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='72' height='72' viewBox='0 0 72 72'%3E%3Cg fill='none' stroke='%23c9a227' stroke-width='1.4' opacity='.55' transform='scale(-1,1) translate(-72,0)'%3E%3Cpath d='M6 66 C 6 34, 34 6, 66 6'/%3E%3Cpath d='M12 66 C 12 40, 40 12, 66 12' opacity='.5'/%3E%3Ccircle cx='14' cy='58' r='2.2' fill='%23c9a227' stroke='none' opacity='.7'/%3E%3Ccircle cx='58' cy='14' r='2.2' fill='%23c9a227' stroke='none' opacity='.7'/%3E%3Cpath d='M20 66 q 4 -10 12 -12' opacity='.6'/%3E%3Cpath d='M66 20 q -10 4 -12 12' opacity='.6'/%3E%3C/g%3E%3C/svg%3E") top right / 72px 72px no-repeat,
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='72' height='72' viewBox='0 0 72 72'%3E%3Cg fill='none' stroke='%23c9a227' stroke-width='1.4' opacity='.55' transform='scale(1,-1) translate(0,-72)'%3E%3Cpath d='M6 66 C 6 34, 34 6, 66 6'/%3E%3Cpath d='M12 66 C 12 40, 40 12, 66 12' opacity='.5'/%3E%3Ccircle cx='14' cy='58' r='2.2' fill='%23c9a227' stroke='none' opacity='.7'/%3E%3Ccircle cx='58' cy='14' r='2.2' fill='%23c9a227' stroke='none' opacity='.7'/%3E%3Cpath d='M20 66 q 4 -10 12 -12' opacity='.6'/%3E%3Cpath d='M66 20 q -10 4 -12 12' opacity='.6'/%3E%3C/g%3E%3C/svg%3E") bottom left / 72px 72px no-repeat,
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='72' height='72' viewBox='0 0 72 72'%3E%3Cg fill='none' stroke='%23c9a227' stroke-width='1.4' opacity='.55' transform='scale(-1,-1) translate(-72,-72)'%3E%3Cpath d='M6 66 C 6 34, 34 6, 66 6'/%3E%3Cpath d='M12 66 C 12 40, 40 12, 66 12' opacity='.5'/%3E%3Ccircle cx='14' cy='58' r='2.2' fill='%23c9a227' stroke='none' opacity='.7'/%3E%3Ccircle cx='58' cy='14' r='2.2' fill='%23c9a227' stroke='none' opacity='.7'/%3E%3Cpath d='M20 66 q 4 -10 12 -12' opacity='.6'/%3E%3Cpath d='M66 20 q -10 4 -12 12' opacity='.6'/%3E%3C/g%3E%3C/svg%3E") bottom right / 72px 72px no-repeat,
+    radial-gradient(120% 90% at 50% 0%, #fffdf7 0%, #f7f0dd 55%, #efe3c6 100%);
+  box-shadow: inset 0 2px 6px rgba(255,255,255,.9), inset 0 -8px 18px rgba(160,120,50,.14), 0 14px 28px -14px rgba(var(--shadow-warm), .7);
+  transition: transform .12s ease; overflow: hidden; }
+.ham-plate:active { transform: scale(.985); }
+.ham-plate-tier { display: inline-block; font-size: 13px; font-weight: 900; letter-spacing: .1em; color: #6b4d15;
+  border: 1px solid color-mix(in srgb, var(--gold) 70%, #8a6a2f); border-radius: 999px; padding: 4px 12px; margin-bottom: 10px;
+  background: linear-gradient(180deg, #fff6df, #f0dfb2);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.8), 0 2px 5px rgba(120,85,25,.25); }
+.ham-plate-name { display: block; font-size: 20px; margin-bottom: 3px; letter-spacing: -.01em; }
+.ham-plate-label { display: block; font-size: 12px; color: var(--dim); font-weight: 700; letter-spacing: .06em; text-transform: uppercase; margin-bottom: 8px; }
 .ham-plate-desc { display: block; font-size: 13px; color: var(--text); line-height: 1.45; }
-.ham-plate-empty { display: block; margin-top: 8px; font-size: 12px; color: var(--dim); font-style: normal; }
+.ham-plate-empty { display: block; margin-top: 10px; font-size: 12px; color: var(--dim); font-style: italic; }
 .ham-plate-sheet { max-height: 88vh; overflow: auto; }
 .ham-plate-image { width: 100%; border-radius: 12px; border: 1px solid var(--border); display: block; }
 
