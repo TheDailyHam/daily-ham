@@ -334,17 +334,28 @@ function parsePremiumPayload(sport: Sport, raw: unknown, fetchedAt: Date): z.inf
   return { sport, fetchedAt: fetchedAt.toISOString(), eventCount: events.length, marketCount, offerCount: offers.length, offers, cacheStatus: "fresh", healthMessage: "Odds updated successfully" };
 }
 
-async function loadOddsProvider(ctx: Ctx): Promise<OddsProvider> {
-  // The ODDS_API_KEY environment variable takes precedence, then a The Odds
-  // API key saved through the Settings UI (provider_credentials table).
-  // Otherwise fall back to the SportsGameOdds key (env var or saved key).
+async function loadOddsProviders(ctx: Ctx): Promise<OddsProvider[]> {
+  // Build a resilient chain: try each available key in order, falling through
+  // to the next if one is rejected. The ODDS_API_KEY environment variable
+  // goes first, then a The Odds API key saved through the Settings UI,
+  // then SportsGameOdds (env var or saved key).
+  const providers: OddsProvider[] = [];
   const envKey = process.env.ODDS_API_KEY?.trim();
-  if (envKey) return { name: "theoddsapi", apiKey: envKey };
+  if (envKey) providers.push({ name: "theoddsapi", apiKey: envKey });
   const rows = await ctx.db.select({ secretValue: schema.providerCredentials.secretValue }).from(schema.providerCredentials).where(eq(schema.providerCredentials.provider, "theoddsapi")).limit(1);
   const dbKey = rows[0]?.secretValue.trim();
-  if (dbKey) return { name: "theoddsapi", apiKey: dbKey };
-  const apiKey = await loadProviderKey(ctx);
-  return { name: "sportsgameodds", apiKey };
+  if (dbKey && dbKey !== envKey) providers.push({ name: "theoddsapi", apiKey: dbKey });
+  try {
+    const sgKey = await loadProviderKey(ctx);
+    if (sgKey) providers.push({ name: "sportsgameodds", apiKey: sgKey });
+  } catch { /* no SportsGameOdds key available */ }
+  return providers;
+}
+
+async function loadOddsProvider(ctx: Ctx): Promise<OddsProvider> {
+  const providers = await loadOddsProviders(ctx);
+  if (!providers[0]) throw new Error("No odds provider keys configured. Add a key in the owner console.");
+  return providers[0];
 }
 
 // Soccer odds cover two leagues (MLS + EPL): one provider request per
@@ -424,8 +435,24 @@ async function loadPremium(ctx: Ctx, sport: Sport): Promise<z.infer<typeof premi
   const cached = cachedRows[0];
   if (cached && cached.expiresAt.getTime() > Date.now()) return premiumResponse.parse(JSON.parse(cached.payloadJson));
   try {
-    const provider = await loadOddsProvider(ctx);
-    return await fetchPremiumAndCache(ctx, sport, provider);
+    const providers = await loadOddsProviders(ctx);
+    if (!providers[0]) throw new Error("No odds provider keys configured. Add a key in the owner console.");
+    let lastError: unknown = null;
+    for (const provider of providers) {
+      try {
+        return await fetchPremiumAndCache(ctx, sport, provider);
+      } catch (error) {
+        // If the key was rejected, try the next provider in the chain.
+        // For other errors (network, etc.), stop and surface it.
+        const msg = error instanceof Error ? error.message : "";
+        if (msg.includes("rejected the saved key")) {
+          lastError = error;
+          continue;
+        }
+        throw error;
+      }
+    }
+    throw lastError ?? new Error("All odds providers failed.");
   } catch (error) {
     if (!cached) throw error;
     const parsed = premiumResponse.parse(JSON.parse(cached.payloadJson));
@@ -792,14 +819,26 @@ async function ensureBacktestSeed(ctx: Ctx): Promise<void> {
 
 async function refreshAllPremium(ctx: Ctx): Promise<z.infer<typeof premiumRefreshResponse>> {
   const refreshedAt = new Date();
-  let provider: OddsProvider;
-  try { provider = await loadOddsProvider(ctx); }
+  let providers: OddsProvider[];
+  try {
+    providers = await loadOddsProviders(ctx);
+    if (!providers[0]) throw new Error("No odds provider keys configured.");
+  }
   catch (error) { return { status: "failed", refreshedAt: refreshedAt.toISOString(), refreshedSports: 0, message: error instanceof Error ? error.message : "Sportsbook connection is not configured." }; }
   let refreshedSports = 0;
   const failures: string[] = [];
   for (const sport of sports) {
-    try { await fetchPremiumAndCache(ctx, sport, provider); refreshedSports += 1; }
-    catch (error) { failures.push(`${sport.toUpperCase()}: ${error instanceof Error ? error.message : "refresh failed"}`); }
+    let sportOk = false;
+    let lastError: unknown = null;
+    for (const provider of providers) {
+      try { await fetchPremiumAndCache(ctx, sport, provider); refreshedSports += 1; sportOk = true; break; }
+      catch (error) {
+        const msg = error instanceof Error ? error.message : "";
+        if (msg.includes("rejected the saved key")) { lastError = error; continue; }
+        lastError = error; break;
+      }
+    }
+    if (!sportOk) failures.push(`${sport.toUpperCase()}: ${lastError instanceof Error ? lastError.message : "refresh failed"}`);
   }
   // Transparent track record: snapshot pregame model picks + book prices and
   // grade newly completed games. Runs on the fresh odds above; never throws.
