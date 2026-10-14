@@ -3465,27 +3465,6 @@ async function loadBookRead(
   };
 }
 
-const plateSchema = z.object({
-  id: z.string(),
-  sport: z.enum(sports),
-  matchup: z.string(),
-  pick: z.string(),
-  note: z.string().nullable(),
-  isPublic: z.boolean(),
-  createdAt: z.string(),
-});
-const platesResponse = z.object({ plates: z.array(plateSchema) });
-
-function toPlate(row: typeof schema.codyPlates.$inferSelect): z.infer<typeof plateSchema> {
-  return { id: row.id, sport: row.sport, matchup: row.matchup, pick: row.pick, note: row.note, isPublic: row.isPublic === 1, createdAt: row.createdAt.toISOString() };
-}
-
-async function listPlates(ctx: Ctx, publicOnly: boolean): Promise<z.infer<typeof platesResponse>> {
-  const base = ctx.db.select().from(schema.codyPlates).orderBy(desc(schema.codyPlates.createdAt));
-  const rows = publicOnly ? await base.where(eq(schema.codyPlates.isPublic, 1)) : await base;
-  return { plates: rows.map(toPlate) };
-}
-
 // ---------------------------------------------------------------------------
 // Key-player injury warnings (Job 2).
 //
@@ -3999,36 +3978,33 @@ export const Actions = {
   getLikelyScorers: defineAction({ request: z.object({ sport: z.enum(sports), league: z.enum(soccerLeagues).optional(), force: z.boolean().default(false) }), response: likelyScorersResponse, async handler(ctx, args) { return fetchLikelyScorers(ctx, args.sport, args.force, args.league); } }),
   getMatchupScorers: defineAction({ request: z.object({ sport: z.enum(sports), away: z.string().min(1), home: z.string().min(1), league: z.enum(soccerLeagues).optional() }), response: matchupScorersResponse, async handler(ctx, args) { return fetchMatchupScorers(ctx, args.sport, args.away, args.home, args.league); } }),
   getBookRead: defineAction({ request: z.object({ sport: z.enum(sports), awayTeam: z.string().min(1), homeTeam: z.string().min(1), league: z.string().nullable().optional() }), response: bookReadResponse, async handler(ctx, args) { return loadBookRead(ctx, args.sport, args.awayTeam, args.homeTeam, args.league ?? null); } }),
-  getPublicPlates: defineAction({ request: z.object({}), response: platesResponse, async handler(ctx) { return listPlates(ctx, true); } }),
-  getMyPlates: defineAction({ request: z.object({ adminToken: adminTokenSchema }), response: platesResponse, async handler(ctx, args) { requireAdmin(args); return listPlates(ctx, false); } }),
-  savePlate: defineAction({
-    request: z.object({
-      adminToken: adminTokenSchema,
-      plate: z.object({
-        id: z.string().min(1).max(64).optional(),
-        sport: z.enum(sports),
-        matchup: z.string().trim().min(1).max(120),
-        pick: z.string().trim().min(1).max(120),
-        note: z.string().trim().max(600).optional().default(""),
-        isPublic: z.boolean().default(true),
-      }),
-    }),
-    response: plateSchema,
-    async handler(ctx, args) {
-      requireAdmin(args);
-      const input = args.plate;
-      const id = input.id ?? crypto.randomUUID();
-      const values = { id, sport: input.sport, matchup: input.matchup, pick: input.pick, note: input.note || null, isPublic: input.isPublic ? 1 : 0, createdAt: new Date() };
-      await ctx.db.insert(schema.codyPlates).values(values).onConflictDoUpdate({ target: schema.codyPlates.id, set: { sport: values.sport, matchup: values.matchup, pick: values.pick, note: values.note, isPublic: values.isPublic } });
-      const rows = await ctx.db.select().from(schema.codyPlates).where(eq(schema.codyPlates.id, id)).limit(1);
-      if (!rows[0]) throw new Error("Plate could not be saved.");
-      return toPlate(rows[0]);
+  getHamPlates: defineAction({
+    request: z.object({}),
+    response: z.object({ plates: z.array(z.object({
+      slug: z.string(), name: z.string(), tierLabel: z.string(), tierOdds: z.string(),
+      imageData: z.string().nullable(), description: z.string().nullable(),
+    })) }),
+    async handler(ctx) {
+      const rows = await ctx.db.select().from(schema.hamSelectionPlates).orderBy(schema.hamSelectionPlates.sortOrder);
+      return { plates: rows.map((r) => ({ slug: r.slug, name: r.name, tierLabel: r.tierLabel, tierOdds: r.tierOdds, imageData: r.imageData, description: r.description })) };
     },
   }),
-  deletePlate: defineAction({
-    request: z.object({ adminToken: adminTokenSchema, id: z.string().min(1).max(64) }),
-    response: z.object({ deleted: z.boolean() }),
-    async handler(ctx, args) { requireAdmin(args); await ctx.db.delete(schema.codyPlates).where(eq(schema.codyPlates.id, args.id)); return { deleted: true }; },
+  saveHamPlate: defineAction({
+    request: z.object({
+      adminToken: adminTokenSchema,
+      slug: z.string().min(1).max(32),
+      imageData: z.string().max(15_000_000).nullable().optional(),
+      description: z.string().trim().max(600).nullable().optional(),
+    }),
+    response: z.object({ saved: z.boolean() }),
+    async handler(ctx, args) {
+      requireAdmin(args);
+      const set: { imageData?: string | null; description?: string | null; updatedAt: Date } = { updatedAt: new Date() };
+      if (args.imageData !== undefined) set.imageData = args.imageData;
+      if (args.description !== undefined) set.description = args.description;
+      await ctx.db.update(schema.hamSelectionPlates).set(set).where(eq(schema.hamSelectionPlates.slug, args.slug));
+      return { saved: true };
+    },
   }),  getNflRoster: defineAction({ request: z.object({ team: z.enum(nflTeamCodes) }), response: nflRosterResponse, async handler(ctx, args) { return loadNflRoster(ctx, args.team); } }),
   getNflPlayerGameLog: defineAction({ request: z.object({ team: z.enum(nflTeamCodes), playerId: z.number().int().positive() }), response: nflGameLogResponse, async handler(ctx, args) { return loadNflPlayerGameLog(ctx, args.team, args.playerId); } }),
   getNbaRoster: defineAction({ request: z.object({ team: z.enum(nbaTeamCodes) }), response: nbaRosterResponse, async handler(ctx, args) { return loadNbaRoster(ctx, args.team); } }),

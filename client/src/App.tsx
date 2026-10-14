@@ -602,8 +602,6 @@ function ParlayView({ parlay, setParlay, sport, onGoBoard }: { parlay: ParlayPic
   </section>;
 }
 
-type CodyPlate = ApiResponse<typeof api, "getPublicPlates">["plates"][number];
-
 // Plate league label. Cast to string: the server widens the sport enum as
 // new sides land; unknown values render uppercased rather than crashing.
 function plateLeagueLabel(sport: string): string {
@@ -619,7 +617,7 @@ const TUTORIAL_SLIDES: { icon: string; kicker: string; title: string; points: st
   { icon: "🏒", kicker: "PICK YOUR SIDE", title: "Hockey, football, basketball, soccer?", points: [
     "Tap NHL / NFL / NBA / SOC at the top to switch leagues — each side is built to full depth.",
     "Hit My team on the welcome card and pick your squad: the whole app, background included, dresses in your team's colors. Each side shows only its own league's teams.",
-    "The tabs below are your cutting board: Board, Jamón Ibérico, Parlay, Matchup, Players, Streaks, League, Watchlist, Settings.",
+    "The tabs below are your cutting board: Board, Ham Selection, Parlay, Matchup, Players, Streaks, League, Watchlist, Settings.",
   ]},
   { icon: "🏒", kicker: "THE ICE", title: "Hockey, full depth.", points: [
     "The NHL side runs the full engine: the board, the matchup calculator, rosters, streaks, and league standings.",
@@ -741,9 +739,10 @@ const TUTORIAL_SLIDES: { icon: string; kicker: string; title: string; points: st
     "Your Watchlist keeps every starred player and team one tap away.",
     "Team cards open the full team file with the depth chart.",
   ]},
-  { icon: "🍽️", kicker: "JAMÓN IBÉRICO", title: "Cody's picks", points: [
-    "The golden plate tab holds Cody's personal picks, plated for public viewing.",
-    "These are his reads — not model output, not sportsbook lines.",
+  { icon: "🍽️", kicker: "HAM SELECTION", title: "Cody's picks", points: [
+    "The Ham Selection tab holds Cody's personal picks on three tiered plates.",
+    "Jamón Ibérico de Bellota is the top tier (+1500 odds and up), Prosciutto di Parma the middle (+900), Prosciutto di San Daniele the everyday plate (+500).",
+    "Tap any plate to see Cody's picks image. These are his reads — not model output, not sportsbook lines.",
   ]},
   { icon: "⚙️", kicker: "MAKE IT YOURS", title: "Settings", points: [
     "Brightness slider and scroll feel, saved per device.",
@@ -871,36 +870,42 @@ function RecordView() {
   </section>;
 }
 
-function JamonView({ sport }: { sport: Sport }) {
-  const [adminToken] = useState<string | null>(() => {
-    try { return sessionStorage.getItem(ADMIN_SESSION_KEY); } catch { return null; }
-  });
+function HamSelectionView() {
   const plates = useQuery({
-    queryKey: ["jamon-plates", !!adminToken],
-    queryFn: async () => {
-      const data = adminToken ? await api.getMyPlates({ adminToken }) : await api.getPublicPlates({});
-      return data.plates;
-    },
+    queryKey: ["ham-plates"],
+    queryFn: () => api.getHamPlates({}),
     staleTime: 5 * 60 * 1000,
     retry: 1,
   });
-  const visible = (plates.data ?? []).filter((plate) => plate.sport === sport);
-  return <section className="jamon-view" aria-label="Jamón Ibérico — Cody's picks">
+  const [selected, setSelected] = useState<{ slug: string; name: string; tierOdds: string; imageData: string | null } | null>(null);
+  const list = plates.data?.plates ?? [];
+  return <section className="jamon-view ham-selection" aria-label="Ham Selection — Cody's picks">
     <div className="jamon-hero">
-      <p className="kicker">JAMÓN IBÉRICO</p>
+      <p className="kicker">HAM SELECTION</p>
       <h1>Cody's picks</h1>
-      <p>The premium cut — {sport === "nhl" ? "hockey" : sport === "nfl" ? "football" : sport === "nba" ? "basketball" : "soccer"} picks, plated by hand.</p>
+      <p>Three cuts, three tiers. Tap a plate to see what's on it.</p>
     </div>
-    {plates.isPending ? <div className="slate-loading">Plating the picks…</div> : visible.length === 0 ? (
-      <div className="history-empty jamon-empty"><strong>No picks plated yet.</strong><span>{adminToken ? "Add your first plate in Settings → My plates." : "Check back soon — Cody's personal picks land here."}</span></div>
+    {plates.isPending ? <div className="slate-loading">Plating the picks…</div> : list.length === 0 ? (
+      <div className="history-empty jamon-empty"><strong>No plates yet.</strong><span>Check back soon — Cody's picks land here.</span></div>
     ) : (
-      <div className="jamon-spread">{visible.map((plate) => <article className="jamon-plate large" key={plate.id}>
-        <div className="plate-top"><span className="plate-league">{plateLeagueLabel(plate.sport as string)}</span>{!plate.isPublic && <em className="plate-private">Private</em>}</div>
-        <small className="plate-matchup">{plate.matchup}</small>
-        <strong className="plate-pick">{plate.pick}</strong>
-        {plate.note ? <p className="plate-note">{plate.note}</p> : null}
-      </article>)}</div>
+      <div className="ham-spread">{list.map((plate) => <button type="button" className="ham-plate" key={plate.slug}
+        onClick={() => setSelected({ slug: plate.slug, name: plate.name, tierOdds: plate.tierOdds, imageData: plate.imageData })}
+        aria-label={`Open ${plate.name} — ${plate.tierOdds} tier`}>
+        <span className="ham-plate-tier">{plate.tierOdds}</span>
+        <strong className="ham-plate-name">{plate.name}</strong>
+        <small className="ham-plate-label">{plate.tierLabel}</small>
+        {plate.description ? <span className="ham-plate-desc">{plate.description}</span> : null}
+        {!plate.imageData && <em className="ham-plate-empty">Picks coming soon</em>}
+      </button>)}</div>
     )}
+    {selected && <div className="sheet-backdrop" onClick={() => setSelected(null)}>
+      <div className="sheet ham-plate-sheet" role="dialog" aria-label={selected.name} onClick={(e) => e.stopPropagation()}>
+        <div className="sheet-head"><div><p className="kicker">{selected.tierOdds} TIER</p><h3>{selected.name}</h3></div>
+          <button type="button" className="sheet-close" onClick={() => setSelected(null)} aria-label="Close">✕</button></div>
+        {selected.imageData ? <img className="ham-plate-image" src={selected.imageData} alt={`${selected.name} picks`} />
+          : <p className="mvb-note">Cody hasn't plated this one yet — check back soon.</p>}
+      </div>
+    </div>}
     <p className="jamon-foot">Cody's personal picks — his read, not model output and not a sportsbook line.</p>
   </section>;
 }
@@ -1443,67 +1448,91 @@ function DisplaySettings() {
   </section>;
 }
 
-function PlatesManager({ adminToken }: { adminToken: string }) {
-  const plates = useQuery({ queryKey: ["jamon-mine", "manager"], queryFn: () => api.getMyPlates({ adminToken }), staleTime: 60 * 1000, retry: 1 });
-  const [sport, setSport] = useState<Sport>("nhl");
-  const [matchup, setMatchup] = useState("");
-  const [play, setPlay] = useState("");
-  const [note, setNote] = useState("");
-  const [isPublic, setIsPublic] = useState(true);
-  const [editing, setEditing] = useState<CodyPlate | null>(null);
+function HamSelectionManager({ adminToken }: { adminToken: string }) {
+  const plates = useQuery({ queryKey: ["ham-plates", "manager"], queryFn: () => api.getHamPlates({}), staleTime: 60 * 1000, retry: 1 });
+  const [descriptions, setDescriptions] = useState<Record<string, string>>({});
+  const [previews, setPreviews] = useState<Record<string, string>>({});
   const [message, setMessage] = useState<string | null>(null);
+  const [saving, setSaving] = useState<string | null>(null);
 
-  function reset() {
-    setSport("nhl"); setMatchup(""); setPlay(""); setNote(""); setIsPublic(true); setEditing(null);
-  }
-  function startEdit(plate: CodyPlate) {
-    setEditing(plate); setSport(plate.sport as Sport); setMatchup(plate.matchup); setPlay(plate.pick); setNote(plate.note ?? ""); setIsPublic(plate.isPublic);
-    setMessage(null);
-  }
-  const save = useMutation({
-    // The server widens the plate sport enum as new sides land; cast for the
-    // parallel soccer leg (fails gracefully server-side until then).
-    mutationFn: () => api.savePlate({ adminToken, plate: { id: editing?.id, sport: sport as "nhl", matchup: matchup.trim(), pick: play.trim(), note: note.trim(), isPublic } }),
-    onSuccess: () => { setMessage(editing ? "Plate updated." : "Plate added — it's live."); reset(); plates.refetch(); },
-    onError: (error) => setMessage(error instanceof Error ? error.message : "Could not save the plate."),
-  });
-  const remove = useMutation({
-    mutationFn: (id: string) => api.deletePlate({ adminToken, id }),
-    onSuccess: () => { setMessage("Plate removed."); if (editing) reset(); plates.refetch(); },
-    onError: (error) => setMessage(error instanceof Error ? error.message : "Could not delete the plate."),
-  });
-  const valid = matchup.trim().length > 0 && play.trim().length > 0;
+  const list = plates.data?.plates ?? [];
+  const getDesc = (slug: string, fallback: string | null) => descriptions[slug] ?? fallback ?? "";
 
-  return <section className="credential-card plates-manager" aria-label="Jamón Ibérico plate manager">
-    <div className="credential-status"><span className="status-dot configured" /><div><small>JAMÓN IBÉRICO</small><strong>My plates</strong><span>Unlimited — public plates show on the board, private plates are only visible to you.</span></div></div>
-    <form onSubmit={(event) => { event.preventDefault(); if (valid && !save.isPending) save.mutate(); }}>
-      <div className="plate-form-grid">
-        <label>Sport<select value={sport} onChange={(event) => setSport(event.target.value as Sport)}><option value="nhl">NHL</option><option value="nfl">NFL</option><option value="nba">NBA</option><option value="soccer">Soccer</option></select></label>
-        <label>Matchup<input value={matchup} onChange={(event) => setMatchup(event.target.value)} placeholder="WSH @ NYR" maxLength={120} /></label>
-      </div>
-      <label>The pick<input value={play} onChange={(event) => setPlay(event.target.value)} placeholder="Capitals ML" maxLength={120} /></label>
-      <label>Note <small>(optional)</small><textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="Why you like it…" maxLength={600} rows={2} /></label>
-      <div className="plate-visibility">
-        <button type="button" className={isPublic ? "active" : ""} onClick={() => setIsPublic(true)}>Public — everyone sees it</button>
-        <button type="button" className={!isPublic ? "active private" : ""} onClick={() => setIsPublic(false)}>Private — just me</button>
-      </div>
-      <div className="plate-form-actions">
-        <button className="primary" type="submit" disabled={!valid || save.isPending}>{save.isPending ? "Plating…" : editing ? "Update plate" : "Add plate"}</button>
-        {editing && <button type="button" className="slip-clear" onClick={reset}>Cancel</button>}
-      </div>
-    </form>
+  function handleFile(slug: string, file: File | undefined) {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) { setMessage("Please choose an image file."); return; }
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const maxDim = 1200;
+      const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      canvas.getContext("2d")?.drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(url);
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+      setPreviews((p) => ({ ...p, [slug]: dataUrl }));
+      setMessage(null);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); setMessage("Could not read that image."); };
+    img.src = url;
+  }
+
+  async function savePlate(slug: string) {
+    const plate = list.find((p) => p.slug === slug);
+    if (!plate) return;
+    setSaving(slug); setMessage(null);
+    try {
+      await api.saveHamPlate({
+        adminToken, slug,
+        ...(previews[slug] !== undefined ? { imageData: previews[slug] } : {}),
+        ...(descriptions[slug] !== undefined ? { description: descriptions[slug] } : {}),
+      } as Parameters<typeof api.saveHamPlate>[0]);
+      setMessage(`${plate.name} updated — it's live.`);
+      setPreviews((p) => { const n = { ...p }; delete n[slug]; return n; });
+      setDescriptions((d) => { const n = { ...d }; delete n[slug]; return n; });
+      plates.refetch();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not save the plate.");
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  async function clearImage(slug: string) {
+    const plate = list.find((p) => p.slug === slug);
+    if (!plate || !confirm(`Remove the picks image from ${plate.name}?`)) return;
+    setSaving(slug);
+    try {
+      await api.saveHamPlate({ adminToken, slug, imageData: null });
+      setMessage(`${plate.name} image removed.`);
+      setPreviews((p) => { const n = { ...p }; delete n[slug]; return n; });
+      plates.refetch();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not remove the image.");
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  return <section className="credential-card plates-manager" aria-label="Ham Selection plate manager">
+    <div className="credential-status"><span className="status-dot configured" /><div><small>HAM SELECTION</small><strong>My plates</strong><span>Upload your picks image for each tier — visitors see them in the Ham Selection tab.</span></div></div>
     {message && <p className="settings-message" role="status">{message}</p>}
-    <div className="plate-list">
-      {plates.isPending ? <p className="settings-message">Loading your plates…</p> : (plates.data?.plates ?? []).length === 0 ? <p className="settings-message">No plates yet — add your first one above.</p> :
-        (plates.data?.plates ?? []).map((plate) => <div className="plate-row" key={plate.id}>
-          <div><strong>{plate.pick}</strong><small>{plate.sport.toUpperCase()} · {plate.matchup}</small>{plate.note ? <span>{plate.note}</span> : null}</div>
-          <em className={plate.isPublic ? "plate-badge public" : "plate-badge private"}>{plate.isPublic ? "Public" : "Private"}</em>
-          <div className="plate-row-actions">
-            <button type="button" onClick={() => startEdit(plate)}>Edit</button>
-            <button type="button" className="danger" onClick={() => remove.mutate(plate.id)} disabled={remove.isPending}>Delete</button>
+    {plates.isPending ? <p className="settings-message">Loading your plates…</p> :
+      list.map((plate) => {
+        const preview = previews[plate.slug] ?? plate.imageData;
+        return <div className="ham-manager-plate" key={plate.slug}>
+          <div className="ham-manager-head"><div><strong>{plate.name}</strong><small>{plate.tierLabel} · {plate.tierOdds} odds</small></div></div>
+          {preview ? <img className="ham-manager-preview" src={preview} alt={`${plate.name} current picks`} /> : <p className="settings-message">No image yet.</p>}
+          <label className="ham-upload">Upload picks image<input accept="image/*" type="file" onChange={(e) => handleFile(plate.slug, e.target.files?.[0])} /></label>
+          <label>Description<textarea value={getDesc(plate.slug, plate.description)} onChange={(e) => setDescriptions((d) => ({ ...d, [plate.slug]: e.target.value }))} maxLength={600} rows={2} placeholder="What's on this plate…" /></label>
+          <div className="plate-form-actions">
+            <button className="primary" type="button" onClick={() => savePlate(plate.slug)} disabled={saving === plate.slug}>{saving === plate.slug ? "Saving…" : "Save plate"}</button>
+            {plate.imageData && <button type="button" className="slip-clear" onClick={() => clearImage(plate.slug)}>Remove image</button>}
           </div>
-        </div>)}
-    </div>
+        </div>;
+      })}
   </section>;
 }
 
@@ -1573,7 +1602,7 @@ function OwnerConsole() {
       <ProviderCard storageKey="sportsgameodds" providerLabel="SportsGameOdds" statusQueryKey="sports-game-odds-key-status" getStatus={() => api.getSportsGameOddsKeyStatus({})} saveKey={(args) => api.saveSportsGameOddsKey(args)} removeKey={(args) => api.removeSportsGameOddsKey(args)} helpText="The field is cleared immediately after submission. The saved value is never displayed." adminToken={adminToken} />
       <ProviderCard storageKey="theoddsapi" providerLabel="The Odds API" statusQueryKey="odds-api-key-status" getStatus={() => api.getOddsApiKeyStatus({})} saveKey={(args) => api.saveOddsApiKey(args)} removeKey={(args) => api.removeOddsApiKey(args)} helpText="Free tier: 500 requests/month, no credit card — one board refresh costs a single request. Get a key at the-odds-api.com. The field is cleared immediately after submission." adminToken={adminToken} />
     </>}
-    {gateConfigured && adminToken && <PlatesManager adminToken={adminToken} />}
+    {gateConfigured && adminToken && <HamSelectionManager adminToken={adminToken} />}
     {gateConfigured && adminToken && <UsagePanel adminToken={adminToken} />}
   </section></div>;
 }
@@ -2326,7 +2355,7 @@ export function App(){
   : <div className="app-shell"><SafeAreaTopScrim backgroundColor="var(--paper)"/><ToastHost/><InstallPrompt/><main>{mode==="board"&&<WelcomeBanner sport={sport} onTour={() => setTutorialOpen(true)}/>}<div className="topbar"><div className="sport-switch" role="group" aria-label="League"><button type="button" className={"sport-shape" + (sport === "nhl" ? " active" : "")} onClick={() => chooseSport("nhl")} aria-pressed={sport === "nhl"} aria-label="Hockey side"><span className="shape puck" aria-hidden="true" /><em>NHL</em></button><button type="button" className={"sport-shape" + (sport === "nfl" ? " active" : "")} onClick={() => chooseSport("nfl")} aria-pressed={sport === "nfl"} aria-label="Football side"><span className="shape ball" aria-hidden="true" /><em>NFL</em></button><button type="button" className={"sport-shape" + (sport === "nba" ? " active" : "")} onClick={() => chooseSport("nba")} aria-pressed={sport === "nba"} aria-label="Basketball side"><span className="shape hoop" aria-hidden="true" /><em>NBA</em></button><button type="button" className={"sport-shape" + (sport === "soccer" ? " active" : "")} onClick={() => chooseSport("soccer")} aria-pressed={sport === "soccer"} aria-label="Soccer side"><span className="shape soccerball" aria-hidden="true" /><em>SOC</em></button></div><nav className="mode-tabs shapes" aria-label="Data view">{([
         ["board", boardLabel],
         ["record", "Record"],
-        ["jamon", "Jamón Ibérico"],
+        ["jamon", "Ham Selection"],
         ["parlay", parlay.length > 0 ? `Parlay (${parlay.length})` : "Parlay"],
         ["matchup", "Matchup"],
         ["rosters", "Players"],
@@ -2334,7 +2363,7 @@ export function App(){
         ["standings", "League"],
         ["watchlist", "Watchlist"],
         ["settings", "Settings"],
-      ] as [Mode, string][]).map(([key, label]) => <button key={key} type="button" className={"mode-shape" + (mode === key ? " active" : "")} onClick={() => setMode(key)} aria-pressed={mode === key} aria-label={label}><span className={"rink " + (key === "jamon" ? "platter" : sport === "nhl" ? "ice" : sport === "nfl" ? "turf" : sport === "nba" ? "court" : "pitch")} aria-hidden="true"><span className={"shape " + (key === "jamon" ? "plate" : sport === "nhl" ? "puck" : sport === "nfl" ? "ball" : sport === "nba" ? "hoop" : "soccerball")} /></span>{mode === key && <i className="mode-glow" aria-hidden="true" />}<em>{label}</em></button>)}</nav></div>{mode==="board"&&<ProView parlay={parlay} setParlay={setParlay} home sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="record"&&<RecordView/>} {mode==="jamon"&&<JamonView sport={sport}/>} {mode==="parlay"&&<ParlayView parlay={parlay} setParlay={setParlay} sport={sport} onGoBoard={()=>setMode("board")}/>} {mode==="matchup"&&<MatchupView sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="rosters"&&<RosterView parlay={parlay} setParlay={setParlay} sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague} teamFocus={teamFocus}/>} {mode==="streaks"&&<StreaksView sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="standings"&&<LeagueView sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="watchlist"&&<WatchlistView onViewTeam={viewTeam}/>} {mode==="settings"&&<SiteSettings/>}{tutorialOpen&&<TutorialSheet onClose={() => setTutorialOpen(false)}/>}</main></div>;
+      ] as [Mode, string][]).map(([key, label]) => <button key={key} type="button" className={"mode-shape" + (mode === key ? " active" : "")} onClick={() => setMode(key)} aria-pressed={mode === key} aria-label={label}><span className={"rink " + (key === "jamon" ? "platter" : sport === "nhl" ? "ice" : sport === "nfl" ? "turf" : sport === "nba" ? "court" : "pitch")} aria-hidden="true"><span className={"shape " + (key === "jamon" ? "plate" : sport === "nhl" ? "puck" : sport === "nfl" ? "ball" : sport === "nba" ? "hoop" : "soccerball")} /></span>{mode === key && <i className="mode-glow" aria-hidden="true" />}<em>{label}</em></button>)}</nav></div>{mode==="board"&&<ProView parlay={parlay} setParlay={setParlay} home sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="record"&&<RecordView/>} {mode==="jamon"&&<HamSelectionView/>} {mode==="parlay"&&<ParlayView parlay={parlay} setParlay={setParlay} sport={sport} onGoBoard={()=>setMode("board")}/>} {mode==="matchup"&&<MatchupView sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="rosters"&&<RosterView parlay={parlay} setParlay={setParlay} sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague} teamFocus={teamFocus}/>} {mode==="streaks"&&<StreaksView sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="standings"&&<LeagueView sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="watchlist"&&<WatchlistView onViewTeam={viewTeam}/>} {mode==="settings"&&<SiteSettings/>}{tutorialOpen&&<TutorialSheet onClose={() => setTutorialOpen(false)}/>}</main></div>;
 }
 
 // NBA views. Mirror the NFL sections: schedule strip, league, matchup

@@ -79,6 +79,17 @@ export const codyPlates = sqliteTable("cody_plates", {
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
 });
 
+export const hamSelectionPlates = sqliteTable("ham_selection_plates", {
+  slug: text("slug").primaryKey(),
+  name: text("name").notNull(),
+  tierLabel: text("tier_label").notNull(),
+  tierOdds: text("tier_odds").notNull(),
+  imageData: text("image_data"),
+  description: text("description"),
+  sortOrder: integer("sort_order").notNull(),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+});
+
 // Transparent model-vs-books tracker: one row per game per day, snapshotting
 // the pregame model probabilities and best book prices, then graded against
 // the final result. source='backtest' rows are the Oct 7-12 launch backtest
