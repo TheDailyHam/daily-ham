@@ -950,6 +950,8 @@ h1, h2, h3 { font-family: Rockwell, Georgia, serif; margin: 0; }
 /* NHL/NFL sport switch */
 .sport-switch { display: flex; gap: 16px; background: none; border: none; padding: 0; margin-bottom: 14px; }
 /* Five sports must fit on small phones: tighten gaps and allow horizontal scroll instead of clipping. */
+/* Sport switcher scroll hint: five dots under the league buttons on small phones. */
+.sport-scroll-hint { display: none; }
 @media (max-width: 560px) {
   .sport-switch { gap: 8px; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; padding-bottom: 4px; }
   .sport-switch::-webkit-scrollbar { display: none; }
@@ -957,6 +959,8 @@ h1, h2, h3 { font-family: Rockwell, Georgia, serif; margin: 0; }
   .sport-shape .ball { width: 56px; height: 38px; }
   .sport-shape .puck, .sport-shape .hoop, .sport-shape .soccerball { width: 42px; height: 42px; }
   .sport-shape em { font-size: 10px; letter-spacing: .14em; }
+  .sport-scroll-hint { display: flex; gap: 6px; justify-content: center; padding: 6px 0 2px; }
+  .sport-scroll-hint span { width: 6px; height: 6px; border-radius: 50%; background: var(--dim); opacity: .45; }
 }
 .sport-shape { display: flex; flex-direction: column; align-items: center; gap: 6px; background: none; border: none; padding: 4px 6px; cursor: pointer; }
 .sport-shape .shape { display: block; transition: transform .15s ease, box-shadow .15s ease; }
