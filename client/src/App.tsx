@@ -1466,7 +1466,44 @@ function DisplaySettings() {
       <div className="display-row"><div><strong>Smooth scrolling</strong><small>Animate jumps between sections. Your phone controls swipe speed.</small></div>
       <button type="button" role="switch" aria-checked={smooth} className={"toggle-switch" + (smooth ? " on" : "")} onClick={() => onSmooth(!smooth)}><i /></button></div>
     </div>
+    <FeedbackForm />
   </section>;
+}
+
+function FeedbackForm() {
+  const [message, setMessage] = useState("");
+  const [status, setStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
+  async function submit() {
+    const text = message.trim();
+    if (!text || status === "sending") return;
+    setStatus("sending");
+    try {
+      await api.submitFeedback({ message: text });
+      setMessage("");
+      setStatus("sent");
+    } catch {
+      setStatus("error");
+    }
+  }
+  return <div className="credential-card">
+    <div className="display-row"><div><strong>Send feedback</strong><small>Ideas, bugs, or requests — goes straight to Cody.</small></div></div>
+    <textarea
+      value={message}
+      onChange={(e) => { setMessage(e.target.value); if (status !== "idle") setStatus("idle"); }}
+      placeholder="What's on your mind?"
+      rows={4}
+      maxLength={2000}
+      className="feedback-input"
+      aria-label="Your feedback"
+    />
+    <div className="feedback-row">
+      <button type="button" className="action-btn" onClick={submit} disabled={!message.trim() || status === "sending"}>
+        {status === "sending" ? "Sending…" : "Send feedback"}
+      </button>
+      {status === "sent" && <span className="feedback-ok">Thanks — got it!</span>}
+      {status === "error" && <span className="feedback-err">Couldn't send. Try again.</span>}
+    </div>
+  </div>;
 }
 
 function HamSelectionManager({ adminToken }: { adminToken: string }) {
@@ -1625,7 +1662,24 @@ function OwnerConsole() {
     </>}
     {gateConfigured && adminToken && <HamSelectionManager adminToken={adminToken} />}
     {gateConfigured && adminToken && <UsagePanel adminToken={adminToken} />}
+    {gateConfigured && adminToken && <FeedbackPanel adminToken={adminToken} />}
   </section></div>;
+}
+
+// Private admin-only feedback inbox. Never rendered for visitors.
+function FeedbackPanel({ adminToken }: { adminToken: string }) {
+  const feedback = useQuery({ queryKey: ["user-feedback"], queryFn: () => api.getFeedback({ adminToken }), staleTime: 60 * 1000, retry: 1 });
+  const items = feedback.data?.feedback ?? [];
+  return <section className="credential-card" aria-label="User feedback inbox">
+    <div className="credential-status"><span className="status-dot configured" /><div><small>PRIVATE · ADMIN ONLY</small><strong>User feedback</strong><span>{items.length} message{items.length === 1 ? "" : "s"}. Only you can see these.</span></div></div>
+    {feedback.isPending ? <p className="settings-message">Loading feedback…</p>
+    : feedback.isError ? <p className="settings-message" role="status">Couldn't load feedback. <button className="slip-clear" onClick={() => feedback.refetch()}>Retry</button></p>
+    : items.length === 0 ? <p className="settings-message">No feedback yet.</p>
+    : <div className="feedback-list">{items.map((f) => <div className="feedback-item" key={f.id}>
+        <p>{f.message}</p>
+        <small>{new Date(f.createdAt).toLocaleString()}</small>
+      </div>)}</div>}
+  </section>;
 }
 
 function SiteSettings() {

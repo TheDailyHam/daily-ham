@@ -460,6 +460,16 @@ h1, h2, h3 { font-family: Rockwell, Georgia, serif; margin: 0; }
 .credential-status small { color: var(--dim); font-size: 10px; font-weight: 900; letter-spacing: .1em; }
 .credential-status strong { font: 800 22px/1.15 Rockwell, Georgia, serif; }
 .credential-status span:not(.status-dot) { color: var(--dim); font-size: 12px; }
+/* Feedback form (public settings) + inbox (owner console). */
+.feedback-input { width: 100%; margin-top: 12px; padding: 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--paper); color: var(--ink); font: inherit; font-size: 15px; resize: vertical; }
+.feedback-input:focus { outline: 2px solid var(--gold); outline-offset: 1px; }
+.feedback-row { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+.feedback-ok { color: var(--green); font-weight: 700; font-size: 14px; }
+.feedback-err { color: #c0392b; font-weight: 700; font-size: 14px; }
+.feedback-list { display: grid; gap: 12px; margin-top: 16px; }
+.feedback-item { padding: 14px; border-radius: 12px; border: 1px solid var(--border); background: var(--paper); }
+.feedback-item p { margin: 0 0 8px; font-size: 15px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+.feedback-item small { color: var(--dim); font-size: 12px; }
 .credential-card form { display: grid; gap: 8px; margin-top: 20px; }
 .credential-card form label { font-weight: 850; }
 .credential-entry { display: grid; gap: 8px; }

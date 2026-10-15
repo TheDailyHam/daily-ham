@@ -4565,6 +4565,25 @@ export const Actions = {
       await ctx.db.update(schema.hamSelectionPlates).set(set).where(eq(schema.hamSelectionPlates.slug, args.slug));
       return { saved: true };
     },
+  }),
+  submitFeedback: defineAction({
+    request: z.object({ message: z.string().trim().min(1).max(2000) }),
+    response: z.object({ received: z.boolean() }),
+    async handler(ctx, args) {
+      await ctx.db.insert(schema.userFeedback).values({ message: args.message, createdAt: new Date() });
+      return { received: true };
+    },
+  }),
+  getFeedback: defineAction({
+    request: z.object({ adminToken: adminTokenSchema }),
+    response: z.object({ feedback: z.array(z.object({
+      id: z.number(), message: z.string(), createdAt: z.number(),
+    })) }),
+    async handler(ctx, args) {
+      requireAdmin(args);
+      const rows = await ctx.db.select().from(schema.userFeedback).orderBy(desc(schema.userFeedback.createdAt)).limit(200);
+      return { feedback: rows.map((r) => ({ id: r.id, message: r.message, createdAt: r.createdAt.getTime() })) };
+    },
   }),  getNflRoster: defineAction({ request: z.object({ team: z.enum(nflTeamCodes) }), response: nflRosterResponse, async handler(ctx, args) { return loadNflRoster(ctx, args.team); } }),
   getNflPlayerGameLog: defineAction({ request: z.object({ team: z.enum(nflTeamCodes), playerId: z.number().int().positive() }), response: nflGameLogResponse, async handler(ctx, args) { return loadNflPlayerGameLog(ctx, args.team, args.playerId); } }),
   getNcaafOverview: defineAction({ request: z.object({ week: z.number().int().min(1).max(15).optional() }), response: ncaafOverviewResponse, async handler(ctx, args) { return loadNcaafOverview(args.week, ctx); } }),

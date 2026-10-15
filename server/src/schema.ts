@@ -131,6 +131,14 @@ export const modelSnapshots = sqliteTable(
   ],
 );
 
+// User feedback: messages from public visitors, visible only to Cody in the
+// owner console. No auth required to submit; reading is admin-gated.
+export const userFeedback = sqliteTable("user_feedback", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  message: text("message").notNull(),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+});
+
 // Privacy-respecting usage counts: one row per (day, anonymized visitor,
 // sport). visitor_hash is SHA-256(IP + day + user-agent) — raw IPs are never
 // stored, and hashes are unlinkable across days.
