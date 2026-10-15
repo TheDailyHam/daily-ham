@@ -4570,6 +4570,8 @@ export const Actions = {
     request: z.object({ message: z.string().trim().min(1).max(2000) }),
     response: z.object({ received: z.boolean() }),
     async handler(ctx, args) {
+      // Self-healing: create the table if the migration hasn't run yet.
+      await ctx.db.run(sql`CREATE TABLE IF NOT EXISTS \`user_feedback\` (\`id\` integer PRIMARY KEY AUTOINCREMENT NOT NULL, \`message\` text NOT NULL, \`created_at\` integer NOT NULL)`);
       await ctx.db.insert(schema.userFeedback).values({ message: args.message, createdAt: new Date() });
       return { received: true };
     },
