@@ -1666,6 +1666,70 @@ function OwnerConsole() {
   </section></div>;
 }
 
+// Draggable quick-scroll handle: a slim gold rail on the right edge with a
+// thumb you can grab to scrub top-to-bottom, plus tap buttons for each end.
+// Only appears when the page actually scrolls.
+function QuickScroller() {
+  const [visible, setVisible] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const trackRef = useRef<HTMLDivElement>(null);
+  const drag = useRef<{ startY: number; startScroll: number } | null>(null);
+  const maxScroll = () => Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+
+  useEffect(() => {
+    const update = () => {
+      const max = maxScroll();
+      setVisible(max > 60);
+      setProgress(max > 0 ? Math.min(1, Math.max(0, window.scrollY / max)) : 0);
+    };
+    update();
+    window.addEventListener("scroll", update, { passive: true });
+    window.addEventListener("resize", update);
+    return () => { window.removeEventListener("scroll", update); window.removeEventListener("resize", update); };
+  }, []);
+
+  const jumpTo = (p: number) => {
+    const max = maxScroll();
+    if (max <= 0) return;
+    window.scrollTo({ top: Math.round(p * max), behavior: "smooth" });
+  };
+
+  const onThumbDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    drag.current = { startY: e.clientY, startScroll: window.scrollY };
+    setDragging(true);
+  };
+  const onThumbMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = drag.current;
+    const track = trackRef.current;
+    if (!d || !track) return;
+    const h = track.clientHeight || 1;
+    window.scrollTo({ top: d.startScroll + ((e.clientY - d.startY) / h) * maxScroll(), behavior: "auto" });
+  };
+  const onThumbUp = () => { drag.current = null; setDragging(false); };
+  const onTrackTap = (e: React.PointerEvent<HTMLDivElement>) => {
+    if ((e.target as HTMLElement).closest(".qs-thumb") || drag.current) return;
+    const track = trackRef.current;
+    if (!track) return;
+    const rect = track.getBoundingClientRect();
+    jumpTo(Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height)));
+  };
+
+  if (!visible) return null;
+  const pct = (progress * 100).toFixed(1);
+  return <div className={"quick-scroll" + (dragging ? " dragging" : "")} aria-label="Quick scroll">
+    <button type="button" className="qs-btn" aria-label="Scroll to top" onClick={() => jumpTo(0)}>▲</button>
+    <div ref={trackRef} className="qs-track" onPointerDown={onTrackTap}>
+      <div className="qs-thumb" role="scrollbar" aria-orientation="vertical" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress * 100)}
+        style={{ top: `calc(${pct}% - ${(progress * 56).toFixed(1)}px)` }}
+        onPointerDown={onThumbDown} onPointerMove={onThumbMove} onPointerUp={onThumbUp} onPointerCancel={onThumbUp} />
+    </div>
+    <button type="button" className="qs-btn" aria-label="Scroll to bottom" onClick={() => jumpTo(1)}>▼</button>
+  </div>;
+}
+
 // Private admin-only feedback inbox. Never rendered for visitors.
 function FeedbackPanel({ adminToken }: { adminToken: string }) {
   const feedback = useQuery({ queryKey: ["user-feedback"], queryFn: () => api.getFeedback({ adminToken }), staleTime: 60 * 1000, retry: 1 });
@@ -2711,8 +2775,8 @@ export function App(){
     setSoccerLeague(next);
     try { localStorage.setItem(SOCCER_LEAGUE_KEY, next); } catch { /* private mode */ }
   }
-  return isOwner ? <div className="app-shell owner-shell"><SafeAreaTopScrim backgroundColor="var(--paper)"/><ToastHost/><main><OwnerConsole/></main></div>
-  : <div className="app-shell"><SafeAreaTopScrim backgroundColor="var(--paper)"/><ToastHost/><InstallPrompt/><main>{mode==="board"&&<WelcomeBanner sport={sport} onTour={() => setTutorialOpen(true)}/>}<div className="topbar"><div className="sport-switch" role="group" aria-label="League"><button type="button" className={"sport-shape" + (sport === "nhl" ? " active" : "")} onClick={() => chooseSport("nhl")} aria-pressed={sport === "nhl"} aria-label="Hockey side"><span className="shape puck" aria-hidden="true" /><em>NHL</em></button><button type="button" className={"sport-shape" + (sport === "nfl" ? " active" : "")} onClick={() => chooseSport("nfl")} aria-pressed={sport === "nfl"} aria-label="Football side"><span className="shape ball" aria-hidden="true" /><em>NFL</em></button><button type="button" className={"sport-shape" + (sport === "ncaaf" ? " active" : "")} onClick={() => chooseSport("ncaaf")} aria-pressed={sport === "ncaaf"} aria-label="College football side"><span className="shape ball" aria-hidden="true" /><em>NCAAF</em></button><button type="button" className={"sport-shape" + (sport === "nba" ? " active" : "")} onClick={() => chooseSport("nba")} aria-pressed={sport === "nba"} aria-label="Basketball side"><span className="shape hoop" aria-hidden="true" /><em>NBA</em></button><button type="button" className={"sport-shape" + (sport === "soccer" ? " active" : "")} onClick={() => chooseSport("soccer")} aria-pressed={sport === "soccer"} aria-label="Soccer side"><span className="shape soccerball" aria-hidden="true" /><em>SOC</em></button></div><div className="sport-scroll-hint" aria-hidden="true"><span /><span /><span /><span /><span /></div><nav className="mode-tabs shapes" aria-label="Data view">{([
+  return isOwner ? <div className="app-shell owner-shell"><SafeAreaTopScrim backgroundColor="var(--paper)"/><ToastHost/><QuickScroller/><main><OwnerConsole/></main></div>
+  : <div className="app-shell"><SafeAreaTopScrim backgroundColor="var(--paper)"/><ToastHost/><InstallPrompt/><QuickScroller/><main>{mode==="board"&&<WelcomeBanner sport={sport} onTour={() => setTutorialOpen(true)}/>}<div className="topbar"><div className="sport-switch" role="group" aria-label="League"><button type="button" className={"sport-shape" + (sport === "nhl" ? " active" : "")} onClick={() => chooseSport("nhl")} aria-pressed={sport === "nhl"} aria-label="Hockey side"><span className="shape puck" aria-hidden="true" /><em>NHL</em></button><button type="button" className={"sport-shape" + (sport === "nfl" ? " active" : "")} onClick={() => chooseSport("nfl")} aria-pressed={sport === "nfl"} aria-label="Football side"><span className="shape ball" aria-hidden="true" /><em>NFL</em></button><button type="button" className={"sport-shape" + (sport === "ncaaf" ? " active" : "")} onClick={() => chooseSport("ncaaf")} aria-pressed={sport === "ncaaf"} aria-label="College football side"><span className="shape ball" aria-hidden="true" /><em>NCAAF</em></button><button type="button" className={"sport-shape" + (sport === "nba" ? " active" : "")} onClick={() => chooseSport("nba")} aria-pressed={sport === "nba"} aria-label="Basketball side"><span className="shape hoop" aria-hidden="true" /><em>NBA</em></button><button type="button" className={"sport-shape" + (sport === "soccer" ? " active" : "")} onClick={() => chooseSport("soccer")} aria-pressed={sport === "soccer"} aria-label="Soccer side"><span className="shape soccerball" aria-hidden="true" /><em>SOC</em></button></div><div className="sport-scroll-hint" aria-hidden="true"><span /><span /><span /><span /><span /></div><nav className="mode-tabs shapes" aria-label="Data view">{([
         ["board", boardLabel],
         ["record", "Record"],
         ["jamon", "Ham Selection"],
