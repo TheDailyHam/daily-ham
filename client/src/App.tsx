@@ -1330,6 +1330,7 @@ function MatchupCalculator() {
         <InjuryChips sport="nhl" awayCode={matchup.away} homeCode={matchup.home} injuries={injuries.data ?? null} />
         <p className="winner-explain">The winner model blends each club’s recent win rate with the opponent’s loss rate, weighting away and home splits when at least five matching games exist. Overtime and shootout winners count. This is a model estimate, not a sportsbook line.</p>
       </section>
+      {data && <DeepDiveSection awayName={ddTeamName(teams, matchup.away)} homeName={ddTeamName(teams, matchup.home)} awayCode={matchup.away} homeCode={matchup.home} awayGames={data.away.recentGames} homeGames={data.home.recentGames} awayProb={data.awayWinProbability} homeProb={data.homeWinProbability} scoreWord="goals" />}
       {data && <ModelVsBooks sport="nhl" awayCode={data.away.team} homeCode={data.home.team} awayModel={data.awayWinProbability} homeModel={data.homeWinProbability} groups={boardGroups} />}
       {data && <MatchupScorersSection sport="nhl" awayCode={data.away.team} homeCode={data.home.team} />}
       {data && <BookReadSection sport="nhl" awayCode={data.away.team} homeCode={data.home.team} />}
@@ -1730,6 +1731,122 @@ function QuickScroller() {
   </div>;
 }
 
+// Deep Dive: the model's full read on a matchup — recent form strips, trend
+// math, head-to-head meetings, and the model's call with a written read.
+// Every number comes from the recentGames rows; nothing is invented. When
+// the full probability blend is missing, it falls back to a dampened
+// recent-form lean instead of "insufficient data"; with zero games it says
+// so honestly.
+type DeepDiveGame = { date: string; opponent: string; homeAway: "home" | "away"; teamScore: number; oppScore: number; won: boolean };
+
+function deepDiveForm(games: DeepDiveGame[], venue: "home" | "away") {
+  const last5 = games.slice(0, 5);
+  const wins = last5.filter((g) => g.won).length;
+  const draws = last5.filter((g) => !g.won && g.teamScore === g.oppScore).length;
+  const losses = last5.length - wins - draws;
+  let streakN = 0; let streakKind: "W" | "L" | "D" | null = null;
+  for (const g of games) {
+    const kind = g.won ? "W" : g.teamScore === g.oppScore ? "D" : "L";
+    if (streakKind === null) streakKind = kind;
+    if (kind !== streakKind) break;
+    streakN++;
+  }
+  const venueGames = games.filter((g) => g.homeAway === venue);
+  const venueWins = venueGames.filter((g) => g.won).length;
+  const avg = (ns: number[]) => ns.length ? ns.reduce((s, n) => s + n, 0) / ns.length : null;
+  return {
+    last5, wins, draws, losses,
+    streak: streakKind && streakN > 0 ? `${streakKind}${streakN}` : null,
+    avgFor: avg(last5.map((g) => g.teamScore)), avgAgainst: avg(last5.map((g) => g.oppScore)),
+    venueRecord: venueGames.length ? `${venueWins}-${venueGames.length - venueWins}` : null,
+    venueGames: venueGames.length,
+  };
+}
+
+function deepDiveCall(awayName: string, homeName: string, away: ReturnType<typeof deepDiveForm>, home: ReturnType<typeof deepDiveForm>, awayProb: number | null, homeProb: number | null) {
+  if (awayProb !== null && homeProb !== null) {
+    const pick = awayProb >= homeProb ? awayName : homeName;
+    return { pick, confidence: Math.abs(awayProb - homeProb) * 100, basis: "Full model blend — season form plus venue splits", tier: "full" as const };
+  }
+  const aW = away.last5.length ? away.wins / away.last5.length : null;
+  const hW = home.last5.length ? home.wins / home.last5.length : null;
+  if (aW !== null && hW !== null) {
+    const pick = aW >= hW ? awayName : homeName;
+    return { pick, confidence: Math.abs(aW - hW) * 100 * 0.7, basis: "Recent-form lean — limited sample", tier: "lean" as const };
+  }
+  if (aW !== null) return { pick: aW >= 0.5 ? awayName : homeName, confidence: 5, basis: "One-sided sample — very thin read", tier: "lean" as const };
+  if (hW !== null) return { pick: hW >= 0.5 ? homeName : awayName, confidence: 5, basis: "One-sided sample — very thin read", tier: "lean" as const };
+  return { pick: null as string | null, confidence: null as number | null, basis: "Not enough games played yet", tier: "none" as const };
+}
+
+function deepDiveRead(awayName: string, homeName: string, away: ReturnType<typeof deepDiveForm>, home: ReturnType<typeof deepDiveForm>, h2h: { date: string; label: string }[], call: ReturnType<typeof deepDiveCall>, scoreWord: string) {
+  const parts: string[] = [];
+  const formLine = (name: string, f: ReturnType<typeof deepDiveForm>, venue: "home" | "away") => {
+    if (!f.last5.length) return `${name} have no recent games on record.`;
+    const bits = [`${f.wins}-${f.losses}${f.draws ? `-${f.draws}` : ""} in their last five`];
+    if (f.streak) bits.push(f.streak.startsWith("W") ? `riding a ${f.streak} win streak` : f.streak.startsWith("L") ? `on a ${f.streak} skid` : `unbeaten in ${f.streak}`);
+    if (f.avgFor !== null && f.avgAgainst !== null) bits.push(`averaging ${f.avgFor.toFixed(1)} ${scoreWord} for and ${f.avgAgainst.toFixed(1)} against`);
+    if (f.venueRecord) bits.push(`${f.venueRecord} ${venue === "home" ? "at home" : "on the road"} lately`);
+    return `${name} come in ${bits.join(", ")}.`;
+  };
+  parts.push(formLine(awayName, away, "away"));
+  parts.push(formLine(homeName, home, "home"));
+  if (h2h.length) {
+    const last = h2h[0];
+    parts.push(h2h.length === 1 ? `They've met once in the recent sample: ${last.label}.` : `Recent meetings favor the numbers: ${h2h.slice(0, 3).map((m) => m.label).join("; ")}.`);
+  }
+  if (call.pick && call.confidence !== null) {
+    parts.push(`The model's call: ${call.pick} (${call.confidence.toFixed(0)}% edge) — ${call.basis.toLowerCase()}. A read, not a lock.`);
+  } else {
+    parts.push(`No call yet — ${call.basis.toLowerCase()}.`);
+  }
+  return parts.join(" ");
+}
+
+const ddTeamName = (list: { code: string; name: string }[], code: string) => list.find((t) => t.code === code)?.name ?? code;
+
+function DeepDiveSection(props: {
+  awayName: string; homeName: string; awayCode: string; homeCode: string;
+  awayGames?: DeepDiveGame[]; homeGames?: DeepDiveGame[];
+  awayProb: number | null; homeProb: number | null;
+  scoreWord?: string;
+}) {
+  const { awayName, homeName, awayCode, homeCode } = props;
+  const awayGames = props.awayGames ?? []; const homeGames = props.homeGames ?? [];
+  const scoreWord = props.scoreWord ?? "points";
+  const away = deepDiveForm(awayGames, "away"); const home = deepDiveForm(homeGames, "home");
+  const call = deepDiveCall(awayName, homeName, away, home, props.awayProb, props.homeProb);
+  const h2h = awayGames
+    .filter((g) => g.opponent.toUpperCase() === homeCode.toUpperCase())
+    .slice(0, 3)
+    .map((g) => ({ date: g.date, label: `${g.date.slice(0, 10)} ${awayCode} ${g.teamScore}–${g.oppScore} ${homeCode}${g.won ? ` (${awayCode} won)` : g.teamScore === g.oppScore ? " (draw)" : ` (${homeCode} won)`}` }));
+  const hasData = awayGames.length > 0 || homeGames.length > 0;
+  const chip = (g: DeepDiveGame, i: number) => {
+    const cls = g.won ? "dd-w" : g.teamScore === g.oppScore ? "dd-d" : "dd-l";
+    const res = g.won ? "W" : g.teamScore === g.oppScore ? "D" : "L";
+    return <span key={i} className={`dd-chip ${cls}`} title={`${g.date.slice(0, 10)} vs ${g.opponent}: ${g.teamScore}–${g.oppScore}`}>{res}</span>;
+  };
+  return <section className="deep-dive" aria-label="Model deep dive">
+    <div className="section-heading"><div><p className="kicker">DEEP DIVE</p><h2>The model's full read</h2></div><span>Model estimate</span></div>
+    {!hasData ? <p className="calculator-note">Form data is still loading — hit Refresh data for the full deep dive.</p> : <>
+      <div className="dd-call">
+        <div><small>MODEL'S CALL</small><strong>{call.pick ?? "No call"}</strong>{call.confidence !== null && <span className="dd-conf">{call.confidence.toFixed(0)}% edge</span>}</div>
+        <p>{call.basis}. Never a lock, never a sportsbook line.</p>
+      </div>
+      <div className="dd-forms">
+        <div className="dd-team"><div className="dd-team-head"><strong>{awayName}</strong><span>away · last five</span></div>
+          <div className="dd-strip">{away.last5.map(chip)}</div>
+          <small>{away.wins}-{away.losses}{away.draws ? `-${away.draws}` : ""}{away.streak ? ` · ${away.streak}` : ""}{away.avgFor !== null ? ` · ${away.avgFor.toFixed(1)} ${scoreWord}F / ${away.avgAgainst!.toFixed(1)}A` : ""}</small></div>
+        <div className="dd-team"><div className="dd-team-head"><strong>{homeName}</strong><span>home · last five</span></div>
+          <div className="dd-strip">{home.last5.map(chip)}</div>
+          <small>{home.wins}-{home.losses}{home.draws ? `-${home.draws}` : ""}{home.streak ? ` · ${home.streak}` : ""}{home.avgFor !== null ? ` · ${home.avgFor.toFixed(1)} ${scoreWord}F / ${home.avgAgainst!.toFixed(1)}A` : ""}</small></div>
+      </div>
+      {h2h.length > 0 && <div className="dd-h2h"><p className="kicker">HEAD-TO-HEAD</p>{h2h.map((m, i) => <div key={i} className="dd-h2h-row"><span>{m.label}</span></div>)}</div>}
+      <p className="dd-read">{deepDiveRead(awayName, homeName, away, home, h2h, call, scoreWord)}</p>
+    </>}
+  </section>;
+}
+
 // Private admin-only feedback inbox. Never rendered for visitors.
 function FeedbackPanel({ adminToken }: { adminToken: string }) {
   const feedback = useQuery({ queryKey: ["user-feedback"], queryFn: () => api.getFeedback({ adminToken }), staleTime: 60 * 1000, retry: 1 });
@@ -2054,6 +2171,7 @@ function NflMatchupCalculator() {
         <InjuryChips sport="nfl" awayCode={matchup.away} homeCode={matchup.home} injuries={injuries.data ?? null} />
         <p className="winner-explain">The winner model blends each club's recent win rate with the opponent's loss rate, weighting away and home splits when at least three matching games exist. This is a model estimate, not a sportsbook line.</p>
       </section>
+      {data && <DeepDiveSection awayName={ddTeamName(nflTeams, matchup.away)} homeName={ddTeamName(nflTeams, matchup.home)} awayCode={matchup.away} homeCode={matchup.home} awayGames={data.away.recentGames} homeGames={data.home.recentGames} awayProb={data.awayWinProbability} homeProb={data.homeWinProbability} />}
       {data && <ModelVsBooks sport="nfl" awayCode={data.away.team} homeCode={data.home.team} awayModel={data.awayWinProbability} homeModel={data.homeWinProbability} groups={boardGroups} />}
       {data && <MatchupScorersSection sport="nfl" awayCode={data.away.team} homeCode={data.home.team} />}
       {data && <BookReadSection sport="nfl" awayCode={data.away.team} homeCode={data.home.team} />}
@@ -2123,6 +2241,7 @@ function NcaafMatchupCalculator() {
         <InjuryChips sport="ncaaf" awayCode={matchup.away} homeCode={matchup.home} injuries={injuries.data ?? null} />
         <p className="winner-explain">The winner model blends each club's recent win rate with the opponent's loss rate, weighting away and home splits when at least three matching games exist. This is a model estimate, not a sportsbook line.</p>
       </section>
+      {data && <DeepDiveSection awayName={ddTeamName(ncaafTeams, matchup.away)} homeName={ddTeamName(ncaafTeams, matchup.home)} awayCode={matchup.away} homeCode={matchup.home} awayGames={data.away.recentGames} homeGames={data.home.recentGames} awayProb={data.awayWinProbability} homeProb={data.homeWinProbability} />}
       {data && <ModelVsBooks sport="ncaaf" awayCode={data.away.team} homeCode={data.home.team} awayModel={data.awayWinProbability} homeModel={data.homeWinProbability} groups={boardGroups} />}
       {data && <MatchupScorersSection sport="ncaaf" awayCode={data.away.team} homeCode={data.home.team} />}
       {data && <BookReadSection sport="ncaaf" awayCode={data.away.team} homeCode={data.home.team} />}
@@ -2890,6 +3009,7 @@ function NbaMatchupCalculator() {
         <InjuryChips sport="nba" awayCode={matchup.away} homeCode={matchup.home} injuries={injuries.data ?? null} scorers={scorers.data ?? null} />
         <p className="winner-explain">The winner model blends each club's recent win rate with the opponent's loss rate, weighting away and home splits when at least three matching games exist. This is a model estimate, not a sportsbook line.</p>
       </section>
+      {data && <DeepDiveSection awayName={ddTeamName(nbaTeams, matchup.away)} homeName={ddTeamName(nbaTeams, matchup.home)} awayCode={matchup.away} homeCode={matchup.home} awayGames={data.away.recentGames} homeGames={data.home.recentGames} awayProb={data.awayWinProbability} homeProb={data.homeWinProbability} />}
       {data && <ModelVsBooks sport="nba" awayCode={data.away.team} homeCode={data.home.team} awayModel={data.awayWinProbability} homeModel={data.homeWinProbability} groups={boardGroups} />}
       {data && <MatchupScorersSection sport="nba" awayCode={data.away.team} homeCode={data.home.team} />}
       {data && <BookReadSection sport="nba" awayCode={data.away.team} homeCode={data.home.team} />}
@@ -3438,6 +3558,7 @@ function SoccerMatchupCalculator({ league, onLeagueChange }: { league: SoccerLea
         <InjuryChips sport="soccer" awayCode={matchup.away} homeCode={matchup.home} injuries={injuries.data ?? null} />
         <p className="winner-explain">The result model blends each club's recent home/away form with goals scored and allowed, weighting venue splits when the sample allows. Draws are a real outcome here — always price all three. This is a model estimate, not a sportsbook line.</p>
       </section>
+      {data && <DeepDiveSection awayName={ddTeamName(soccerTeamsFor(league), matchup.away)} homeName={ddTeamName(soccerTeamsFor(league), matchup.home)} awayCode={matchup.away} homeCode={matchup.home} awayGames={data.away.recentGames} homeGames={data.home.recentGames} awayProb={data.awayWinProbability} homeProb={data.homeWinProbability} scoreWord="goals" />}
       <SoccerModelVsBooks league={league} homeCode={data.home.team} awayCode={data.away.team} homeModel={data.homeWinProbability} drawModel={data.drawProbability} awayModel={data.awayWinProbability} groups={boardGroups} />
       {data && <MatchupScorersSection sport="soccer" awayCode={data.away.team} homeCode={data.home.team} league={league} />}
       {data && <BookReadSection sport="soccer" awayCode={data.away.team} homeCode={data.home.team} league={league} />}

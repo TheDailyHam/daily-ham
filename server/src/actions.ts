@@ -859,6 +859,21 @@ const standingSchema = z.object({
 });
 const nhlOverviewResponse = z.object({ date: z.string(), fetchedAt: z.string(), scheduleSourceUrl: z.string(), standingsSourceUrl: z.string(), games: z.array(nhlGameSchema), standings: z.array(standingSchema) });
 
+// Deep Dive: per-game rows powering the matchup deep-dive section
+// (recent form strips, trend math, head-to-head meetings). Optional so
+// older cached payloads still parse.
+const recentGameSchema = z.object({
+  date: z.string(), opponent: z.string(), homeAway: z.enum(["home", "away"]),
+  teamScore: z.number(), oppScore: z.number(), won: z.boolean(),
+});
+type RecentGameRow = z.infer<typeof recentGameSchema>;
+function toRecentGames(games: { date: string; opponent: string; homeAway: "home" | "away"; teamScore: number; oppScore: number; won: boolean }[]): RecentGameRow[] {
+  return [...games]
+    .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
+    .slice(0, 8)
+    .map((g) => ({ date: g.date, opponent: g.opponent, homeAway: g.homeAway, teamScore: g.teamScore, oppScore: g.oppScore, won: g.won }));
+}
+
 const firstGoalTeamSchema = z.object({
   team: z.enum(teamCodes), games: z.number(), firstGoalGames: z.number(), scoredFirst: z.number(), allowedFirst: z.number(), scoredFirstPct: z.number().nullable(), allowedFirstPct: z.number().nullable(), venueGames: z.number(), venueScoredFirst: z.number(), venueScoredFirstPct: z.number().nullable(),
   firstPeriodUnder25: z.number(), firstPeriodUnder25Pct: z.number().nullable(), venueFirstPeriodUnder25Pct: z.number().nullable(),
@@ -866,6 +881,7 @@ const firstGoalTeamSchema = z.object({
   bothTeamsTwo: z.number(), bothTeamsTwoPct: z.number().nullable(), venueBothTeamsTwoPct: z.number().nullable(),
   regulationDraws: z.number(), regulationDrawPct: z.number().nullable(), venueRegulationDrawPct: z.number().nullable(),
   wins: z.number(), winPct: z.number().nullable(), venueWins: z.number(), venueWinPct: z.number().nullable(),
+  recentGames: z.array(recentGameSchema).optional(),
 });
 const firstGoalMatchupResponse = z.object({
   away: firstGoalTeamSchema, home: firstGoalTeamSchema,
@@ -1035,6 +1051,12 @@ function teamFirstGoalStats(team: (typeof teamCodes)[number], venue: "away" | "h
     venueRegulationDrawPct: venueGames.length ? venueRegulationDraws / venueGames.length : null,
     wins, winPct: scoredGames.length ? wins / scoredGames.length : null,
     venueWins, venueWinPct: venueScoredGames.length ? venueWins / venueScoredGames.length : null,
+    recentGames: toRecentGames(games.filter((g) => g.awayScore !== null && g.homeScore !== null).map((g) => {
+      const isAway = g.away === team;
+      const teamScore = (isAway ? g.awayScore : g.homeScore) as number;
+      const oppScore = (isAway ? g.homeScore : g.awayScore) as number;
+      return { date: g.date, opponent: isAway ? g.home : g.away, homeAway: (isAway ? "away" : "home") as "home" | "away", teamScore, oppScore, won: teamScore > oppScore };
+    })),
   };
 }
 
@@ -1259,6 +1281,7 @@ const nflMatchupTeamSchema = z.object({
   bothTeams20: z.number(), bothTeams20Pct: z.number().nullable(), venueBothTeams20Pct: z.number().nullable(),
   overtimes: z.number(), overtimePct: z.number().nullable(), venueOvertimePct: z.number().nullable(),
   avgPointsFor: z.number().nullable(), avgPointsAgainst: z.number().nullable(),
+  recentGames: z.array(recentGameSchema).optional(),
 });
 const nflMatchupResponse = z.object({
   away: nflMatchupTeamSchema, home: nflMatchupTeamSchema,
@@ -1355,6 +1378,7 @@ const ncaafMatchupTeamSchema = z.object({
   bothTeams20: z.number(), bothTeams20Pct: z.number().nullable(), venueBothTeams20Pct: z.number().nullable(),
   overtimes: z.number(), overtimePct: z.number().nullable(), venueOvertimePct: z.number().nullable(),
   avgPointsFor: z.number().nullable(), avgPointsAgainst: z.number().nullable(),
+  recentGames: z.array(recentGameSchema).optional(),
 });
 const ncaafMatchupResponse = z.object({
   away: ncaafMatchupTeamSchema, home: ncaafMatchupTeamSchema,
@@ -1787,6 +1811,7 @@ function nflTeamMatchupStats(team: (typeof nflTeamCodes)[number], venue: "away" 
     overtimes, overtimePct: pct(overtimes, games.length), venueOvertimePct: pct(venueOvertimes, venueGames.length),
     avgPointsFor: games.length ? games.reduce((s, g) => s + g.teamScore, 0) / games.length : null,
     avgPointsAgainst: games.length ? games.reduce((s, g) => s + g.oppScore, 0) / games.length : null,
+    recentGames: toRecentGames(games),
   };
 }
 
@@ -2179,6 +2204,7 @@ function ncaafTeamMatchupStats(team: (typeof ncaafTeamCodes)[number], venue: "aw
     overtimes, overtimePct: pct(overtimes, games.length), venueOvertimePct: pct(venueOvertimes, venueGames.length),
     avgPointsFor: games.length ? games.reduce((s, g) => s + g.teamScore, 0) / games.length : null,
     avgPointsAgainst: games.length ? games.reduce((s, g) => s + g.oppScore, 0) / games.length : null,
+    recentGames: toRecentGames(games),
   };
 }
 
@@ -2401,6 +2427,7 @@ const nbaMatchupTeamSchema = z.object({
   bothTeams110: z.number(), bothTeams110Pct: z.number().nullable(), venueBothTeams110Pct: z.number().nullable(),
   overtimes: z.number(), overtimePct: z.number().nullable(), venueOvertimePct: z.number().nullable(),
   avgPointsFor: z.number().nullable(), avgPointsAgainst: z.number().nullable(),
+  recentGames: z.array(recentGameSchema).optional(),
 });
 const nbaMatchupResponse = z.object({
   away: nbaMatchupTeamSchema, home: nbaMatchupTeamSchema,
@@ -2805,6 +2832,7 @@ const soccerMatchupTeamSchema = z.object({
   venueGoalsFor: z.number(), venueGoalsAgainst: z.number(),
   cleanSheets: z.number(), failedToScore: z.number(),
   form: z.string().nullable(), // last-5 as e.g. "W D W L D"
+  recentGames: z.array(recentGameSchema).optional(),
 });
 const soccerMatchupResponse = z.object({
   league: z.enum(soccerLeagues),
@@ -2841,6 +2869,7 @@ function soccerMatchupTeamStats(team: string, venue: "away" | "home", games: Soc
     cleanSheets: games.filter((g) => g.oppScore === 0).length,
     failedToScore: games.filter((g) => g.teamScore === 0).length,
     form: form || null,
+    recentGames: toRecentGames(games.map((g) => ({ ...g, won: g.result === "W" }))),
   };
 }
 
@@ -3277,6 +3306,7 @@ function nbaTeamMatchupStats(team: (typeof nbaTeamCodes)[number], venue: "away" 
     overtimes, overtimePct: pct(overtimes, otGames.length), venueOvertimePct: pct(venueOvertimes, venueOtGames.length),
     avgPointsFor: games.length ? games.reduce((s, g) => s + g.teamScore, 0) / games.length : null,
     avgPointsAgainst: games.length ? games.reduce((s, g) => s + g.oppScore, 0) / games.length : null,
+    recentGames: toRecentGames(games),
   };
 }
 
