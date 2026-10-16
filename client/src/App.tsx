@@ -832,6 +832,36 @@ function EraCard({ title, sub, era, showBooks, emptyHint }: {
   </section>;
 }
 
+function CalibrationSection() {
+  const cal = useQuery({
+    queryKey: ["calibration"],
+    queryFn: () => api.getCalibration(),
+    staleTime: 5 * 60 * 1000,
+    retry: 1,
+  });
+  return <section className="record-calibration" aria-label="Model calibration — how the model learns">
+    <div className="section-heading"><div><p className="kicker">LEARNING</p><h3>Is the model honest with itself?</h3></div></div>
+    {cal.isPending ? <div className="slate-loading">Checking the model's homework…</div>
+      : cal.isError || !cal.data ? <div className="history-empty"><strong>Calibration unavailable.</strong><span>Pull to refresh and try again.</span></div>
+      : !cal.data.ready ? <>
+        <p className="mvb-note">Every graded live pick feeds this table. Once {cal.data.needed} picks are graded, it shows whether the model's confidence matches reality — and systematic misses get flagged for review. <b>{cal.data.graded} of {cal.data.needed}</b> graded so far.</p>
+        <div className="winner-track"><i style={{ width: `${Math.min(100, (cal.data.graded / cal.data.needed) * 100)}%` }} /></div>
+      </> : <>
+        <p className="mvb-note">When the model says 65%, does it win 65% of the time? Buckets below compare stated confidence against actual results across {cal.data.graded} graded live picks. Gaps here are what future model adjustments get based on — never hunches.</p>
+        <div className="record-list">
+          {cal.data.buckets.map((b) => (
+            <article key={b.label} className="record-row">
+              <div className="record-row-head"><strong>Model said {b.label}</strong><span>{b.picks} picks</span></div>
+              <div className="record-row-body">
+                <span>Actually won <b>{b.winPct === null ? "—" : `${b.winPct}%`}</b> ({b.wins} of {b.picks})</span>
+              </div>
+            </article>
+          ))}
+        </div>
+      </>}
+  </section>;
+}
+
 function RecordView() {
   const record = useQuery({
     queryKey: ["track-record"],
@@ -866,6 +896,7 @@ function RecordView() {
           emptyHint="First snapshots land with the morning refresh — check back after today's games."
         />
         <p className="record-note">Live picks are snapshotted every morning before games, with the model's win probability and each side's best book price (vig removed for the book comparison). The model always shows its read — when it's unsure or disagrees with the books, the Book Read deep dive in each matchup explains what the market might be seeing. ROI assumes a flat 1 unit on every model pick at the best captured price.</p>
+        <CalibrationSection />
         {data.recent.length > 0 && <section className="record-recent" aria-label="Recent graded picks">
           <div className="section-heading"><div><p className="kicker">RECEIPT</p><h3>Recent picks</h3></div></div>
           <div className="record-list">

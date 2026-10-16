@@ -55,7 +55,7 @@ import {
   soccerTeamMeta, soccerTeams,
   type SoccerGame, type SoccerStanding, type SoccerTeamGame,
 } from "./soccer.js";
-import { and, desc, eq, gte, isNull, lt, sql } from "drizzle-orm";
+import { and, desc, eq, gte, isNotNull, isNull, lt, sql } from "drizzle-orm";
 import * as schema from "./schema.js";
 
 const sports = ["nhl", "nfl", "nba", "soccer", "ncaaf"] as const;
@@ -564,6 +564,13 @@ function topPick(probs: { away: number | null; home: number | null; draw?: numbe
   return tied ? null : best;
 }
 
+// Team-name normalization for the tracker: the odds board and the official
+// feeds don't always punctuate the same way ("St Louis Blues" vs
+// "St. Louis Blues"). Without this, those games silently never snapshot.
+function normTeamName(s: string): string {
+  return s.toLowerCase().replace(/[.']/g, "").replace(/\s+/g, " ").trim();
+}
+
 async function upsertSnapshot(ctx: Ctx, row: {
   sport: Sport; league: string; awayTeam: string; homeTeam: string; gameDate: string;
   modelAway: number | null; modelHome: number | null; modelDraw: number | null;
@@ -625,7 +632,7 @@ async function gradePendingSnapshots(
 }
 
 async function snapshotTwoWaySport(
-  ctx: Ctx, sport: "nhl" | "nfl" | "nba", standings: FlipRow[], games: TrackGame[],
+  ctx: Ctx, sport: "nhl" | "nfl" | "nba" | "ncaaf", standings: FlipRow[], games: TrackGame[],
   offers: BoardOffer[], now: Date,
 ): Promise<number> {
   const ml = offers.filter((o) => o.marketName === "Moneyline");
@@ -636,12 +643,12 @@ async function snapshotTwoWaySport(
     byMatchup.set(o.matchup, list);
   }
   const gameByNames = new Map<string, TrackGame>();
-  for (const g of games) gameByNames.set(`${g.awayName.toLowerCase()}|${g.homeName.toLowerCase()}`, g);
+  for (const g of games) gameByNames.set(`${normTeamName(g.awayName)}|${normTeamName(g.homeName)}`, g);
   let count = 0;
   for (const [matchup, list] of byMatchup) {
     const parts = matchup.split(" @ ");
-    const awayName = parts[0]?.trim().toLowerCase();
-    const homeName = parts[1]?.trim().toLowerCase();
+    const awayName = parts[0] ? normTeamName(parts[0]) : "";
+    const homeName = parts[1] ? normTeamName(parts[1]) : "";
     if (!awayName || !homeName) continue;
     const g = gameByNames.get(`${awayName}|${homeName}`);
     if (!g || g.completed) continue;
@@ -654,9 +661,9 @@ async function snapshotTwoWaySport(
     for (const o of list) {
       const dec = bestDec(o);
       if (dec === null) continue;
-      const e = o.entity.trim().toLowerCase();
-      if (e === g.awayName.toLowerCase()) awayDec = awayDec === null ? dec : Math.max(awayDec, dec);
-      else if (e === g.homeName.toLowerCase()) homeDec = homeDec === null ? dec : Math.max(homeDec, dec);
+      const e = normTeamName(o.entity);
+      if (e === normTeamName(g.awayName)) awayDec = awayDec === null ? dec : Math.max(awayDec, dec);
+      else if (e === normTeamName(g.homeName)) homeDec = homeDec === null ? dec : Math.max(homeDec, dec);
     }
     if (awayDec === null || homeDec === null) continue;
     const vf = vigFreeProbs([awayDec, homeDec]);
@@ -690,12 +697,12 @@ async function snapshotSoccerLeague(
     byMatchup.set(o.matchup, list);
   }
   const gameByNames = new Map<string, TrackGame>();
-  for (const g of games) gameByNames.set(`${g.awayName.toLowerCase()}|${g.homeName.toLowerCase()}`, g);
+  for (const g of games) gameByNames.set(`${normTeamName(g.awayName)}|${normTeamName(g.homeName)}`, g);
   let count = 0;
   for (const [matchup, list] of byMatchup) {
     const parts = matchup.split(" @ ");
-    const awayName = parts[0]?.trim().toLowerCase();
-    const homeName = parts[1]?.trim().toLowerCase();
+    const awayName = parts[0] ? normTeamName(parts[0]) : "";
+    const homeName = parts[1] ? normTeamName(parts[1]) : "";
     if (!awayName || !homeName) continue;
     const g = gameByNames.get(`${awayName}|${homeName}`);
     if (!g || g.completed) continue;
@@ -705,9 +712,9 @@ async function snapshotSoccerLeague(
     for (const o of list) {
       const dec = bestDec(o);
       if (dec === null) continue;
-      const e = o.entity.trim().toLowerCase();
-      if (e === g.awayName.toLowerCase()) awayDec = awayDec === null ? dec : Math.max(awayDec, dec);
-      else if (e === g.homeName.toLowerCase()) homeDec = homeDec === null ? dec : Math.max(homeDec, dec);
+      const e = normTeamName(o.entity);
+      if (e === normTeamName(g.awayName)) awayDec = awayDec === null ? dec : Math.max(awayDec, dec);
+      else if (e === normTeamName(g.homeName)) homeDec = homeDec === null ? dec : Math.max(homeDec, dec);
       else if (e === "draw") drawDec = drawDec === null ? dec : Math.max(drawDec, dec);
     }
     if (awayDec === null || homeDec === null || drawDec === null) continue;
@@ -785,6 +792,12 @@ async function snapshotTrackRecord(ctx: Ctx): Promise<{ snapshotted: number; gra
     const board = await loadPremium(ctx, "nba");
     snapshotted += await snapshotTwoWaySport(ctx, "nba", overview.standings, espnTrackGames(overview), board.offers, now);
     graded += await gradePendingSnapshots(ctx, "nba", "", espnTrackGames(overview), now);
+  });
+  await run(async () => {
+    const overview = await loadNcaafOverview(undefined, ctx);
+    const board = await loadPremium(ctx, "ncaaf");
+    snapshotted += await snapshotTwoWaySport(ctx, "ncaaf", overview.standings, espnTrackGames(overview), board.offers, now);
+    graded += await gradePendingSnapshots(ctx, "ncaaf", "", espnTrackGames(overview), now);
   });
   await run(async () => {
     const board = await loadPremium(ctx, "soccer");
@@ -4452,6 +4465,57 @@ const trackRecordResponse = z.object({
   lastGradedAt: z.string().nullable(),
 });
 
+// Model calibration: the learning readout. Graded live picks are bucketed by
+// the confidence the model stated on its pick; each bucket shows how often the
+// model actually won. A well-calibrated model wins ~62% of the games it prices
+// at 62%. Systematic gaps are what future weight adjustments get based on —
+// never vibes, only this table.
+const CALIBRATION_NEEDED = 50;
+const calibrationBucketSchema = z.object({
+  label: z.string(),
+  picks: z.number(),
+  wins: z.number(),
+  winPct: z.number().nullable(),
+});
+const calibrationResponse = z.object({
+  graded: z.number(),
+  needed: z.number(),
+  ready: z.boolean(),
+  buckets: z.array(calibrationBucketSchema),
+});
+
+async function loadCalibration(ctx: Ctx): Promise<z.infer<typeof calibrationResponse>> {
+  const rows = await ctx.db.select().from(schema.modelSnapshots).where(
+    and(
+      eq(schema.modelSnapshots.source, "live"),
+      isNotNull(schema.modelSnapshots.gradedAt),
+      isNotNull(schema.modelSnapshots.modelPick),
+    ),
+  );
+  const probOf = (r: SnapshotRow): number | null => {
+    if (r.modelPick === "away") return r.modelAway;
+    if (r.modelPick === "home") return r.modelHome;
+    if (r.modelPick === "draw") return r.modelDraw;
+    return null;
+  };
+  const defs: [string, number, number][] = [
+    ["50–55%", 0.5, 0.55], ["55–60%", 0.55, 0.6], ["60–65%", 0.6, 0.65],
+    ["65–70%", 0.65, 0.7], ["70%+", 0.7, 1.01],
+  ];
+  const buckets = defs.map(([label, min, max]) => {
+    const inBucket = rows.filter((r) => {
+      const p = probOf(r);
+      return p !== null && p >= min && p < max;
+    });
+    const wins = inBucket.filter((r) => r.modelCorrect === 1).length;
+    return {
+      label, picks: inBucket.length, wins,
+      winPct: inBucket.length > 0 ? Math.round((wins / inBucket.length) * 1000) / 10 : null,
+    };
+  });
+  return { graded: rows.length, needed: CALIBRATION_NEEDED, ready: rows.length >= CALIBRATION_NEEDED, buckets };
+}
+
 type SnapshotRow = typeof schema.modelSnapshots.$inferSelect;
 
 function trackEra(rows: SnapshotRow[]) {
@@ -4632,6 +4696,7 @@ export const Actions = {
   getSoccerPlayerGameLog: defineAction({ request: z.object({ league: z.enum(soccerLeagues), team: z.string(), playerId: z.number().int().positive() }), response: soccerGameLogResponse, async handler(ctx, args) { return loadSoccerPlayerGameLog(ctx, args.league, args.team, args.playerId); } }),
   getPremiumBoard: defineAction({ request: z.object({ sport: z.enum(sports) }), response: premiumResponse, async handler(ctx, args) { return loadPremium(ctx, args.sport); } }),
   getTrackRecord: defineAction({ request: z.object({}), response: trackRecordResponse, async handler(ctx) { return loadTrackRecord(ctx); } }),
+  getCalibration: defineAction({ request: z.object({}), response: calibrationResponse, async handler(ctx) { return loadCalibration(ctx); } }),
   getAdminStatus: defineAction({ request: z.object({}), response: z.object({ configured: z.boolean() }), async handler() { return { configured: !!process.env.ADMIN_TOKEN?.trim() }; } }),
   getUsageStats: defineAction({ request: z.object({ adminToken: adminTokenSchema }), response: usageStatsResponse, async handler(ctx, args) { requireAdmin(args); return loadUsageStats(ctx); } }),
   refreshAllSportsbooks: defineAction({ request: z.object({ adminToken: adminTokenSchema }), response: premiumRefreshResponse, async handler(ctx, args) { requireAdmin(args); return refreshAllPremium(ctx); } }),
