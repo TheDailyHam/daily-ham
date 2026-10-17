@@ -2919,7 +2919,7 @@ export function App(){
     setTeamFocus({ sport: targetSport, team, nonce: Date.now() });
     setMode("rosters");
   }
-  const boardLabel = sport === "nfl" ? "Gridiron" : sport === "nba" ? "Hardwood" : sport === "soccer" ? "Pitch" : "Ice board";
+  const boardLabel = sport === "nfl" || sport === "ncaaf" ? "Gridiron" : sport === "nba" ? "Hardwood" : sport === "soccer" ? "Pitch" : "Ice board";
   const [soccerLeague, setSoccerLeague] = useState<SoccerLeague>(() => loadSoccerLeague());
   function chooseSoccerLeague(next: SoccerLeague) {
     setSoccerLeague(next);
