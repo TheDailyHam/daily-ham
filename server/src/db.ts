@@ -12,19 +12,27 @@ let db: any;
 
 if (tursoUrl && tursoToken) {
   // Production: Turso cloud SQLite — survives deploys and restarts.
-  const { createClient } = await import("@libsql/client");
-  const { drizzle } = await import("drizzle-orm/libsql");
-  const { migrate } = await import("drizzle-orm/libsql/migrator");
-  const client = createClient({ url: tursoUrl, authToken: tursoToken });
-  db = drizzle(client, { schema });
-  const migrationsFolder = resolve(process.env.MIGRATIONS_DIR ?? "./drizzle");
-  if (existsSync(migrationsFolder)) {
-    await migrate(db, { migrationsFolder });
-  } else {
-    console.warn(`[db] migrations folder not found at ${migrationsFolder}; skipping migrate()`);
+  try {
+    const { createClient } = await import("@libsql/client");
+    const { drizzle } = await import("drizzle-orm/libsql");
+    const { migrate } = await import("drizzle-orm/libsql/migrator");
+    const client = createClient({ url: tursoUrl, authToken: tursoToken });
+    // Verify the connection works before committing to it.
+    await client.execute("SELECT 1");
+    db = drizzle(client, { schema });
+    const migrationsFolder = resolve(process.env.MIGRATIONS_DIR ?? "./drizzle");
+    if (existsSync(migrationsFolder)) {
+      await migrate(db, { migrationsFolder });
+    } else {
+      console.warn(`[db] migrations folder not found at ${migrationsFolder}; skipping migrate()`);
+    }
+    console.log("[db] using Turso cloud database");
+  } catch (err) {
+    console.error("[db] Turso connection failed, falling back to local SQLite:", err instanceof Error ? err.message : err);
   }
-  console.log("[db] using Turso cloud database");
-} else {
+}
+
+if (!db) {
   // Local/dev: file-based SQLite.
   const Database = (await import("better-sqlite3")).default;
   const { drizzle } = await import("drizzle-orm/better-sqlite3");
