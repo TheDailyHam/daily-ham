@@ -770,6 +770,12 @@ function soccerTrackGames(overview: { games: { away: { abbrev: string; name: str
 async function snapshotTrackRecord(ctx: Ctx): Promise<{ snapshotted: number; graded: number }> {
   await ensureBacktestSeed(ctx);
   const now = new Date();
+  // Grading must look at YESTERDAY's completed games, not today's (which
+  // haven't been played yet at 9:44 AM). Without this, the grader always
+  // finds zero completed games and the counter never moves.
+  const yest = new Date(now);
+  yest.setDate(yest.getDate() - 1);
+  const yDateStr = yest.toISOString().slice(0, 10); // YYYY-MM-DD
   let snapshotted = 0;
   let graded = 0;
   const run = async (fn: () => Promise<void>) => {
@@ -777,9 +783,10 @@ async function snapshotTrackRecord(ctx: Ctx): Promise<{ snapshotted: number; gra
   };
   await run(async () => {
     const overview = await loadNhlOverview();
+    const yOverview = await loadNhlOverview(yDateStr);
     const board = await loadPremium(ctx, "nhl");
     snapshotted += await snapshotTwoWaySport(ctx, "nhl", overview.standings, nhlTrackGames(overview), board.offers, now);
-    graded += await gradePendingSnapshots(ctx, "nhl", "", nhlTrackGames(overview), now);
+    graded += await gradePendingSnapshots(ctx, "nhl", "", nhlTrackGames(yOverview), now);
   });
   await run(async () => {
     const overview = await loadNflOverview(undefined, ctx);
@@ -789,9 +796,10 @@ async function snapshotTrackRecord(ctx: Ctx): Promise<{ snapshotted: number; gra
   });
   await run(async () => {
     const overview = await loadNbaOverview(ctx);
+    const yOverview = await loadNbaOverview(ctx, yDateStr);
     const board = await loadPremium(ctx, "nba");
     snapshotted += await snapshotTwoWaySport(ctx, "nba", overview.standings, espnTrackGames(overview), board.offers, now);
-    graded += await gradePendingSnapshots(ctx, "nba", "", espnTrackGames(overview), now);
+    graded += await gradePendingSnapshots(ctx, "nba", "", espnTrackGames(yOverview), now);
   });
   await run(async () => {
     const overview = await loadNcaafOverview(undefined, ctx);
@@ -803,10 +811,11 @@ async function snapshotTrackRecord(ctx: Ctx): Promise<{ snapshotted: number; gra
     const board = await loadPremium(ctx, "soccer");
     for (const league of soccerLeagues) {
       const overview = await loadSoccerOverview(ctx, league);
+      const yOverview = await loadSoccerOverview(ctx, league, yDateStr);
       const leagueOffers = board.offers.filter((o) => (o.league ?? "") === league);
       const games = soccerTrackGames(overview);
       snapshotted += await snapshotSoccerLeague(ctx, league, games, leagueOffers, now);
-      graded += await gradePendingSnapshots(ctx, "soccer", league, games, now);
+      graded += await gradePendingSnapshots(ctx, "soccer", league, soccerTrackGames(yOverview), now);
     }
   });
   return { snapshotted, graded };
@@ -936,8 +945,8 @@ function confirmedGoalies(payload: unknown, side: "awayTeam" | "homeTeam"): stri
   return arrayValue(team?.goalies).flatMap((value) => { const row = objectValue(value); return row?.starter === true ? [localized(row.name)] : []; }).filter(Boolean);
 }
 
-async function loadNhlOverview(): Promise<z.infer<typeof nhlOverviewResponse>> {
-  const date = nyDate(new Date());
+async function loadNhlOverview(dateStr?: string): Promise<z.infer<typeof nhlOverviewResponse>> {
+  const date = dateStr ?? nyDate(new Date());
   const scheduleUrl = `${NHL_API}/schedule/${date}`;
   const standingsUrl = `${NHL_API}/standings/${date}`;
   const [scheduleResponse, standingsResponse] = await Promise.all([fetch(scheduleUrl, { headers: { Accept: "application/json" } }), fetch(standingsUrl, { headers: { Accept: "application/json" } })]);
@@ -2508,8 +2517,8 @@ const nbaGameLogResponse = z.object({
 });
 
 
-async function loadNbaOverview(ctx?: Ctx): Promise<z.infer<typeof nbaOverviewResponse>> {
-  const board = await fetchNbaScoreboard();
+async function loadNbaOverview(ctx?: Ctx, dateStr?: string): Promise<z.infer<typeof nbaOverviewResponse>> {
+  const board = await fetchNbaScoreboard(dateStr);
   const formMap = ctx ? await formForOverview(ctx, "nba") : null;
   let standings: z.infer<typeof nbaStandingSchema>[] = [];
   let standingsUrl = "";
@@ -2787,8 +2796,8 @@ function soccerRatings(s: SoccerStanding, avgGoals: number): { attack: number; d
   };
 }
 
-async function loadSoccerOverview(ctx: Ctx, league: SoccerLeagueParam): Promise<z.infer<typeof soccerOverviewResponse>> {
-  const board = await fetchSoccerScoreboard(league);
+async function loadSoccerOverview(ctx: Ctx, league: SoccerLeagueParam, dateStr?: string): Promise<z.infer<typeof soccerOverviewResponse>> {
+  const board = await fetchSoccerScoreboard(league, dateStr);
   let standings: SoccerStanding[] = [];
   try {
     const data = await loadSoccerStandings(ctx, league);
@@ -4516,6 +4525,41 @@ async function loadCalibration(ctx: Ctx): Promise<z.infer<typeof calibrationResp
   return { graded: rows.length, needed: CALIBRATION_NEEDED, ready: rows.length >= CALIBRATION_NEEDED, buckets };
 }
 
+const trackerStatusResponse = z.object({
+  liveTotal: z.number(),
+  pending: z.number(),
+  graded: z.number(),
+  lastSnapshotAt: z.string().nullable(),
+  lastGradedAt: z.string().nullable(),
+  bySport: z.array(z.object({ sport: z.string(), pending: z.number(), graded: z.number() })),
+});
+
+async function loadTrackerStatus(ctx: Ctx): Promise<z.infer<typeof trackerStatusResponse>> {
+  const rows = await ctx.db.select().from(schema.modelSnapshots).where(
+    eq(schema.modelSnapshots.source, "live"),
+  );
+  const pending = rows.filter((r) => r.gradedAt === null);
+  const graded = rows.filter((r) => r.gradedAt !== null);
+  const maxDate = (ds: (Date | null)[]): string | null => {
+    const ts = ds.filter((d): d is Date => d !== null).map((d) => d.getTime());
+    return ts.length ? new Date(Math.max(...ts)).toISOString() : null;
+  };
+  const bySport: Record<string, { pending: number; graded: number }> = {};
+  for (const r of rows) {
+    const s = bySport[r.sport] ?? { pending: 0, graded: 0 };
+    if (r.gradedAt === null) s.pending += 1; else s.graded += 1;
+    bySport[r.sport] = s;
+  }
+  return {
+    liveTotal: rows.length,
+    pending: pending.length,
+    graded: graded.length,
+    lastSnapshotAt: maxDate(rows.map((r) => r.snapshotAt)),
+    lastGradedAt: maxDate(rows.map((r) => r.gradedAt)),
+    bySport: Object.entries(bySport).map(([sport, v]) => ({ sport, ...v })),
+  };
+}
+
 type SnapshotRow = typeof schema.modelSnapshots.$inferSelect;
 
 function trackEra(rows: SnapshotRow[]) {
@@ -4697,6 +4741,7 @@ export const Actions = {
   getPremiumBoard: defineAction({ request: z.object({ sport: z.enum(sports) }), response: premiumResponse, async handler(ctx, args) { return loadPremium(ctx, args.sport); } }),
   getTrackRecord: defineAction({ request: z.object({}), response: trackRecordResponse, async handler(ctx) { return loadTrackRecord(ctx); } }),
   getCalibration: defineAction({ request: z.object({}), response: calibrationResponse, async handler(ctx) { return loadCalibration(ctx); } }),
+  getTrackerStatus: defineAction({ request: z.object({ adminToken: adminTokenSchema }), response: trackerStatusResponse, async handler(ctx, args) { requireAdmin(args); return loadTrackerStatus(ctx); } }),
   getAdminStatus: defineAction({ request: z.object({}), response: z.object({ configured: z.boolean() }), async handler() { return { configured: !!process.env.ADMIN_TOKEN?.trim() }; } }),
   getUsageStats: defineAction({ request: z.object({ adminToken: adminTokenSchema }), response: usageStatsResponse, async handler(ctx, args) { requireAdmin(args); return loadUsageStats(ctx); } }),
   refreshAllSportsbooks: defineAction({ request: z.object({ adminToken: adminTokenSchema }), response: premiumRefreshResponse, async handler(ctx, args) { requireAdmin(args); return refreshAllPremium(ctx); } }),
