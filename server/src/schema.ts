@@ -1,4 +1,4 @@
-import { index, integer, primaryKey, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const projections = sqliteTable(
   "projections",
@@ -124,7 +124,11 @@ export const modelSnapshots = sqliteTable(
     bookCorrect: integer("book_correct"),
   },
   (table) => [
-    index("model_snapshots_identity_idx").on(
+    // UNIQUE: the tracker's upsertSnapshot() uses ON CONFLICT (sport, league,
+    // away_team, home_team, game_date) DO UPDATE, which SQLite only allows
+    // against a UNIQUE index. A plain index makes every upsert throw
+    // "ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE constraint".
+    uniqueIndex("model_snapshots_identity_idx").on(
       table.sport, table.league, table.awayTeam, table.homeTeam, table.gameDate,
     ),
     index("model_snapshots_graded_idx").on(table.gradedAt),

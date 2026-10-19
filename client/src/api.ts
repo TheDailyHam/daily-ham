@@ -158,6 +158,7 @@ export const api = {
   getPremiumBoard: (args: ActionArgs<"getPremiumBoard">) => callAction("getPremiumBoard", args),
   getTrackRecord: () => callAction("getTrackRecord", {}),
   getCalibration: () => callAction("getCalibration", {}),
+  getTrackerStatus: (args: ActionArgs<"getTrackerStatus">) => callAction("getTrackerStatus", args),
   getAdminStatus: (args: ActionArgs<"getAdminStatus">) => callAction("getAdminStatus", args),
   refreshAllSportsbooks: (args: ActionArgs<"refreshAllSportsbooks">) => callAction("refreshAllSportsbooks", args),
   getSportsGameOddsKeyStatus: (args: ActionArgs<"getSportsGameOddsKeyStatus">) => callAction("getSportsGameOddsKeyStatus", args),

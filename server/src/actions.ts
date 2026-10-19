@@ -587,16 +587,32 @@ async function upsertSnapshot(ctx: Ctx, row: {
     bookDrawPrice: row.bookDrawPrice, bookAwayProb: row.bookAwayProb, bookHomeProb: row.bookHomeProb,
     bookDrawProb: row.bookDrawProb, bookPick: row.bookPick, source: "live" as const,
   };
-  await ctx.db.insert(t).values(values).onConflictDoUpdate({
-    target: [t.sport, t.league, t.awayTeam, t.homeTeam, t.gameDate],
-    set: {
+  // Manual upsert instead of onConflictDoUpdate: the ON CONFLICT clause
+  // requires a UNIQUE index on (sport, league, away_team, home_team,
+  // game_date), and if the migration didn't apply cleanly the upsert throws
+  // "ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE constraint"
+  // which was being swallowed by the per-sport try/catch — zero snapshots
+  // ever persisted. Select-then-write works regardless of index state.
+  const existing = await ctx.db.select({ id: t.id }).from(t).where(
+    and(
+      eq(t.sport, row.sport),
+      eq(t.league, row.league),
+      eq(t.awayTeam, row.awayTeam),
+      eq(t.homeTeam, row.homeTeam),
+      eq(t.gameDate, row.gameDate),
+    ),
+  ).limit(1);
+  if (existing.length > 0 && existing[0]) {
+    await ctx.db.update(t).set({
       updatedAt: row.now,
       modelAway: row.modelAway, modelHome: row.modelHome, modelDraw: row.modelDraw,
       modelPick: row.modelPick, bookAwayPrice: row.bookAwayPrice, bookHomePrice: row.bookHomePrice,
       bookDrawPrice: row.bookDrawPrice, bookAwayProb: row.bookAwayProb, bookHomeProb: row.bookHomeProb,
       bookDrawProb: row.bookDrawProb, bookPick: row.bookPick,
-    },
-  });
+    }).where(eq(t.id, existing[0].id));
+  } else {
+    await ctx.db.insert(t).values(values);
+  }
   return true;
 }
 
@@ -779,7 +795,7 @@ async function snapshotTrackRecord(ctx: Ctx): Promise<{ snapshotted: number; gra
   let snapshotted = 0;
   let graded = 0;
   const run = async (fn: () => Promise<void>) => {
-    try { await fn(); } catch { /* track record never breaks the refresh */ }
+    try { await fn(); } catch (e) { console.error("[track-record] per-sport block failed:", e instanceof Error ? e.message : e); }
   };
   await run(async () => {
     const overview = await loadNhlOverview();
@@ -865,7 +881,9 @@ async function refreshAllPremium(ctx: Ctx): Promise<z.infer<typeof premiumRefres
   }
   // Transparent track record: snapshot pregame model picks + book prices and
   // grade newly completed games. Runs on the fresh odds above; never throws.
-  try { await snapshotTrackRecord(ctx); } catch { /* tracker is best-effort */ }
+  // Errors are logged (never silently swallowed) so a broken tracker is
+  // visible in server logs instead of failing invisibly for days.
+  try { await snapshotTrackRecord(ctx); } catch (e) { console.error("[track-record] snapshotTrackRecord failed:", e instanceof Error ? e.message : e); }
   return { status: refreshedSports === sports.length ? "success" : refreshedSports > 0 ? "partial" : "failed", refreshedAt: refreshedAt.toISOString(), refreshedSports, message: failures.length ? failures.join(" · ") : "All sportsbook boards updated." };
 }
 
