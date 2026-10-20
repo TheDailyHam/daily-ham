@@ -991,6 +991,7 @@ function ProView({ parlay, setParlay, home = false, sport, soccerLeague, onSocce
       <div className={board.data.cacheStatus === "fresh" ? "refresh-health fresh" : "refresh-health stale"} role="status"><span className="health-dot"/><div><strong>{board.data.cacheStatus === "fresh" ? "Odds feed healthy" : "Showing last successful update"}</strong><small>{board.data.healthMessage} · Updated {dateTime(board.data.fetchedAt)}</small></div></div>
       {moneylines.length > 0 && <section className="moneyline-rail" aria-labelledby="moneyline-title"><div className="section-heading"><div><p className="kicker">FIRST LOOK</p><h3 id="moneyline-title">Moneyline picks</h3></div><span>Best · DraftKings · FanDuel · BetMGM</span></div><div className="moneyline-grid">{moneylines.map((group) => { const side = strongestSide(group); if (!side) return null; const added = parlay.some((item) => item.id === side.id); const positiveEv = side.evPercent !== null && side.evPercent > 0; const codes = marketTeamCodes(sport, group, overview.data?.standings ?? null, nflOverview.data?.standings ?? null, nbaOverview.data?.standings ?? null, ncaafOverview.data?.standings ?? null); return <article className="moneyline-card" key={group.id}><button className="moneyline-open" onClick={() => setSelectedMarket(group)} aria-label={`Open moneyline prices for ${group.entity}`}><small>{group.matchup}</small><h4>{group.entity}</h4><div><span>Best <b>{bookName(side.best.book)} {formatAmerican(side.best.odds)}</b></span><span>DraftKings <b>{formatAmerican(side.draftKings?.odds ?? null)}</b></span><span>FanDuel <b>{formatAmerican(side.fanDuel?.odds ?? null)}</b></span><span>BetMGM <b>{formatAmerican(side.betMGM?.odds ?? null)}</b></span></div>{sport === "nhl" && <GameGoalieLine market={group} games={overview.data?.games ?? []}/>}
 <FlipMeter sport={sport} market={group} nhlStandings={overview.data?.standings ?? null} nflStandings={nflOverview.data?.standings ?? null} nbaStandings={nbaOverview.data?.standings ?? null} ncaafStandings={ncaafOverview.data?.standings ?? null} />
+<ModelTotalChip total={codes ? (sport === "nhl" ? overview.data?.games : sport === "nfl" ? nflOverview.data?.games : sport === "nba" ? nbaOverview.data?.games : ncaafOverview.data?.games)?.find((g) => g.away.abbrev === codes[0] && g.home.abbrev === codes[1])?.modelTotal ?? null : null} bookLine={boardBookTotal(groups, group.eventId)} unit={sport === "nhl" ? "goals" : "points"} />
 {codes && <InjuryChips sport={sport} awayCode={codes[0]} homeCode={codes[1]} injuries={injuries.data ?? null} scorers={scorers.data ?? null} />}
 <LikelyScorersStrip sport={sport} market={group} nhlStandings={overview.data?.standings ?? null} nflStandings={nflOverview.data?.standings ?? null} nbaStandings={nbaOverview.data?.standings ?? null} ncaafStandings={ncaafOverview.data?.standings ?? null} scorers={scorers.data ?? null} />
 <p className={positiveEv ? "signal positive" : "signal"}>{positiveEv ? `+${side.evPercent?.toFixed(1)}% fair-odds EV` : "Market favorite"}</p></button><button className={added ? "pick-button added" : "pick-button"} onClick={() => toggleParlay(group, side)}>{added ? "Remove" : "Add ML"}</button></article>;})}</div></section>}
@@ -1364,6 +1365,7 @@ function MatchupCalculator() {
         <p className="winner-explain">The winner model blends each club’s recent win rate with the opponent’s loss rate, weighting away and home splits when at least five matching games exist. Overtime and shootout winners count. This is a model estimate, not a sportsbook line.</p>
       </section>
       {data && <DeepDiveSection awayName={ddTeamName(teams, matchup.away)} homeName={ddTeamName(teams, matchup.home)} awayCode={matchup.away} homeCode={matchup.home} awayGames={data.away.recentGames} homeGames={data.home.recentGames} awayProb={data.awayWinProbability} homeProb={data.homeWinProbability} scoreWord="goals" />}
+      {data && <ProjectedTotalCard awayName={ddTeamName(teams, matchup.away)} homeName={ddTeamName(teams, matchup.home)} unit="goals" projectedTotal={data.projectedTotal} projectedAwayScore={data.projectedAwayScore} projectedHomeScore={data.projectedHomeScore} bookTotal={data.bookTotal} totalLean={data.totalLean} totalGap={data.totalGap} totalOverProbability={data.totalOverProbability} awayScoredPerGame={data.awayScoredPerGame} homeScoredPerGame={data.homeScoredPerGame} note={data.goalieAway && data.goalieHome ? `Goalie edge baked in: ${data.goalieAway.name} (${(data.goalieAway.savePct * 100).toFixed(1)}%) vs ${data.goalieHome.name} (${(data.goalieHome.savePct * 100).toFixed(1)}%) recent save pct.` : null} />}
       {data && <ModelVsBooks sport="nhl" awayCode={data.away.team} homeCode={data.home.team} awayModel={data.awayWinProbability} homeModel={data.homeWinProbability} groups={boardGroups} />}
       {data && <MatchupScorersSection sport="nhl" awayCode={data.away.team} homeCode={data.home.team} />}
       {data && <BookReadSection sport="nhl" awayCode={data.away.team} homeCode={data.home.team} />}
@@ -1838,6 +1840,63 @@ function deepDiveRead(awayName: string, homeName: string, away: ReturnType<typeo
 
 const ddTeamName = (list: { code: string; name: string }[], code: string) => list.find((t) => t.code === code)?.name ?? code;
 
+// The model's projected total for a matchup: expected combined score from
+// the scoring-rate model, the venue/form context behind it, both teams'
+// official season scored-per-game averages, and — when the board carries
+// the game — the book total with the model's lean and gap. Always labeled
+// a model estimate; renders nothing when the projection is null.
+function ProjectedTotalCard(props: {
+  awayName: string; homeName: string; unit: "goals" | "points";
+  projectedTotal: number | null; projectedAwayScore: number | null; projectedHomeScore: number | null;
+  bookTotal: number | null; totalLean: "over" | "under" | null; totalGap: number | null;
+  totalOverProbability: number | null;
+  awayScoredPerGame: number | null; homeScoredPerGame: number | null;
+  note?: string | null;
+}) {
+  if (props.projectedTotal === null) return null;
+  const { awayName, homeName, unit } = props;
+  return <section className="model-total-card" aria-label="Projected total">
+    <div className="mt-head"><span>PROJECTED TOTAL</span><em>Model estimate — not a sportsbook line</em></div>
+    <div className="mt-main">
+      <strong>{props.projectedTotal.toFixed(1)}</strong>
+      {props.projectedAwayScore !== null && props.projectedHomeScore !== null && <span className="mt-split">{awayName} {props.projectedAwayScore.toFixed(1)} · {homeName} {props.projectedHomeScore.toFixed(1)}</span>}
+    </div>
+    {(props.awayScoredPerGame !== null || props.homeScoredPerGame !== null) && <div className="mt-avgs">
+      {props.awayScoredPerGame !== null && <span><b>{awayName}</b> scores {props.awayScoredPerGame.toFixed(1)} {unit}/game</span>}
+      {props.homeScoredPerGame !== null && <span><b>{homeName}</b> scores {props.homeScoredPerGame.toFixed(1)} {unit}/game</span>}
+    </div>}
+    {props.bookTotal !== null && <div className="mt-book">
+      <span>Model {props.projectedTotal.toFixed(1)} · Book {props.bookTotal}</span>
+      {props.totalLean ? <b className={props.totalLean === "over" ? "mt-lean over" : "mt-lean under"}>{props.totalLean === "over" ? "Over" : "Under"} lean{props.totalGap ? ` (${props.totalGap > 0 ? "+" : ""}${props.totalGap.toFixed(1)})` : ""}</b> : <span>Dead even with the book</span>}
+      {props.totalOverProbability !== null && <span>Model chance the over hits: {(props.totalOverProbability * 100).toFixed(0)}%</span>}
+    </div>}
+    {props.note && <p className="mt-note">{props.note}</p>}
+  </section>;
+}
+
+// The board's total line for an event, from the grouped offers: prefer
+// the group whose prices include DraftKings, like the server does.
+function boardBookTotal(groups: MarketGroup[], eventId: string): number | null {
+  const totals = groups.filter((g) => g.eventId === eventId && g.period === "game" && g.entityType === "event" && /total/i.test(g.marketName) && !/team total/i.test(g.marketName));
+  if (!totals.length) return null;
+  const chosen = totals.find((g) => g.sides.some((s) => s.draftKings)) ?? totals[0];
+  const raw = chosen?.sides[0]?.line;
+  const line = raw === null || raw === undefined ? NaN : Number(raw);
+  return Number.isFinite(line) && line > 0 ? line : null;
+}
+
+// Compact model-total line for board moneyline cards.
+function ModelTotalChip({ total, bookLine, unit }: { total: number | null; bookLine: number | null; unit: string }) {
+  if (total === null) return null;
+  const gap = bookLine !== null ? Math.round((total - bookLine) * 10) / 10 : null;
+  const lean = gap === null || gap === 0 ? null : gap > 0 ? "Over" : "Under";
+  return <p className="model-total-chip">
+    <span>Model total <b>{total.toFixed(1)}</b> {unit}</span>
+    <em>model estimate</em>
+    {bookLine !== null && <span>Book {bookLine}{lean ? ` → ${lean} lean (${gap !== null && gap > 0 ? "+" : ""}${gap?.toFixed(1)})` : ""}</span>}
+  </p>;
+}
+
 function DeepDiveSection(props: {
   awayName: string; homeName: string; awayCode: string; homeCode: string;
   awayGames?: DeepDiveGame[]; homeGames?: DeepDiveGame[];
@@ -2205,6 +2264,7 @@ function NflMatchupCalculator() {
         <p className="winner-explain">The winner model blends each club's recent win rate with the opponent's loss rate, weighting away and home splits when at least three matching games exist. This is a model estimate, not a sportsbook line.</p>
       </section>
       {data && <DeepDiveSection awayName={ddTeamName(nflTeams, matchup.away)} homeName={ddTeamName(nflTeams, matchup.home)} awayCode={matchup.away} homeCode={matchup.home} awayGames={data.away.recentGames} homeGames={data.home.recentGames} awayProb={data.awayWinProbability} homeProb={data.homeWinProbability} />}
+      {data && <ProjectedTotalCard awayName={ddTeamName(nflTeams, matchup.away)} homeName={ddTeamName(nflTeams, matchup.home)} unit="points" projectedTotal={data.projectedTotal} projectedAwayScore={data.projectedAwayScore} projectedHomeScore={data.projectedHomeScore} bookTotal={data.bookTotal} totalLean={data.totalLean} totalGap={data.totalGap} totalOverProbability={data.totalOverProbability} awayScoredPerGame={data.awayScoredPerGame} homeScoredPerGame={data.homeScoredPerGame} />}
       {data && <ModelVsBooks sport="nfl" awayCode={data.away.team} homeCode={data.home.team} awayModel={data.awayWinProbability} homeModel={data.homeWinProbability} groups={boardGroups} />}
       {data && <MatchupScorersSection sport="nfl" awayCode={data.away.team} homeCode={data.home.team} />}
       {data && <BookReadSection sport="nfl" awayCode={data.away.team} homeCode={data.home.team} />}
@@ -2275,6 +2335,7 @@ function NcaafMatchupCalculator() {
         <p className="winner-explain">The winner model blends each club's recent win rate with the opponent's loss rate, weighting away and home splits when at least three matching games exist. This is a model estimate, not a sportsbook line.</p>
       </section>
       {data && <DeepDiveSection awayName={ddTeamName(ncaafTeams, matchup.away)} homeName={ddTeamName(ncaafTeams, matchup.home)} awayCode={matchup.away} homeCode={matchup.home} awayGames={data.away.recentGames} homeGames={data.home.recentGames} awayProb={data.awayWinProbability} homeProb={data.homeWinProbability} />}
+      {data && <ProjectedTotalCard awayName={ddTeamName(ncaafTeams, matchup.away)} homeName={ddTeamName(ncaafTeams, matchup.home)} unit="points" projectedTotal={data.projectedTotal} projectedAwayScore={data.projectedAwayScore} projectedHomeScore={data.projectedHomeScore} bookTotal={data.bookTotal} totalLean={data.totalLean} totalGap={data.totalGap} totalOverProbability={data.totalOverProbability} awayScoredPerGame={data.awayScoredPerGame} homeScoredPerGame={data.homeScoredPerGame} />}
       {data && <ModelVsBooks sport="ncaaf" awayCode={data.away.team} homeCode={data.home.team} awayModel={data.awayWinProbability} homeModel={data.homeWinProbability} groups={boardGroups} />}
       {data && <MatchupScorersSection sport="ncaaf" awayCode={data.away.team} homeCode={data.home.team} />}
       {data && <BookReadSection sport="ncaaf" awayCode={data.away.team} homeCode={data.home.team} />}
@@ -3075,6 +3136,7 @@ function NbaMatchupCalculator() {
         <p className="winner-explain">The winner model blends each club's recent win rate with the opponent's loss rate, weighting away and home splits when at least three matching games exist. This is a model estimate, not a sportsbook line.</p>
       </section>
       {data && <DeepDiveSection awayName={ddTeamName(nbaTeams, matchup.away)} homeName={ddTeamName(nbaTeams, matchup.home)} awayCode={matchup.away} homeCode={matchup.home} awayGames={data.away.recentGames} homeGames={data.home.recentGames} awayProb={data.awayWinProbability} homeProb={data.homeWinProbability} />}
+      {data && <ProjectedTotalCard awayName={ddTeamName(nbaTeams, matchup.away)} homeName={ddTeamName(nbaTeams, matchup.home)} unit="points" projectedTotal={data.projectedTotal} projectedAwayScore={data.projectedAwayScore} projectedHomeScore={data.projectedHomeScore} bookTotal={data.bookTotal} totalLean={data.totalLean} totalGap={data.totalGap} totalOverProbability={data.totalOverProbability} awayScoredPerGame={data.awayScoredPerGame} homeScoredPerGame={data.homeScoredPerGame} />}
       {data && <ModelVsBooks sport="nba" awayCode={data.away.team} homeCode={data.home.team} awayModel={data.awayWinProbability} homeModel={data.homeWinProbability} groups={boardGroups} />}
       {data && <MatchupScorersSection sport="nba" awayCode={data.away.team} homeCode={data.home.team} />}
       {data && <BookReadSection sport="nba" awayCode={data.away.team} homeCode={data.home.team} />}
@@ -3515,6 +3577,7 @@ function SoccerBoardView({ league, onLeagueChange, parlay, setParlay, home = fal
           {outcomeRow(group, split.draw, "Draw")}
           {outcomeRow(group, split.away, `${awayLabel} win`)}
         </div><SoccerFlipMeter league={league} market={group} />
+        <ModelTotalChip total={split.awayCode && split.homeCode ? overview.data?.games.find((g) => g.away.abbrev === split.awayCode && g.home.abbrev === split.homeCode)?.modelTotal ?? null : null} bookLine={boardBookTotal(groups, group.eventId)} unit="goals" />
         <InjuryChips sport="soccer" awayCode={split.awayCode ?? ""} homeCode={split.homeCode ?? ""} injuries={injuries.data ?? null} />
         <SoccerScorersStrip awayCode={split.awayCode} homeCode={split.homeCode} scorers={scorers.data ?? null} /></article>;
       })}</div></section>}
@@ -3624,6 +3687,7 @@ function SoccerMatchupCalculator({ league, onLeagueChange }: { league: SoccerLea
         <p className="winner-explain">The result model blends each club's recent home/away form with goals scored and allowed, weighting venue splits when the sample allows. Draws are a real outcome here — always price all three. This is a model estimate, not a sportsbook line.</p>
       </section>
       {data && <DeepDiveSection awayName={ddTeamName(soccerTeamsFor(league), matchup.away)} homeName={ddTeamName(soccerTeamsFor(league), matchup.home)} awayCode={matchup.away} homeCode={matchup.home} awayGames={data.away.recentGames} homeGames={data.home.recentGames} awayProb={data.awayWinProbability} homeProb={data.homeWinProbability} scoreWord="goals" />}
+      {data && <ProjectedTotalCard awayName={ddTeamName(soccerTeamsFor(league), matchup.away)} homeName={ddTeamName(soccerTeamsFor(league), matchup.home)} unit="goals" projectedTotal={data.projectedTotal} projectedAwayScore={data.projectedAwayScore} projectedHomeScore={data.projectedHomeScore} bookTotal={data.bookTotal} totalLean={data.totalLean} totalGap={data.totalGap} totalOverProbability={data.totalOverProbability} awayScoredPerGame={data.awayScoredPerGame} homeScoredPerGame={data.homeScoredPerGame} />}
       <SoccerModelVsBooks league={league} homeCode={data.home.team} awayCode={data.away.team} homeModel={data.homeWinProbability} drawModel={data.drawProbability} awayModel={data.awayWinProbability} groups={boardGroups} />
       {data && <MatchupScorersSection sport="soccer" awayCode={data.away.team} homeCode={data.home.team} league={league} />}
       {data && <BookReadSection sport="soccer" awayCode={data.away.team} homeCode={data.home.team} league={league} />}

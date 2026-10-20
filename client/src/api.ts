@@ -67,6 +67,7 @@ export type SoccerGame = {
   id: number; date: string; startsAt: string; state: string; detail: string;
   shortName: string; away: SoccerGameSide; home: SoccerGameSide;
   modelThreeWay: SoccerThreeWay | null;
+  modelTotal: number | null;
 };
 export type SoccerStandingRow = {
   team: string; name: string; played: number; wins: number; draws: number; losses: number; points: number;
@@ -92,6 +93,10 @@ export type SoccerMatchup = {
   edgeTeam: string | null; edgeProbability: number | null;
   over25Probability: number | null; bttsProbability: number | null; margin3PlusProbability: number | null;
   homeExpectedGoals: number | null; awayExpectedGoals: number | null;
+  projectedTotal: number | null; projectedAwayScore: number | null; projectedHomeScore: number | null;
+  bookTotal: number | null; totalLean: "over" | "under" | null; totalGap: number | null;
+  totalOverProbability: number | null;
+  awayScoredPerGame: number | null; homeScoredPerGame: number | null;
   headToHead: { games: number; homeWins: number; draws: number; awayWins: number };
   fetchedAt: string; sourceUrl: string; sampleNote: string;
 };

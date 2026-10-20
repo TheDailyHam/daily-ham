@@ -317,6 +317,29 @@ function poissonPmf(lambda: number, k: number): number {
   return p;
 }
 
+/**
+ * Fair two-way probability that a Poisson total with mean `lambdaTotal`
+ * finishes OVER `line`. On an integer line the push mass is split out
+ * (over / (over + under)), the same way the rest of the model presents
+ * two-way chances. Used for soccer and NHL projected totals; null when
+ * the inputs are unusable.
+ */
+export function poissonOverProbability(lambdaTotal: number, line: number): number | null {
+  if (!Number.isFinite(lambdaTotal) || lambdaTotal <= 0 || !Number.isFinite(line) || line < 0) return null;
+  let over = 0;
+  let under = 0;
+  let push = 0;
+  for (let k = 0; k <= 40; k++) {
+    const p = poissonPmf(lambdaTotal, k);
+    if (k > line) over += p;
+    else if (k < line) under += p;
+    else push += p;
+  }
+  const decided = over + under;
+  if (decided <= 0) return null;
+  return push > 0 ? over / decided : over;
+}
+
 export type SoccerThreeWay = { home: number; draw: number; away: number };
 export type SoccerMatchProbs = SoccerThreeWay & {
   over25: number; btts: number; margin3Plus: number;

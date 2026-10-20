@@ -483,6 +483,25 @@ h1, h2, h3 { font-family: Rockwell, Georgia, serif; margin: 0; }
 .dd-call strong { font: 800 24px/1.2 Rockwell, Georgia, serif; }
 .dd-conf { font-weight: 800; font-size: 14px; color: var(--gold-deep); background: color-mix(in srgb, var(--gold) 22%, transparent); padding: 2px 10px; border-radius: 999px; }
 .dd-call p { margin: 8px 0 0; font-size: 13px; color: var(--dim); }
+/* Projected total — model estimate card in every matchup calculator */
+.model-total-card { padding: 14px; border-radius: 12px; border: 1px solid var(--gold); background: color-mix(in srgb, var(--gold) 10%, var(--paper)); margin: 0 0 16px; }
+.mt-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.mt-head span { font-size: 10px; font-weight: 900; letter-spacing: .1em; color: var(--text); }
+.mt-head em { font-style: normal; font-size: 9px; color: var(--dim); }
+.mt-main { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-top: 6px; }
+.mt-main strong { font: 800 30px/1.1 Rockwell, Georgia, serif; }
+.mt-split { font-size: 13px; font-weight: 700; color: var(--text); }
+.mt-avgs { display: flex; gap: 6px 16px; flex-wrap: wrap; margin-top: 8px; font-size: 12px; color: var(--dim); }
+.mt-avgs b { color: var(--text); }
+.mt-book { display: flex; gap: 6px 12px; flex-wrap: wrap; align-items: baseline; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--rule); font-size: 13px; color: var(--dim); }
+.mt-book b { color: var(--text); }
+.mt-lean.over { color: var(--green); }
+.mt-lean.under { color: var(--orange, #c0392b); }
+.mt-note { margin: 8px 0 0; font-size: 12px; color: var(--dim); }
+/* Compact model-total line on board moneyline cards */
+.model-total-chip { display: flex; gap: 4px 10px; flex-wrap: wrap; align-items: baseline; margin: 8px 0 2px; font-size: 12px; color: var(--dim); }
+.model-total-chip b { color: var(--text); font-size: 13px; }
+.model-total-chip em { font-style: normal; font-size: 9px; color: var(--dim); }
 .dd-forms { display: grid; gap: 12px; }
 @media (min-width: 640px) { .dd-forms { grid-template-columns: 1fr 1fr; } }
 .dd-team { padding: 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--paper); }

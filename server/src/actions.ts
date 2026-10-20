@@ -51,7 +51,7 @@ import {
 import {
   SOCCER_SEASON, fetchSoccerGameSummary, fetchSoccerRoster,
   fetchSoccerScoreboard, fetchSoccerTeamGames, fetchSoccerTeamLeaders, fetchSoccerTeamRecord,
-  regressedRate, soccerLeagueLabel, soccerMatchProbabilities, soccerSportsGameOddsLeague,
+  poissonOverProbability, regressedRate, soccerLeagueLabel, soccerMatchProbabilities, soccerSportsGameOddsLeague,
   soccerTeamMeta, soccerTeams,
   type SoccerGame, type SoccerStanding, type SoccerTeamGame,
 } from "./soccer.js";
@@ -897,6 +897,9 @@ const nhlGameSchema = z.object({
   away: z.object({ abbrev: z.string(), name: z.string(), score: z.number().nullable(), goalie: goalieIndicatorSchema }),
   home: z.object({ abbrev: z.string(), name: z.string(), score: z.number().nullable(), goalie: goalieIndicatorSchema }),
   broadcasts: z.array(z.string()),
+  // Model's projected total for the game (model estimate, never a book
+  // line). Null when either club's scoring data is too thin.
+  modelTotal: z.number().nullable(),
 });
 const standingSchema = z.object({
   team: z.string(), name: z.string(), conference: z.string(), division: z.string(), gamesPlayed: z.number(), wins: z.number(), losses: z.number(), otLosses: z.number(), points: z.number(), pointPct: z.number(), goalsFor: z.number(), goalsAgainst: z.number(), streak: z.string().nullable(),
@@ -987,6 +990,21 @@ const firstGoalTeamSchema = z.object({
   wins: z.number(), winPct: z.number().nullable(), venueWins: z.number(), venueWinPct: z.number().nullable(),
   recentGames: z.array(recentGameSchema).optional(),
 });
+// Projected-total fields shared by all five matchup responses (see the
+// projected-totals section below espnModelPair for the math). Declared
+// here because the matchup schemas below evaluate at module load.
+const totalsResponseFields = {
+  projectedTotal: z.number().nullable(),
+  projectedAwayScore: z.number().nullable(),
+  projectedHomeScore: z.number().nullable(),
+  bookTotal: z.number().nullable(),
+  totalLean: z.enum(["over", "under"]).nullable(),
+  totalGap: z.number().nullable(),
+  totalOverProbability: z.number().nullable(),
+  awayScoredPerGame: z.number().nullable(),
+  homeScoredPerGame: z.number().nullable(),
+};
+
 const firstGoalMatchupResponse = z.object({
   away: firstGoalTeamSchema, home: firstGoalTeamSchema,
   awayProbability: z.number().nullable(), homeProbability: z.number().nullable(), edgeTeam: z.enum(teamCodes).nullable(), edgePoints: z.number().nullable(),
@@ -999,6 +1017,7 @@ const firstGoalMatchupResponse = z.object({
   goalieHome: z.object({ name: z.string(), savePct: z.number() }).nullable(),
   firstPeriodUnder25Probability: z.number().nullable(), blowoutProbability: z.number().nullable(), bothTeamsTwoProbability: z.number().nullable(), regulationDrawProbability: z.number().nullable(),
   headToHead: z.object({ games: z.number(), awayScoredFirst: z.number(), homeScoredFirst: z.number() }),
+  ...totalsResponseFields,
   fetchedAt: z.string(), sourceUrl: z.string(), sampleNote: z.string(),
 });
 
@@ -1053,6 +1072,7 @@ async function loadNhlOverview(dateStr?: string): Promise<z.infer<typeof nhlOver
     catch { return [id, null] as const; }
   }));
   const details = new Map<number, unknown>(detailPairs);
+  const scoringProfiles = nhlScoringProfilesFromPayload(standingsPayload);
   const games = gameRows.flatMap(({ gameDate, game }) => {
     const id = num(game.id); const startsAt = textValue(game.startTimeUTC); if (id === null || !startsAt) return [];
     const awayRaw = objectValue(game.awayTeam); const homeRaw = objectValue(game.homeTeam); if (!awayRaw || !homeRaw) return [];
@@ -1060,7 +1080,8 @@ async function loadNhlOverview(dateStr?: string): Promise<z.infer<typeof nhlOver
     const awayConfirmed = confirmedGoalies(detail, "awayTeam"); const homeConfirmed = confirmedGoalies(detail, "homeTeam");
     const awayWatch = goalieWatch(detail, "awayTeam"); const homeWatch = goalieWatch(detail, "homeTeam");
     const indicator = (confirmed: string[], watch: string[]) => confirmed.length ? { status: "confirmed" as const, names: confirmed } : watch.length ? { status: "watch" as const, names: watch } : { status: "unavailable" as const, names: [] };
-    return [{ id, date: gameDate, startsAt, state, venue: localized(game.venue) || "Venue unavailable", away: { abbrev: shortTeam(awayRaw), name: fullTeam(awayRaw), score: num(awayRaw.score), goalie: indicator(awayConfirmed, awayWatch) }, home: { abbrev: shortTeam(homeRaw), name: fullTeam(homeRaw), score: num(homeRaw.score), goalie: indicator(homeConfirmed, homeWatch) }, broadcasts: arrayValue(game.tvBroadcasts).flatMap((value) => { const network = textValue(objectValue(value)?.network); return network ? [network] : []; }) }];
+    const modelTotal = scoringProfiles ? nhlProjectedTotals(scoringProfiles, shortTeam(awayRaw), shortTeam(homeRaw))?.projectedTotal ?? null : null;
+    return [{ id, date: gameDate, startsAt, state, venue: localized(game.venue) || "Venue unavailable", away: { abbrev: shortTeam(awayRaw), name: fullTeam(awayRaw), score: num(awayRaw.score), goalie: indicator(awayConfirmed, awayWatch) }, home: { abbrev: shortTeam(homeRaw), name: fullTeam(homeRaw), score: num(homeRaw.score), goalie: indicator(homeConfirmed, homeWatch) }, broadcasts: arrayValue(game.tvBroadcasts).flatMap((value) => { const network = textValue(objectValue(value)?.network); return network ? [network] : []; }), modelTotal }];
   });
   const standings = arrayValue(objectValue(standingsPayload)?.standings)
     .flatMap((value) => { const row = nhlStandingRow(value); return row ? [row] : []; })
@@ -1235,8 +1256,9 @@ async function nhlFixtureContext(ctx: Ctx, results: FirstGoalResult[], awayTeam:
   restAwayDays: number | null; restHomeDays: number | null;
   goalieAway: { name: string; savePct: number } | null;
   goalieHome: { name: string; savePct: number } | null;
+  leagueAvgSavePct: number | null;
 }> {
-  const fallback = { restAwayDays: null, restHomeDays: null, goalieAway: null, goalieHome: null };
+  const fallback = { restAwayDays: null, restHomeDays: null, goalieAway: null, goalieHome: null, leagueAvgSavePct: null };
   try {
     const response = await fetch(`${NHL_API}/schedule/${nyDate(new Date())}`, { headers: { Accept: "application/json" } });
     if (!response.ok) return fallback;
@@ -1267,6 +1289,7 @@ async function nhlFixtureContext(ctx: Ctx, results: FirstGoalResult[], awayTeam:
     const restHomeDays = restDaysBetween(lastDate(homeTeam), fixture.date);
     let goalieAway: { name: string; savePct: number } | null = null;
     let goalieHome: { name: string; savePct: number } | null = null;
+    let leagueAvgSavePct: number | null = null;
     try {
       const detail = await fetch(`${NHL_API}/gamecenter/${fixture.id}/landing`, { headers: { Accept: "application/json" } });
       if (detail.ok) {
@@ -1274,6 +1297,18 @@ async function nhlFixtureContext(ctx: Ctx, results: FirstGoalResult[], awayTeam:
         const nameFor = (side: "awayTeam" | "homeTeam"): string | null =>
           confirmedGoalies(landing, side)[0] ?? goalieWatch(landing, side)[0] ?? null;
         const formMap = await loadGoalieFormMap(ctx);
+        // League-average save % across qualified goalies, weighted by
+        // games — the baseline the projected-total goalie adjustment
+        // scales against. Never hardcoded.
+        {
+          let weighted = 0;
+          let games = 0;
+          for (const entry of formMap.values()) {
+            weighted += entry.savePct * entry.games;
+            games += entry.games;
+          }
+          if (games >= 15) leagueAvgSavePct = Math.round((weighted / games) * 1000) / 1000;
+        }
         const lookup = (name: string | null): { name: string; savePct: number } | null => {
           if (!name) return null;
           const entry = formMap.get(normGoalieName(name));
@@ -1283,12 +1318,12 @@ async function nhlFixtureContext(ctx: Ctx, results: FirstGoalResult[], awayTeam:
         goalieHome = lookup(nameFor("homeTeam"));
       }
     } catch { /* goalie edge is best-effort */ }
-    return { restAwayDays, restHomeDays, goalieAway, goalieHome };
+    return { restAwayDays, restHomeDays, goalieAway, goalieHome, leagueAvgSavePct };
   } catch { return fallback; }
 }
 
 async function loadFirstGoalMatchup(ctx: Ctx, awayTeam: (typeof teamCodes)[number], homeTeam: (typeof teamCodes)[number], force: boolean): Promise<z.infer<typeof firstGoalMatchupResponse>> {
-  const cacheKey = `matchup-v3:${awayTeam}:${homeTeam}`;
+  const cacheKey = `matchup-v4:${awayTeam}:${homeTeam}`;
   const db = ctx.db;
   const cachedRows = await db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey)).limit(1);
   const cached = cachedRows[0];
@@ -1340,9 +1375,37 @@ async function loadFirstGoalMatchup(ctx: Ctx, awayTeam: (typeof teamCodes)[numbe
   const headGames = results.filter((game) => (game.away === awayTeam && game.home === homeTeam) || (game.away === homeTeam && game.home === awayTeam));
   const edgeTeam = awayProbability === null || homeProbability === null ? null : awayProbability >= homeProbability ? awayTeam : homeTeam;
   const edgePoints = awayProbability === null || homeProbability === null ? null : Math.abs(awayProbability - homeProbability) * 100;
+  // Projected total: venue/form-blended attack × concede rates, then the
+  // goalie adjustment — each side's expected goals scale by how much more
+  // (or less) the opposing starter leaks than the league-average goalie
+  // (leak = 1 − save pct), capped to a ±10% swing. Only when both
+  // starters are known with real recent form.
+  const scoringModel = await nhlScoringModel();
+  const eg = scoringModel ? nhlExpectedGoals(scoringModel, awayTeam, homeTeam) : null;
+  let totals: ProjectedTotals | null = null;
+  let totalsLambda = 0;
+  if (eg) {
+    let { expAway, expHome } = eg;
+    if (fixtureCtx.goalieAway && fixtureCtx.goalieHome && fixtureCtx.leagueAvgSavePct !== null && fixtureCtx.leagueAvgSavePct > 0 && fixtureCtx.leagueAvgSavePct < 1) {
+      const leagueLeak = 1 - fixtureCtx.leagueAvgSavePct;
+      expAway = clampNum(expAway * clampNum((1 - fixtureCtx.goalieHome.savePct) / leagueLeak, 0.9, 1.1), 0.3, 7.5);
+      expHome = clampNum(expHome * clampNum((1 - fixtureCtx.goalieAway.savePct) / leagueLeak, 0.9, 1.1), 0.3, 7.5);
+    }
+    totalsLambda = expAway + expHome;
+    totals = {
+      projectedTotal: round1(totalsLambda),
+      projectedAwayScore: round1(expAway),
+      projectedHomeScore: round1(expHome),
+      awayScoredPerGame: eg.awayScoredPerGame,
+      homeScoredPerGame: eg.homeScoredPerGame,
+    };
+  }
+  const bookTotal = totals ? await bookTotalLine(ctx, "nhl", bookReadTeamName("nhl", awayTeam), bookReadTeamName("nhl", homeTeam), null) : null;
+  const totalOverProbability = totals && bookTotal !== null ? poissonOverProbability(totalsLambda, bookTotal) : null;
   const response: z.infer<typeof firstGoalMatchupResponse> = {
     away, home, awayProbability, homeProbability, edgeTeam, edgePoints, awayWinProbability, homeWinProbability, winnerTeam, winnerEdgePoints,
     restAwayDays: fixtureCtx.restAwayDays, restHomeDays: fixtureCtx.restHomeDays, goalieAway: fixtureCtx.goalieAway, goalieHome: fixtureCtx.goalieHome,
+    ...totalsFields(totals, bookTotal, totalOverProbability),
     firstPeriodUnder25Probability, blowoutProbability, bothTeamsTwoProbability, regulationDrawProbability,
     headToHead: { games: headGames.length, awayScoredFirst: headGames.filter((game) => game.firstTeam === awayTeam).length, homeScoredFirst: headGames.filter((game) => game.firstTeam === homeTeam).length },
     fetchedAt: new Date().toISOString(), sourceUrl: results[0]?.sourceUrl ?? awaySchedule.sourceUrl,
@@ -1494,6 +1557,7 @@ const nflGameSideSchema = z.object({ abbrev: z.string(), name: z.string(), score
 const nflGameSchema = z.object({
   id: z.number(), week: z.number(), date: z.string(), startsAt: z.string(), state: z.string(), detail: z.string(),
   shortName: z.string(), away: nflGameSideSchema, home: nflGameSideSchema,
+  modelTotal: z.number().nullable(),
 });
 const nflStandingSchema = z.object({
   team: z.string(), name: z.string(), conference: z.string(), division: z.string(),
@@ -1539,6 +1603,7 @@ const nflMatchupResponse = z.object({
   firstHalfUnder245Probability: z.number().nullable(), blowoutProbability: z.number().nullable(),
   bothTeams20Probability: z.number().nullable(), overtimeProbability: z.number().nullable(),
   headToHead: z.object({ games: z.number(), awayWins: z.number(), homeWins: z.number() }),
+  ...totalsResponseFields,
   fetchedAt: z.string(), sourceUrl: z.string(), sampleNote: z.string(),
 });
 
@@ -1598,6 +1663,7 @@ const ncaafGameSideSchema = z.object({ abbrev: z.string(), name: z.string(), sco
 const ncaafGameSchema = z.object({
   id: z.number(), week: z.number(), date: z.string(), startsAt: z.string(), state: z.string(), detail: z.string(),
   shortName: z.string(), away: ncaafGameSideSchema, home: ncaafGameSideSchema,
+  modelTotal: z.number().nullable(),
 });
 const ncaafStandingSchema = z.object({
   team: z.string(), name: z.string(), conference: z.string(), division: z.string(),
@@ -1640,6 +1706,7 @@ const ncaafMatchupResponse = z.object({
   firstHalfUnder245Probability: z.number().nullable(), blowoutProbability: z.number().nullable(),
   bothTeams20Probability: z.number().nullable(), overtimeProbability: z.number().nullable(),
   headToHead: z.object({ games: z.number(), awayWins: z.number(), homeWins: z.number() }),
+  ...totalsResponseFields,
   fetchedAt: z.string(), sourceUrl: z.string(), sampleNote: z.string(),
 });
 
@@ -1889,6 +1956,264 @@ async function espnModelPair(ctx: Ctx, sport: "nfl" | "nba" | "ncaaf", awayTeam:
   } catch { return null; }
 }
 
+/* ------------------------------------------------------------------ */
+/* Projected totals (over/under model estimates, all five sports).     */
+/* Built from the same official feeds as the win model: each side's    */
+/* expected score = its regressed scoring rate × the opponent's        */
+/* regressed concede rate ÷ league average (the multiplicative form    */
+/* soccer's Poisson ratings already use), with venue and recent-form   */
+/* blends in the Flip % v3 house style. The book total, when the odds  */
+/* board carries one, is joined only for the lean/gap comparison —    */
+/* the projection itself never reads a book number. Thin data returns  */
+/* null and the UI shows nothing rather than a made-up number.         */
+/* ------------------------------------------------------------------ */
+
+type ProjectedTotals = {
+  projectedTotal: number; projectedAwayScore: number; projectedHomeScore: number;
+  awayScoredPerGame: number; homeScoredPerGame: number;
+};
+
+const round1 = (v: number): number => Math.round(v * 10) / 10;
+const clampNum = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
+
+function totalsFields(model: ProjectedTotals | null, bookTotal: number | null, overProbability: number | null) {
+  if (!model) {
+    return {
+      projectedTotal: null, projectedAwayScore: null, projectedHomeScore: null,
+      bookTotal: null, totalLean: null, totalGap: null, totalOverProbability: null,
+      awayScoredPerGame: null, homeScoredPerGame: null,
+    };
+  }
+  const gap = bookTotal !== null ? round1(model.projectedTotal - bookTotal) : null;
+  return {
+    projectedTotal: model.projectedTotal,
+    projectedAwayScore: model.projectedAwayScore,
+    projectedHomeScore: model.projectedHomeScore,
+    bookTotal,
+    totalLean: gap === null || gap === 0 ? null : gap > 0 ? ("over" as const) : ("under" as const),
+    totalGap: gap,
+    totalOverProbability: overProbability,
+    awayScoredPerGame: model.awayScoredPerGame,
+    homeScoredPerGame: model.homeScoredPerGame,
+  };
+}
+
+// Venue scoring rate blended over the season rate (0.4 season / 0.6 venue,
+// the venueModelPct house weights) once the venue sample clears the floor.
+function venueScoringRate(seasonRate: number, venueScored: number, venueGames: number, leagueAvg: number, minGames: number): number {
+  if (venueGames < minGames || venueGames <= 0) return seasonRate;
+  return 0.4 * seasonRate + 0.6 * regressedRate(venueScored, venueGames, leagueAvg);
+}
+
+// Recent-form scoring rate blended 50/50 over the base rate.
+function formScoringRate(baseRate: number, formScored: number, formGames: number, leagueAvg: number, minGames: number): number {
+  if (formGames < minGames || formGames <= 0) return baseRate;
+  return 0.5 * baseRate + 0.5 * regressedRate(formScored, formGames, leagueAvg);
+}
+
+// The board's total line for a fixture: DraftKings preferred (Cody's line
+// of truth), else the modal line across books. Team names come from the
+// official standings rows, never hand-entered. Null when the board does
+// not carry the game or the market.
+async function bookTotalLine(ctx: Ctx, sport: Sport, awayName: string, homeName: string, league: string | null): Promise<number | null> {
+  try {
+    const board = await loadPremium(ctx, sport);
+    const awayLower = awayName.toLowerCase();
+    const homeLower = homeName.toLowerCase();
+    const lines = board.offers
+      .filter((o) => {
+        if (o.period !== "game") return false;
+        if (o.entityType !== "event" && o.entity !== "All") return false;
+        const market = o.marketName.toLowerCase();
+        if (!market.includes("total") || market.includes("team total")) return false;
+        if (league && o.league && o.league !== league) return false;
+        const m = o.matchup.toLowerCase();
+        return m.includes(awayLower) && m.includes(homeLower);
+      })
+      .map((o) => ({ book: o.book, line: o.line === null ? NaN : Number(o.line) }))
+      .filter((x) => Number.isFinite(x.line) && x.line > 0);
+    if (!lines.length) return null;
+    const dk = lines.find((x) => x.book.toLowerCase().replace(/[^a-z0-9]/g, "") === "draftkings");
+    if (dk) return dk.line;
+    const counts = new Map<number, number>();
+    for (const x of lines) counts.set(x.line, (counts.get(x.line) ?? 0) + 1);
+    let best: number | null = null;
+    let bestCount = 0;
+    for (const [line, count] of counts) if (count > bestCount) { best = line; bestCount = count; }
+    return best;
+  } catch { return null; }
+}
+
+/* ---- NHL: standings splits (season / home / road / last-10) -------- */
+
+type NhlScoringProfile = {
+  team: string; gamesPlayed: number; scoredPerGame: number;
+  attackHome: number; concedeHome: number; attackAway: number; concedeAway: number;
+};
+
+// Pure variant so loadNhlOverview can reuse its already-fetched payload.
+function nhlScoringProfilesFromPayload(payload: unknown): { leagueAvg: number; profiles: Map<string, NhlScoringProfile> } | null {
+  type Raw = {
+    team: string; gp: number; gf: number; ga: number;
+    homeGp: number; homeGf: number; homeGa: number;
+    roadGp: number; roadGf: number; roadGa: number;
+    l10Gp: number; l10Gf: number; l10Ga: number;
+  };
+  const rows: Raw[] = arrayValue(objectValue(payload)?.standings).flatMap((value) => {
+    const row = objectValue(value); if (!row) return [];
+    const team = localized(row.teamAbbrev); if (!team) return [];
+    const n = (v: unknown) => num(v) ?? 0;
+    return [{
+      team, gp: n(row.gamesPlayed), gf: n(row.goalFor), ga: n(row.goalAgainst),
+      homeGp: n(row.homeGamesPlayed), homeGf: n(row.homeGoalsFor), homeGa: n(row.homeGoalsAgainst),
+      roadGp: n(row.roadGamesPlayed), roadGf: n(row.roadGoalsFor), roadGa: n(row.roadGoalsAgainst),
+      l10Gp: n(row.l10GamesPlayed), l10Gf: n(row.l10GoalsFor), l10Ga: n(row.l10GoalsAgainst),
+    }];
+  });
+  const totalGp = rows.reduce((s, r) => s + r.gp, 0);
+  const totalGf = rows.reduce((s, r) => s + r.gf, 0);
+  if (totalGp <= 0 || totalGf <= 0) return null;
+  const leagueAvg = totalGf / totalGp;
+  const profiles = new Map<string, NhlScoringProfile>();
+  for (const r of rows) {
+    const attackSeason = regressedRate(r.gf, r.gp, leagueAvg);
+    const concedeSeason = regressedRate(r.ga, r.gp, leagueAvg);
+    profiles.set(r.team, {
+      team: r.team, gamesPlayed: r.gp,
+      scoredPerGame: r.gp > 0 ? round1(r.gf / r.gp) : 0,
+      attackHome: formScoringRate(venueScoringRate(attackSeason, r.homeGf, r.homeGp, leagueAvg, 4), r.l10Gf, r.l10Gp, leagueAvg, 5),
+      concedeHome: formScoringRate(venueScoringRate(concedeSeason, r.homeGa, r.homeGp, leagueAvg, 4), r.l10Ga, r.l10Gp, leagueAvg, 5),
+      attackAway: formScoringRate(venueScoringRate(attackSeason, r.roadGf, r.roadGp, leagueAvg, 4), r.l10Gf, r.l10Gp, leagueAvg, 5),
+      concedeAway: formScoringRate(venueScoringRate(concedeSeason, r.roadGa, r.roadGp, leagueAvg, 4), r.l10Ga, r.l10Gp, leagueAvg, 5),
+    });
+  }
+  return { leagueAvg, profiles };
+}
+
+async function nhlScoringModel(): Promise<{ leagueAvg: number; profiles: Map<string, NhlScoringProfile> } | null> {
+  try {
+    const response = await fetch(`${NHL_API}/standings/${nyDate(new Date())}`, { headers: { Accept: "application/json" } });
+    if (!response.ok) return null;
+    return nhlScoringProfilesFromPayload(await response.json() as unknown);
+  } catch { return null; }
+}
+
+function nhlExpectedGoals(model: { leagueAvg: number; profiles: Map<string, NhlScoringProfile> }, awayTeam: string, homeTeam: string): { expAway: number; expHome: number; awayScoredPerGame: number; homeScoredPerGame: number } | null {
+  const a = model.profiles.get(awayTeam);
+  const h = model.profiles.get(homeTeam);
+  if (!a || !h || a.gamesPlayed < 3 || h.gamesPlayed < 3) return null;
+  return {
+    expAway: clampNum((a.attackAway * h.concedeHome) / model.leagueAvg, 0.3, 7.5),
+    expHome: clampNum((h.attackHome * a.concedeAway) / model.leagueAvg, 0.3, 7.5),
+    awayScoredPerGame: a.scoredPerGame,
+    homeScoredPerGame: h.scoredPerGame,
+  };
+}
+
+function nhlProjectedTotals(model: { leagueAvg: number; profiles: Map<string, NhlScoringProfile> }, awayTeam: string, homeTeam: string): ProjectedTotals | null {
+  const eg = nhlExpectedGoals(model, awayTeam, homeTeam);
+  if (!eg) return null;
+  return {
+    projectedTotal: round1(eg.expAway + eg.expHome),
+    projectedAwayScore: round1(eg.expAway),
+    projectedHomeScore: round1(eg.expHome),
+    awayScoredPerGame: eg.awayScoredPerGame,
+    homeScoredPerGame: eg.homeScoredPerGame,
+  };
+}
+
+/* ---- ESPN sports (NFL / NBA / NCAAF): standings + game-log form ---- */
+
+type EspnScoringProfile = {
+  team: string; name: string; gamesPlayed: number; scoredPerGame: number;
+  attack: number; concede: number;
+};
+
+// Pure variant so overview loaders reuse their already-fetched standings.
+function espnScoringProfilesFromRows(standings: { team: string; name: string; wins: number; losses: number; ties?: number; pointsFor: number; pointsAgainst: number }[]): { leagueAvg: number; profiles: Map<string, EspnScoringProfile> } | null {
+  let totalGp = 0;
+  let totalPf = 0;
+  for (const r of standings) { totalGp += r.wins + r.losses + (r.ties ?? 0); totalPf += r.pointsFor; }
+  if (totalGp <= 0 || totalPf <= 0) return null;
+  const leagueAvg = totalPf / totalGp;
+  const profiles = new Map<string, EspnScoringProfile>();
+  for (const r of standings) {
+    const gp = r.wins + r.losses + (r.ties ?? 0);
+    profiles.set(r.team, {
+      team: r.team, name: r.name, gamesPlayed: gp,
+      scoredPerGame: gp > 0 ? round1(r.pointsFor / gp) : 0,
+      attack: regressedRate(r.pointsFor, gp, leagueAvg),
+      concede: regressedRate(r.pointsAgainst, gp, leagueAvg),
+    });
+  }
+  return { leagueAvg, profiles };
+}
+
+async function espnScoringModel(sport: "nfl" | "nba" | "ncaaf"): Promise<{ leagueAvg: number; profiles: Map<string, EspnScoringProfile> } | null> {
+  try {
+    const fetched = sport === "nfl" ? await fetchNflStandings() : sport === "nba" ? await fetchNbaStandings() : await fetchNcaafStandings();
+    return espnScoringProfilesFromRows(fetched.standings);
+  } catch { return null; }
+}
+
+// Season-rate-only total for board game rows (no game-log form/venue yet;
+// the full form-adjusted number lives on the matchup response).
+function espnSeasonTotal(model: { leagueAvg: number; profiles: Map<string, EspnScoringProfile> }, awayTeam: string, homeTeam: string): number | null {
+  const a = model.profiles.get(awayTeam);
+  const h = model.profiles.get(homeTeam);
+  if (!a || !h || a.gamesPlayed < 2 || h.gamesPlayed < 2) return null;
+  const expAway = clampNum((a.attack * h.concede) / model.leagueAvg, model.leagueAvg * 0.25, model.leagueAvg * 2.4);
+  const expHome = clampNum((h.attack * a.concede) / model.leagueAvg, model.leagueAvg * 0.25, model.leagueAvg * 2.4);
+  return round1(expAway + expHome);
+}
+
+// Layer recent form (the matchup loader's last-8 game list) and the
+// fixture-venue subset of that list over the season profile.
+function espnFormAdjusted(profile: EspnScoringProfile, games: { teamScore: number; oppScore: number; homeAway: "home" | "away" }[], venue: "home" | "away", leagueAvg: number): { attack: number; concede: number } {
+  let attack = profile.attack;
+  let concede = profile.concede;
+  if (games.length >= 3) {
+    const formFor = games.reduce((s, g) => s + g.teamScore, 0);
+    const formAgainst = games.reduce((s, g) => s + g.oppScore, 0);
+    attack = formScoringRate(attack, formFor, games.length, leagueAvg, 3);
+    concede = formScoringRate(concede, formAgainst, games.length, leagueAvg, 3);
+    const venueGames = games.filter((g) => g.homeAway === venue);
+    if (venueGames.length >= 3) {
+      const venueFor = venueGames.reduce((s, g) => s + g.teamScore, 0);
+      const venueAgainst = venueGames.reduce((s, g) => s + g.oppScore, 0);
+      attack = venueScoringRate(attack, venueFor, venueGames.length, leagueAvg, 3);
+      concede = venueScoringRate(concede, venueAgainst, venueGames.length, leagueAvg, 3);
+    }
+  }
+  return { attack, concede };
+}
+
+function espnProjectedTotals(
+  model: { leagueAvg: number; profiles: Map<string, EspnScoringProfile> },
+  awayTeam: string, homeTeam: string,
+  awayGames: { teamScore: number; oppScore: number; homeAway: "home" | "away" }[],
+  homeGames: { teamScore: number; oppScore: number; homeAway: "home" | "away" }[],
+): (ProjectedTotals & { awayName: string; homeName: string }) | null {
+  const a = model.profiles.get(awayTeam);
+  const h = model.profiles.get(homeTeam);
+  if (!a || !h || a.gamesPlayed < 2 || h.gamesPlayed < 2) return null;
+  const adjA = espnFormAdjusted(a, awayGames, "away", model.leagueAvg);
+  const adjH = espnFormAdjusted(h, homeGames, "home", model.leagueAvg);
+  const lo = model.leagueAvg * 0.25;
+  const hi = model.leagueAvg * 2.4;
+  const expAway = clampNum((adjA.attack * adjH.concede) / model.leagueAvg, lo, hi);
+  const expHome = clampNum((adjH.attack * adjA.concede) / model.leagueAvg, lo, hi);
+  return {
+    projectedTotal: round1(expAway + expHome),
+    projectedAwayScore: round1(expAway),
+    projectedHomeScore: round1(expHome),
+    awayScoredPerGame: a.scoredPerGame,
+    homeScoredPerGame: h.scoredPerGame,
+    awayName: a.name,
+    homeName: h.name,
+  };
+}
+
 type TeamForm = { wins: number; games: number };
 const FORM_TTL_MS = 12 * 60 * 60 * 1000;
 
@@ -2001,9 +2326,11 @@ async function loadNflOverview(week?: number, ctx?: Ctx): Promise<z.infer<typeof
   const formMap = ctx ? await formForOverview(ctx, "nfl") : null;
   let standings: z.infer<typeof nflStandingSchema>[] = [];
   let standingsUrl = "";
+  let scoringModel: { leagueAvg: number; profiles: Map<string, EspnScoringProfile> } | null = null;
   try {
     const data = await fetchNflStandings();
     standingsUrl = data.sourceUrl;
+    scoringModel = espnScoringProfilesFromRows(data.standings);
     standings = data.standings.map((s) => {
       const neutral = modelWinPct({
         pointsFor: s.pointsFor, pointsAgainst: s.pointsAgainst,
@@ -2029,6 +2356,7 @@ async function loadNflOverview(week?: number, ctx?: Ctx): Promise<z.infer<typeof
     shortName: g.shortName,
     away: { abbrev: g.away.abbr, name: g.away.name, score: g.away.score, winner: g.away.winner },
     home: { abbrev: g.home.abbr, name: g.home.name, score: g.home.score, winner: g.home.winner },
+    modelTotal: scoringModel ? espnSeasonTotal(scoringModel, g.away.abbr, g.home.abbr) : null,
   }));
   return {
     week: board.week, weeks, season: board.season, fetchedAt: new Date().toISOString(),
@@ -2224,7 +2552,7 @@ function nflTeamMatchupStats(team: (typeof nflTeamCodes)[number], venue: "away" 
 }
 
 async function loadNflMatchup(ctx: Ctx, awayTeam: (typeof nflTeamCodes)[number], homeTeam: (typeof nflTeamCodes)[number], force: boolean): Promise<z.infer<typeof nflMatchupResponse>> {
-  const cacheKey = `nfl-matchup-v2:${awayTeam}:${homeTeam}`;
+  const cacheKey = `nfl-matchup-v3:${awayTeam}:${homeTeam}`;
   const db = ctx.db;
   const cachedRows = await db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey)).limit(1);
   const cached = cachedRows[0];
@@ -2285,11 +2613,18 @@ async function loadNflMatchup(ctx: Ctx, awayTeam: (typeof nflTeamCodes)[number],
   const bothTeams20Probability = mean(venueBlend(away.bothTeams20Pct, away.venueBothTeams20Pct, away.venueGames), venueBlend(home.bothTeams20Pct, home.venueBothTeams20Pct, home.venueGames));
   const overtimeProbability = mean(venueBlend(away.overtimePct, away.venueOvertimePct, away.venueGames), venueBlend(home.overtimePct, home.venueOvertimePct, home.venueGames));
 
+  // Projected total: season PF/PA rates (regressed) blended with the
+  // last-8 game-log form and the venue subset of that log.
+  const scoringModel = await espnScoringModel("nfl");
+  const totals = scoringModel ? espnProjectedTotals(scoringModel, awayTeam, homeTeam, awayData.games, homeData.games) : null;
+  const bookTotal = totals ? await bookTotalLine(ctx, "nfl", totals.awayName, totals.homeName, null) : null;
+
   // Head-to-head from the two teams' game lists: games where they played each other.
   const h2h = awayData.games.filter((g) => g.opponent === homeTeam);
   const response: z.infer<typeof nflMatchupResponse> = {
     away, home, awayWinProbability, homeWinProbability, winnerTeam, winnerEdgePoints,
     restAwayDays, restHomeDays,
+    ...totalsFields(totals, bookTotal, null),
     firstScoreAwayProbability, firstScoreHomeProbability, firstScoreEdgeTeam, firstScoreEdgePoints,
     firstHalfUnder245Probability, blowoutProbability, bothTeams20Probability, overtimeProbability,
     headToHead: { games: h2h.length, awayWins: h2h.filter((g) => g.won).length, homeWins: h2h.filter((g) => !g.won).length },
@@ -2425,9 +2760,11 @@ async function loadNcaafOverview(week?: number, ctx?: Ctx): Promise<z.infer<type
   const formMap = ctx ? await formForOverview(ctx, "ncaaf") : null;
   let standings: z.infer<typeof ncaafStandingSchema>[] = [];
   let standingsUrl = "";
+  let scoringModel: { leagueAvg: number; profiles: Map<string, EspnScoringProfile> } | null = null;
   try {
     const data = await fetchNcaafStandings();
     standingsUrl = data.sourceUrl;
+    scoringModel = espnScoringProfilesFromRows(data.standings);
     standings = data.standings.map((s) => {
       const neutral = modelWinPct({
         pointsFor: s.pointsFor, pointsAgainst: s.pointsAgainst,
@@ -2453,6 +2790,7 @@ async function loadNcaafOverview(week?: number, ctx?: Ctx): Promise<z.infer<type
     shortName: g.shortName,
     away: { abbrev: g.away.abbr, name: g.away.name, score: g.away.score, winner: g.away.winner },
     home: { abbrev: g.home.abbr, name: g.home.name, score: g.home.score, winner: g.home.winner },
+    modelTotal: scoringModel ? espnSeasonTotal(scoringModel, g.away.abbr, g.home.abbr) : null,
   }));
   return {
     week: board.week, weeks, season: board.season, fetchedAt: new Date().toISOString(),
@@ -2643,7 +2981,7 @@ function ncaafTeamMatchupStats(team: (typeof ncaafTeamCodes)[number], venue: "aw
 }
 
 async function loadNcaafMatchup(ctx: Ctx, awayTeam: (typeof ncaafTeamCodes)[number], homeTeam: (typeof ncaafTeamCodes)[number], force: boolean): Promise<z.infer<typeof ncaafMatchupResponse>> {
-  const cacheKey = `ncaaf-matchup-v2:${awayTeam}:${homeTeam}`;
+  const cacheKey = `ncaaf-matchup-v3:${awayTeam}:${homeTeam}`;
   const db = ctx.db;
   const cachedRows = await db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey)).limit(1);
   const cached = cachedRows[0];
@@ -2694,8 +3032,12 @@ async function loadNcaafMatchup(ctx: Ctx, awayTeam: (typeof ncaafTeamCodes)[numb
 
   // Head-to-head from the two teams' game lists: games where they played each other.
   const h2h = awayData.games.filter((g) => g.opponent === homeTeam);
+  const ncaafScoringModel = await espnScoringModel("ncaaf");
+  const totals = ncaafScoringModel ? espnProjectedTotals(ncaafScoringModel, awayTeam, homeTeam, awayData.games, homeData.games) : null;
+  const bookTotal = totals ? await bookTotalLine(ctx, "ncaaf", totals.awayName, totals.homeName, null) : null;
   const response: z.infer<typeof ncaafMatchupResponse> = {
     away, home, awayWinProbability, homeWinProbability, winnerTeam, winnerEdgePoints,
+    ...totalsFields(totals, bookTotal, null),
     firstScoreAwayProbability, firstScoreHomeProbability, firstScoreEdgeTeam, firstScoreEdgePoints,
     firstHalfUnder245Probability, blowoutProbability, bothTeams20Probability, overtimeProbability,
     headToHead: { games: h2h.length, awayWins: h2h.filter((g) => g.won).length, homeWins: h2h.filter((g) => !g.won).length },
@@ -2836,6 +3178,7 @@ const nbaGameSideSchema = z.object({ abbrev: z.string(), name: z.string(), score
 const nbaGameSchema = z.object({
   id: z.number(), date: z.string(), startsAt: z.string(), state: z.string(), detail: z.string(),
   shortName: z.string(), away: nbaGameSideSchema, home: nbaGameSideSchema,
+  modelTotal: z.number().nullable(),
 });
 const nbaStandingSchema = z.object({
   team: z.string(), name: z.string(), conference: z.string(), division: z.string(),
@@ -2883,6 +3226,7 @@ const nbaMatchupResponse = z.object({
   firstHalfOver115Probability: z.number().nullable(), blowoutProbability: z.number().nullable(),
   bothTeams110Probability: z.number().nullable(), overtimeProbability: z.number().nullable(),
   headToHead: z.object({ games: z.number(), awayWins: z.number(), homeWins: z.number() }),
+  ...totalsResponseFields,
   fetchedAt: z.string(), sourceUrl: z.string(), sampleNote: z.string(),
 });
 
@@ -2945,9 +3289,11 @@ async function loadNbaOverview(ctx?: Ctx, dateStr?: string): Promise<z.infer<typ
   const formMap = ctx ? await formForOverview(ctx, "nba") : null;
   let standings: z.infer<typeof nbaStandingSchema>[] = [];
   let standingsUrl = "";
+  let scoringModel: { leagueAvg: number; profiles: Map<string, EspnScoringProfile> } | null = null;
   try {
     const data = await fetchNbaStandings();
     standingsUrl = data.sourceUrl;
+    scoringModel = espnScoringProfilesFromRows(data.standings);
     standings = data.standings.map((s) => {
       const neutral = modelWinPct({
         pointsFor: s.pointsFor, pointsAgainst: s.pointsAgainst,
@@ -2971,6 +3317,7 @@ async function loadNbaOverview(ctx?: Ctx, dateStr?: string): Promise<z.infer<typ
     shortName: g.shortName,
     away: { abbrev: g.away.abbr, name: g.away.name, score: g.away.score, winner: g.away.winner },
     home: { abbrev: g.home.abbr, name: g.home.name, score: g.home.score, winner: g.home.winner },
+    modelTotal: scoringModel ? espnSeasonTotal(scoringModel, g.away.abbr, g.home.abbr) : null,
   }));
   return {
     season: board.season, fetchedAt: new Date().toISOString(),
@@ -3161,6 +3508,7 @@ const soccerGameSchema = z.object({
   // Model three-way for this fixture (Poisson goal model, regressed).
   // Null when either side's sample is too thin. Always a model estimate.
   modelThreeWay: soccerThreeWaySchema.nullable(),
+  modelTotal: z.number().nullable(),
 });
 const soccerStandingSchema = z.object({
   team: z.string(), name: z.string(),
@@ -3245,9 +3593,11 @@ async function loadSoccerOverview(ctx: Ctx, league: SoccerLeagueParam, dateStr?:
     const homeR = ratingsByTeam.get(g.home.abbr);
     const awayR = ratingsByTeam.get(g.away.abbr);
     let modelThreeWay: z.infer<typeof soccerThreeWaySchema> | null = null;
+    let modelTotal: number | null = null;
     if (homeR && awayR) {
       const probs = soccerMatchProbabilities(homeR.attack, homeR.defense, awayR.attack, awayR.defense, leagueCtx.avgHome, leagueCtx.avgAway);
       modelThreeWay = { home: probs.home, draw: probs.draw, away: probs.away };
+      modelTotal = round1(probs.homeXg + probs.awayXg);
     }
     return {
       id: g.id, date: g.date.slice(0, 10), startsAt: g.date, state: g.state, detail: g.detail,
@@ -3255,6 +3605,7 @@ async function loadSoccerOverview(ctx: Ctx, league: SoccerLeagueParam, dateStr?:
       away: { abbrev: g.away.abbr, name: g.away.name, score: g.away.score, winner: g.away.winner },
       home: { abbrev: g.home.abbr, name: g.home.name, score: g.home.score, winner: g.home.winner },
       modelThreeWay,
+      modelTotal,
     };
   });
   const standingRows = standings.map((s) => {
@@ -3297,6 +3648,7 @@ const soccerMatchupResponse = z.object({
   over25Probability: z.number().nullable(), bttsProbability: z.number().nullable(), margin3PlusProbability: z.number().nullable(),
   homeExpectedGoals: z.number().nullable(), awayExpectedGoals: z.number().nullable(),
   headToHead: z.object({ games: z.number(), homeWins: z.number(), draws: z.number(), awayWins: z.number() }),
+  ...totalsResponseFields,
   fetchedAt: z.string(), sourceUrl: z.string(), sampleNote: z.string(),
 });
 
@@ -3328,7 +3680,7 @@ function soccerMatchupTeamStats(team: string, venue: "away" | "home", games: Soc
 }
 
 async function loadSoccerMatchup(ctx: Ctx, league: SoccerLeagueParam, awayTeam: string, homeTeam: string, force: boolean): Promise<z.infer<typeof soccerMatchupResponse>> {
-  const cacheKey = `soccer-matchup:${league}:${awayTeam}:${homeTeam}`;
+  const cacheKey = `soccer-matchup-v2:${league}:${awayTeam}:${homeTeam}`;
   const db = ctx.db;
   if (!force) {
     try {
@@ -3394,12 +3746,30 @@ async function loadSoccerMatchup(ctx: Ctx, league: SoccerLeagueParam, awayTeam: 
   const edgeOptions: [string, number, string][] = [["home", p.home, homeTeam], ["draw", p.draw, "Draw"], ["away", p.away, awayTeam]];
   edgeOptions.sort((a, b) => b[1] - a[1]);
   const edge = probs ? edgeOptions[0]! : null;
+  // Projected total: the Poisson expected goals summed. Per-game scored
+  // averages come straight from the official standings (GF ÷ played).
+  const hsRow = standingsData?.standings.find((s) => s.team === homeTeam) ?? null;
+  const asRow = standingsData?.standings.find((s) => s.team === awayTeam) ?? null;
+  const awayScoredPerGame = asRow && asRow.played > 0 ? round1(asRow.goalsFor / asRow.played) : null;
+  const homeScoredPerGame = hsRow && hsRow.played > 0 ? round1(hsRow.goalsFor / hsRow.played) : null;
+  let totals: ProjectedTotals | null = null;
+  if (probs && awayScoredPerGame !== null && homeScoredPerGame !== null) {
+    totals = {
+      projectedTotal: round1(probs.homeXg + probs.awayXg),
+      projectedAwayScore: round1(probs.awayXg),
+      projectedHomeScore: round1(probs.homeXg),
+      awayScoredPerGame, homeScoredPerGame,
+    };
+  }
+  const bookTotal = totals && hsRow && asRow ? await bookTotalLine(ctx, "soccer", asRow.name, hsRow.name, league) : null;
+  const totalOverProbability = totals && bookTotal !== null && probs ? poissonOverProbability(probs.homeXg + probs.awayXg, bookTotal) : null;
   const response: z.infer<typeof soccerMatchupResponse> = {
     league, away, home,
     homeWinProbability: probs?.home ?? null, drawProbability: probs?.draw ?? null, awayWinProbability: probs?.away ?? null,
     edgeTeam: edge?.[2] === "Draw" ? null : edge?.[2] ?? null, edgeProbability: edge?.[1] ?? null,
     over25Probability: probs?.over25 ?? null, bttsProbability: probs?.btts ?? null, margin3PlusProbability: probs?.margin3Plus ?? null,
     homeExpectedGoals: probs?.homeXg ?? null, awayExpectedGoals: probs?.awayXg ?? null,
+    ...totalsFields(totals, bookTotal, totalOverProbability),
     headToHead: { games: h2hGames, homeWins: h2hHomeWins, draws: h2hDraws, awayWins: h2hAwayWins },
     fetchedAt: new Date().toISOString(), sourceUrl: siteBasePublic(league),
     sampleNote: "Model estimate from official scoring data — not a sportsbook price. Draws are modeled explicitly via a Poisson goal model.",
@@ -3845,7 +4215,7 @@ function nbaTeamMatchupStats(team: (typeof nbaTeamCodes)[number], venue: "away" 
 }
 
 async function loadNbaMatchup(ctx: Ctx, awayTeam: (typeof nbaTeamCodes)[number], homeTeam: (typeof nbaTeamCodes)[number], force: boolean): Promise<z.infer<typeof nbaMatchupResponse>> {
-  const cacheKey = `nba-matchup-v2:${awayTeam}:${homeTeam}`;
+  const cacheKey = `nba-matchup-v3:${awayTeam}:${homeTeam}`;
   const db = ctx.db;
   const cachedRows = await db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey)).limit(1);
   const cached = cachedRows[0];
@@ -3920,9 +4290,13 @@ async function loadNbaMatchup(ctx: Ctx, awayTeam: (typeof nbaTeamCodes)[number],
 
   const h2h = awayData.games.filter((g) => g.opponent === homeTeam);
   const seasonLabel = awayData.seasonLabel || homeData.seasonLabel;
+  const nbaScoringModel = await espnScoringModel("nba");
+  const totals = nbaScoringModel ? espnProjectedTotals(nbaScoringModel, awayTeam, homeTeam, awayData.games, homeData.games) : null;
+  const bookTotal = totals ? await bookTotalLine(ctx, "nba", totals.awayName, totals.homeName, null) : null;
   const response: z.infer<typeof nbaMatchupResponse> = {
     away, home, awayWinProbability, homeWinProbability, winnerTeam, winnerEdgePoints,
     restAwayDays, restHomeDays,
+    ...totalsFields(totals, bookTotal, null),
     firstBasketAwayProbability, firstBasketHomeProbability, firstBasketEdgeTeam, firstBasketEdgePoints,
     firstHalfOver115Probability, blowoutProbability, bothTeams110Probability, overtimeProbability,
     headToHead: { games: h2h.length, awayWins: h2h.filter((g) => g.won).length, homeWins: h2h.filter((g) => !g.won).length },
