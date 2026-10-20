@@ -1475,11 +1475,24 @@ async function fetchJsonWithRetry(url: string, attempts = 3): Promise<unknown | 
 async function collectNhlRecentGames(): Promise<{ byPlayer: Map<number, NhlPlayerAcc>; dates: string[]; start: Date; now: Date; degraded: boolean }> {
   const now = new Date(); const start = new Date(now.getTime() - 21 * 86400000);
   const dates = [0, 7, 14, 21].map((days) => nyDate(new Date(now.getTime() - days * 86400000)));
-  const schedulePayloads = await Promise.all(dates.map(async (date) => (await fetchJsonWithRetry(`${NHL_API}/schedule/${date}`)) ?? {}));
+  // Sequential on purpose, with a per-day cache-buster: from this host the
+  // feed has repeatedly answered the parallel burst with silently failed
+  // weeks (the same week missing on every compute), which smells like a
+  // poisoned edge response for those exact URLs. One call at a time plus a
+  // daily-rotating query string gives each week a fresh, unhurried fetch.
+  const schedulePayloads: unknown[] = [];
+  for (const date of dates) {
+    schedulePayloads.push((await fetchJsonWithRetry(`${NHL_API}/schedule/${date}?d=${nyDate(now)}`, 4)) ?? {});
+  }
   const gameMap = new Map<number, { date: string; away: string; home: string }>();
-  for (const payload of schedulePayloads) for (const weekValue of arrayValue(objectValue(payload)?.gameWeek)) {
-    const week = objectValue(weekValue); const gameDate = textValue(week?.date); if (!gameDate || gameDate < nyDate(start) || gameDate > nyDate(now)) continue;
-    for (const gameValue of arrayValue(week?.games)) { const game = objectValue(gameValue); const id = num(game?.id); const state = textValue(game?.gameState); if (id !== null && (state === "FINAL" || state === "OFF")) gameMap.set(id, { date: gameDate, away: shortTeam(game?.awayTeam), home: shortTeam(game?.homeTeam) }); }
+  const anchorGameCounts: number[] = [];
+  for (const payload of schedulePayloads) {
+    let added = 0;
+    for (const weekValue of arrayValue(objectValue(payload)?.gameWeek)) {
+      const week = objectValue(weekValue); const gameDate = textValue(week?.date); if (!gameDate || gameDate < nyDate(start) || gameDate > nyDate(now)) continue;
+      for (const gameValue of arrayValue(week?.games)) { const game = objectValue(gameValue); const id = num(game?.id); const state = textValue(game?.gameState); if (id !== null && (state === "FINAL" || state === "OFF")) { if (!gameMap.has(id)) added += 1; gameMap.set(id, { date: gameDate, away: shortTeam(game?.awayTeam), home: shortTeam(game?.homeTeam) }); } }
+    }
+    anchorGameCounts.push(added);
   }
   const boxes: Array<{ game: { date: string; away: string; home: string }; id: number; payload: unknown }> = [];
   const games = Array.from(gameMap.entries());
@@ -1504,9 +1517,12 @@ async function collectNhlRecentGames(): Promise<{ byPlayer: Map<number, NhlPlaye
       }
     }
   }
-  // Degraded = a real share of boxscores never arrived even after retries.
-  // Callers cache degraded computes only briefly so the board self-heals.
-  return { byPlayer, dates, start, now, degraded: boxes.length < games.length * 0.9 };
+  // Degraded = a real share of boxscores never arrived even after retries,
+  // OR a mid-window schedule week (7/14 days back — always full of completed
+  // games in season) contributed nothing, which is how the silent week-loss
+  // presents. Callers cache degraded computes only briefly so boards heal.
+  const missingWeek = anchorGameCounts[1] === 0 || anchorGameCounts[2] === 0;
+  return { byPlayer, dates, start, now, degraded: missingWeek || boxes.length < games.length * 0.9 };
 }
 
 async function fetchHotStreaks(ctx: Ctx, force: boolean): Promise<z.infer<typeof hotStreaksResponse>> {
