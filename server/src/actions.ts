@@ -1458,10 +1458,24 @@ async function loadFirstGoalMatchup(ctx: Ctx, awayTeam: (typeof teamCodes)[numbe
 type NhlRecentGame = z.infer<typeof hotGameSchema>;
 type NhlPlayerAcc = { playerId: number; name: string; team: (typeof teamCodes)[number]; position: string; games: NhlRecentGame[] };
 
-async function collectNhlRecentGames(): Promise<{ byPlayer: Map<number, NhlPlayerAcc>; dates: string[]; start: Date; now: Date }> {
+// The NHL feed intermittently drops requests from this host (whole schedule
+// weeks have vanished silently before), so every feed call gets retries — a
+// transient failure must never amputate a week of game logs unnoticed.
+async function fetchJsonWithRetry(url: string, attempts = 3): Promise<unknown | null> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const response = await fetch(url, { headers: { Accept: "application/json" } });
+      if (response.ok) return await response.json() as unknown;
+    } catch { /* transient feed failure — retry */ }
+    if (attempt < attempts - 1) await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
+  }
+  return null;
+}
+
+async function collectNhlRecentGames(): Promise<{ byPlayer: Map<number, NhlPlayerAcc>; dates: string[]; start: Date; now: Date; degraded: boolean }> {
   const now = new Date(); const start = new Date(now.getTime() - 21 * 86400000);
   const dates = [0, 7, 14, 21].map((days) => nyDate(new Date(now.getTime() - days * 86400000)));
-  const schedulePayloads = await Promise.all(dates.map(async (date) => { const response = await fetch(`${NHL_API}/schedule/${date}`, { headers: { Accept: "application/json" } }); return response.ok ? await response.json() as unknown : {}; }));
+  const schedulePayloads = await Promise.all(dates.map(async (date) => (await fetchJsonWithRetry(`${NHL_API}/schedule/${date}`)) ?? {}));
   const gameMap = new Map<number, { date: string; away: string; home: string }>();
   for (const payload of schedulePayloads) for (const weekValue of arrayValue(objectValue(payload)?.gameWeek)) {
     const week = objectValue(weekValue); const gameDate = textValue(week?.date); if (!gameDate || gameDate < nyDate(start) || gameDate > nyDate(now)) continue;
@@ -1471,7 +1485,7 @@ async function collectNhlRecentGames(): Promise<{ byPlayer: Map<number, NhlPlaye
   const games = Array.from(gameMap.entries());
   for (let index = 0; index < games.length; index += 10) {
     const batch = games.slice(index, index + 10);
-    const rows = await Promise.all(batch.map(async ([id, game]) => { try { const response = await fetch(`${NHL_API}/gamecenter/${id}/boxscore`, { headers: { Accept: "application/json" } }); return response.ok ? { game, id, payload: await response.json() as unknown } : null; } catch { return null; } }));
+    const rows = await Promise.all(batch.map(async ([id, game]) => { const payload = await fetchJsonWithRetry(`${NHL_API}/gamecenter/${id}/boxscore`); const row: { game: { date: string; away: string; home: string }; id: number; payload: unknown } | null = payload === null ? null : { game, id, payload }; return row; }));
     boxes.push(...rows.filter((row): row is { game: { date: string; away: string; home: string }; id: number; payload: unknown } => row !== null));
   }
   const byPlayer = new Map<number, NhlPlayerAcc>();
@@ -1490,7 +1504,9 @@ async function collectNhlRecentGames(): Promise<{ byPlayer: Map<number, NhlPlaye
       }
     }
   }
-  return { byPlayer, dates, start, now };
+  // Degraded = a real share of boxscores never arrived even after retries.
+  // Callers cache degraded computes only briefly so the board self-heals.
+  return { byPlayer, dates, start, now, degraded: boxes.length < games.length * 0.9 };
 }
 
 async function fetchHotStreaks(ctx: Ctx, force: boolean): Promise<z.infer<typeof hotStreaksResponse>> {
@@ -1498,7 +1514,7 @@ async function fetchHotStreaks(ctx: Ctx, force: boolean): Promise<z.infer<typeof
   const cachedRows = await db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, "hot-streaks-v2")).limit(1);
   const cached = cachedRows[0];
   if (!force && cached && cached.expiresAt.getTime() > Date.now()) return hotStreaksResponse.parse(JSON.parse(cached.payloadJson));
-  const { byPlayer, dates, start, now } = await collectNhlRecentGames();
+  const { byPlayer, dates, start, now, degraded } = await collectNhlRecentGames();
   const players = Array.from(byPlayer.values()).flatMap((player) => {
     const recent = player.games.sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5); if (recent.length < 2) return [];
     let pointStreak = 0; for (const game of recent) { if (game.points <= 0) break; pointStreak += 1; }
@@ -1524,7 +1540,7 @@ async function fetchHotStreaks(ctx: Ctx, force: boolean): Promise<z.infer<typeof
   }).sort((a, b) => b.heatScore - a.heatScore || b.lastFivePoints - a.lastFivePoints);
   const response: z.infer<typeof hotStreaksResponse> = { fetchedAt: new Date().toISOString(), sourceUrl: `${NHL_API}/schedule/${dates[0] ?? nyDate(now)}`, windowStart: nyDate(start), windowEnd: nyDate(now), players };
   await db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, "hot-streaks-v2"));
-  await db.insert(schema.nhlInsightCache).values({ key: "hot-streaks-v2", payloadJson: JSON.stringify(response), fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) });
+  await db.insert(schema.nhlInsightCache).values({ key: "hot-streaks-v2", payloadJson: JSON.stringify(response), fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(Date.now() + (degraded ? 15 * 60 * 1000 : 24 * 60 * 60 * 1000)) });
   return response;
 }
 
@@ -1533,7 +1549,7 @@ async function fetchColdStreaks(ctx: Ctx, force: boolean): Promise<z.infer<typeo
   const cachedRows = await db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, "cold-streaks-v2")).limit(1);
   const cached = cachedRows[0];
   if (!force && cached && cached.expiresAt.getTime() > Date.now()) return coldStreaksResponse.parse(JSON.parse(cached.payloadJson));
-  const { byPlayer, dates, start, now } = await collectNhlRecentGames();
+  const { byPlayer, dates, start, now, degraded } = await collectNhlRecentGames();
   const players = Array.from(byPlayer.values()).flatMap((player) => {
     const recent = player.games.sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5); if (recent.length < 2) return [];
     const isGoalie = player.position === "G";
@@ -1572,7 +1588,7 @@ async function fetchColdStreaks(ctx: Ctx, force: boolean): Promise<z.infer<typeo
   } catch { /* team slumps are best-effort */ }
   const response: z.infer<typeof coldStreaksResponse> = { fetchedAt: new Date().toISOString(), sourceUrl: `${NHL_API}/schedule/${dates[0] ?? nyDate(now)}`, windowStart: nyDate(start), windowEnd: nyDate(now), players, teams };
   await db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, "cold-streaks-v2"));
-  await db.insert(schema.nhlInsightCache).values({ key: "cold-streaks-v2", payloadJson: JSON.stringify(response), fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) });
+  await db.insert(schema.nhlInsightCache).values({ key: "cold-streaks-v2", payloadJson: JSON.stringify(response), fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(Date.now() + (degraded ? 15 * 60 * 1000 : 24 * 60 * 60 * 1000)) });
   return response;
 }
 
