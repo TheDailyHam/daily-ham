@@ -498,20 +498,24 @@ type FlipRow = {
   ties?: number;
   gamesPlayed?: number;
   modelWinPct?: number | null;
+  // Flip % v3: venue-specific model win pcts. The away side uses its road
+  // value, the home side its home value, so venue actually moves the number.
+  modelAwayPct?: number | null;
+  modelHomePct?: number | null;
 };
 
-// Exact server mirror of the client's flipProbability (Flip % v2): prefers the
-// server's modelWinPct when present (NFL/NBA), falls back to W/L record.
+// Exact server mirror of the client's flipProbability (Flip % v3): prefers
+// each side's venue-specific model pct, then the neutral model pct
+// (all four two-way sports), then the W/L record.
 function flipTwoWay(awayRow: FlipRow | null, homeRow: FlipRow | null): { away: number; home: number } | null {
   if (!awayRow || !homeRow || awayRow.team === homeRow.team) return null;
-  const pct = (row: FlipRow): number | null => {
-    if (row.modelWinPct !== undefined && row.modelWinPct !== null) return row.modelWinPct;
+  const record = (row: FlipRow): number | null => {
     const gp = row.gamesPlayed ?? row.wins + row.losses + (row.ties ?? 0);
     if (!gp) return null;
     return (row.wins + (row.ties ?? 0) / 2) / gp;
   };
-  const awayPct = pct(awayRow);
-  const homePct = pct(homeRow);
+  const awayPct = awayRow.modelAwayPct ?? awayRow.modelWinPct ?? record(awayRow);
+  const homePct = homeRow.modelHomePct ?? homeRow.modelWinPct ?? record(homeRow);
   if (awayPct === null || homePct === null) return null;
   const awayRaw = (awayPct + (1 - homePct)) / 2;
   const homeRaw = (homePct + (1 - awayPct)) / 2;
@@ -896,8 +900,68 @@ const nhlGameSchema = z.object({
 });
 const standingSchema = z.object({
   team: z.string(), name: z.string(), conference: z.string(), division: z.string(), gamesPlayed: z.number(), wins: z.number(), losses: z.number(), otLosses: z.number(), points: z.number(), pointPct: z.number(), goalsFor: z.number(), goalsAgainst: z.number(), streak: z.string().nullable(),
+  // Flip % v3: Pythagorean expectation (exp 2.0) on GF/GA, blended with
+  // last-10 goals form and regressed early in the season; plus
+  // venue-specific values (the away side's road value, the home side's home
+  // value). Always a model estimate, never a sportsbook price.
+  modelWinPct: z.number().nullable(),
+  modelHomePct: z.number().nullable(),
+  modelAwayPct: z.number().nullable(),
 });
 const nhlOverviewResponse = z.object({ date: z.string(), fetchedAt: z.string(), scheduleSourceUrl: z.string(), standingsSourceUrl: z.string(), games: z.array(nhlGameSchema), standings: z.array(standingSchema) });
+
+// Flip % v3 model pcts for an NHL club: neutral Pythagorean strength
+// (exp 2.0 on GF/GA) blended 70/30 with last-10 goals form and regressed
+// toward .500 early, plus venue-specific values blended 40/60 once the
+// venue sample is deep enough (≥4 games).
+function nhlModelPcts(opts: {
+  wins: number; losses: number; otLosses: number;
+  goalsFor: number; goalsAgainst: number;
+  homeGamesPlayed: number; homePoints: number; homeGoalsFor: number; homeGoalsAgainst: number;
+  roadGamesPlayed: number; roadPoints: number; roadGoalsFor: number; roadGoalsAgainst: number;
+  l10GamesPlayed: number; l10GoalsFor: number; l10GoalsAgainst: number;
+}): { modelWinPct: number | null; modelHomePct: number | null; modelAwayPct: number | null } {
+  const neutral = modelWinPct({
+    pointsFor: opts.goalsFor, pointsAgainst: opts.goalsAgainst,
+    wins: opts.wins, losses: opts.losses + opts.otLosses, exponent: 2.0,
+    form: null,
+    formValue: opts.l10GamesPlayed >= 3 ? pythagPct(opts.l10GoalsFor, opts.l10GoalsAgainst, 2.0) : null,
+  });
+  const venueValue = (gp: number, points: number, gf: number, ga: number): number | null => {
+    if (gp <= 0) return null;
+    return (points / (2 * gp) + pythagPct(gf, ga, 2.0)) / 2;
+  };
+  return {
+    modelWinPct: neutral,
+    modelHomePct: venueModelPct(neutral, venueValue(opts.homeGamesPlayed, opts.homePoints, opts.homeGoalsFor, opts.homeGoalsAgainst), opts.homeGamesPlayed, 4),
+    modelAwayPct: venueModelPct(neutral, venueValue(opts.roadGamesPlayed, opts.roadPoints, opts.roadGoalsFor, opts.roadGoalsAgainst), opts.roadGamesPlayed, 4),
+  };
+}
+
+// Parse one NHL standings entry into the app's standings row (with the Flip %
+// v3 model pcts). Null when the entry isn't a real club.
+function nhlStandingRow(value: unknown): z.infer<typeof standingSchema> | null {
+  const row = objectValue(value); if (!row) return null;
+  const team = localized(row.teamAbbrev); if (!team) return null;
+  const name = localized(row.teamName) || team;
+  const n = (v: unknown) => num(v) ?? 0;
+  return {
+    team, name,
+    conference: textValue(row.conferenceName) ?? "", division: textValue(row.divisionName) ?? "",
+    gamesPlayed: n(row.gamesPlayed), wins: n(row.wins), losses: n(row.losses), otLosses: n(row.otLosses),
+    points: n(row.points), pointPct: n(row.pointPctg), goalsFor: n(row.goalFor), goalsAgainst: n(row.goalAgainst),
+    streak: textValue(row.streakCode),
+    ...nhlModelPcts({
+      wins: n(row.wins), losses: n(row.losses), otLosses: n(row.otLosses),
+      goalsFor: n(row.goalFor), goalsAgainst: n(row.goalAgainst),
+      homeGamesPlayed: n(row.homeGamesPlayed), homePoints: n(row.homePoints),
+      homeGoalsFor: n(row.homeGoalsFor), homeGoalsAgainst: n(row.homeGoalsAgainst),
+      roadGamesPlayed: n(row.roadGamesPlayed), roadPoints: n(row.roadPoints),
+      roadGoalsFor: n(row.roadGoalsFor), roadGoalsAgainst: n(row.roadGoalsAgainst),
+      l10GamesPlayed: n(row.l10GamesPlayed), l10GoalsFor: n(row.l10GoalsFor), l10GoalsAgainst: n(row.l10GoalsAgainst),
+    }),
+  };
+}
 
 // Deep Dive: per-game rows powering the matchup deep-dive section
 // (recent form strips, trend math, head-to-head meetings). Optional so
@@ -927,6 +991,12 @@ const firstGoalMatchupResponse = z.object({
   away: firstGoalTeamSchema, home: firstGoalTeamSchema,
   awayProbability: z.number().nullable(), homeProbability: z.number().nullable(), edgeTeam: z.enum(teamCodes).nullable(), edgePoints: z.number().nullable(),
   awayWinProbability: z.number().nullable(), homeWinProbability: z.number().nullable(), winnerTeam: z.enum(teamCodes).nullable(), winnerEdgePoints: z.number().nullable(),
+  // Flip % v3 contextual reads for the actual fixture (when it exists):
+  // rest days per side, and the projected/confirmed starters with their
+  // recent save pct. Null when the fixture or the data isn't real.
+  restAwayDays: z.number().nullable(), restHomeDays: z.number().nullable(),
+  goalieAway: z.object({ name: z.string(), savePct: z.number() }).nullable(),
+  goalieHome: z.object({ name: z.string(), savePct: z.number() }).nullable(),
   firstPeriodUnder25Probability: z.number().nullable(), blowoutProbability: z.number().nullable(), bothTeamsTwoProbability: z.number().nullable(), regulationDrawProbability: z.number().nullable(),
   headToHead: z.object({ games: z.number(), awayScoredFirst: z.number(), homeScoredFirst: z.number() }),
   fetchedAt: z.string(), sourceUrl: z.string(), sampleNote: z.string(),
@@ -992,12 +1062,9 @@ async function loadNhlOverview(dateStr?: string): Promise<z.infer<typeof nhlOver
     const indicator = (confirmed: string[], watch: string[]) => confirmed.length ? { status: "confirmed" as const, names: confirmed } : watch.length ? { status: "watch" as const, names: watch } : { status: "unavailable" as const, names: [] };
     return [{ id, date: gameDate, startsAt, state, venue: localized(game.venue) || "Venue unavailable", away: { abbrev: shortTeam(awayRaw), name: fullTeam(awayRaw), score: num(awayRaw.score), goalie: indicator(awayConfirmed, awayWatch) }, home: { abbrev: shortTeam(homeRaw), name: fullTeam(homeRaw), score: num(homeRaw.score), goalie: indicator(homeConfirmed, homeWatch) }, broadcasts: arrayValue(game.tvBroadcasts).flatMap((value) => { const network = textValue(objectValue(value)?.network); return network ? [network] : []; }) }];
   });
-  const standings = arrayValue(objectValue(standingsPayload)?.standings).flatMap((value) => {
-    const row = objectValue(value); if (!row) return [];
-    const team = localized(row.teamAbbrev); if (!team) return [];
-    const name = localized(row.teamName) || team;
-    return [{ team, name, conference: textValue(row.conferenceName) ?? "", division: textValue(row.divisionName) ?? "", gamesPlayed: num(row.gamesPlayed) ?? 0, wins: num(row.wins) ?? 0, losses: num(row.losses) ?? 0, otLosses: num(row.otLosses) ?? 0, points: num(row.points) ?? 0, pointPct: num(row.pointPctg) ?? 0, goalsFor: num(row.goalFor) ?? 0, goalsAgainst: num(row.goalAgainst) ?? 0, streak: textValue(row.streakCode) }];
-  }).sort((a, b) => b.points - a.points || b.pointPct - a.pointPct);
+  const standings = arrayValue(objectValue(standingsPayload)?.standings)
+    .flatMap((value) => { const row = nhlStandingRow(value); return row ? [row] : []; })
+    .sort((a, b) => b.points - a.points || b.pointPct - a.pointPct);
   return { date, fetchedAt: new Date().toISOString(), scheduleSourceUrl: scheduleResponse.url, standingsSourceUrl: standingsResponse.ok ? standingsResponse.url : standingsUrl, games, standings };
 }
 
@@ -1100,8 +1167,128 @@ function teamFirstGoalStats(team: (typeof teamCodes)[number], venue: "away" | "h
   };
 }
 
+// Season model pair for an NHL fixture (venue-aware, paired), from a
+// standings-only fetch. Null when either club's sample is too thin.
+async function nhlModelPair(awayTeam: string, homeTeam: string): Promise<{ away: number; home: number } | null> {
+  try {
+    const response = await fetch(`${NHL_API}/standings/${nyDate(new Date())}`, { headers: { Accept: "application/json" } });
+    if (!response.ok) return null;
+    const payload = await response.json() as unknown;
+    const rows = arrayValue(objectValue(payload)?.standings)
+      .flatMap((value) => { const row = nhlStandingRow(value); return row ? [row] : []; });
+    const a = rows.find((r) => r.team === awayTeam);
+    const h = rows.find((r) => r.team === homeTeam);
+    if (!a || !h) return null;
+    return pairProbs(a.modelAwayPct, h.modelHomePct);
+  } catch { return null; }
+}
+
+function normGoalieName(name: string): string { return name.toLowerCase().replace(/[^a-z]/g, ""); }
+
+// Recent save pct per NHL goalie (last ~3 weeks of boxscores), cached 12h.
+// Only goalies with ≥3 appearances and ≥60 shots faced are included, so a
+// cameo never counts as a starter read.
+async function loadGoalieFormMap(ctx: Ctx): Promise<Map<string, { savePct: number; games: number }>> {
+  const key = "goalie-recent-form-v1";
+  try {
+    const rows = await ctx.db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, key)).limit(1);
+    const row = rows[0];
+    if (row && row.expiresAt.getTime() > Date.now()) {
+      const parsed = JSON.parse(row.payloadJson) as Record<string, { savePct: number; games: number }>;
+      return new Map(Object.entries(parsed));
+    }
+  } catch { /* fall through to live build */ }
+  const built = new Map<string, { saves: number; shots: number; games: number }>();
+  try {
+    const { byPlayer } = await collectNhlRecentGames();
+    for (const p of byPlayer.values()) {
+      if (p.position !== "G") continue;
+      let saves = 0, shots = 0, games = 0;
+      for (const g of p.games) {
+        if (g.saves === null || g.savePct === null || g.savePct <= 0) continue;
+        saves += g.saves;
+        shots += g.saves / g.savePct;
+        games += 1;
+      }
+      if (games >= 3 && shots >= 60) built.set(normGoalieName(p.name), { saves, shots, games });
+    }
+  } catch { /* empty map: no goalie edge is applied */ }
+  const out: Record<string, { savePct: number; games: number }> = {};
+  for (const [k, v] of built) out[k] = { savePct: v.saves / v.shots, games: v.games };
+  try {
+    await ctx.db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, key));
+    await ctx.db.insert(schema.nhlInsightCache).values({
+      key, payloadJson: JSON.stringify(out),
+      fetchedAt: new Date(), expiresAt: new Date(Date.now() + 12 * 60 * 60 * 1000),
+    });
+  } catch { /* cache is best-effort */ }
+  return new Map(Object.entries(out));
+}
+
+// Context for the actual next fixture between the two clubs, from the league
+// schedule: rest days per side (vs each club's last completed game) and the
+// named starters (confirmed from the gamecenter landing payload when
+// posted, else the projected goalie-comparison leaders) with recent save
+// pct. Everything null when the fixture or the data isn't real — the nudges
+// only ever apply to real games with real data.
+async function nhlFixtureContext(ctx: Ctx, results: FirstGoalResult[], awayTeam: (typeof teamCodes)[number], homeTeam: (typeof teamCodes)[number]): Promise<{
+  restAwayDays: number | null; restHomeDays: number | null;
+  goalieAway: { name: string; savePct: number } | null;
+  goalieHome: { name: string; savePct: number } | null;
+}> {
+  const fallback = { restAwayDays: null, restHomeDays: null, goalieAway: null, goalieHome: null };
+  try {
+    const response = await fetch(`${NHL_API}/schedule/${nyDate(new Date())}`, { headers: { Accept: "application/json" } });
+    if (!response.ok) return fallback;
+    const payload = await response.json() as unknown;
+    let fixture: { id: number; date: string } | null = null;
+    for (const weekValue of arrayValue(objectValue(payload)?.gameWeek)) {
+      const week = objectValue(weekValue);
+      const gameDate = textValue(week?.date);
+      if (!gameDate) continue;
+      for (const gameValue of arrayValue(week?.games)) {
+        const game = objectValue(gameValue);
+        const state = textValue(game?.gameState) ?? "";
+        if (state !== "FUT" && state !== "PRE") continue;
+        if (shortTeam(game?.awayTeam) !== awayTeam || shortTeam(game?.homeTeam) !== homeTeam) continue;
+        const id = num(game?.id);
+        if (id !== null && (!fixture || gameDate < fixture.date)) fixture = { id, date: gameDate };
+      }
+    }
+    if (!fixture) return fallback;
+    const lastDate = (team: string): string | null => {
+      let last: string | null = null;
+      for (const r of results) {
+        if ((r.away === team || r.home === team) && (last === null || r.date > last)) last = r.date;
+      }
+      return last;
+    };
+    const restAwayDays = restDaysBetween(lastDate(awayTeam), fixture.date);
+    const restHomeDays = restDaysBetween(lastDate(homeTeam), fixture.date);
+    let goalieAway: { name: string; savePct: number } | null = null;
+    let goalieHome: { name: string; savePct: number } | null = null;
+    try {
+      const detail = await fetch(`${NHL_API}/gamecenter/${fixture.id}/landing`, { headers: { Accept: "application/json" } });
+      if (detail.ok) {
+        const landing = await detail.json() as unknown;
+        const nameFor = (side: "awayTeam" | "homeTeam"): string | null =>
+          confirmedGoalies(landing, side)[0] ?? goalieWatch(landing, side)[0] ?? null;
+        const formMap = await loadGoalieFormMap(ctx);
+        const lookup = (name: string | null): { name: string; savePct: number } | null => {
+          if (!name) return null;
+          const entry = formMap.get(normGoalieName(name));
+          return entry ? { name, savePct: Math.round(entry.savePct * 1000) / 1000 } : null;
+        };
+        goalieAway = lookup(nameFor("awayTeam"));
+        goalieHome = lookup(nameFor("homeTeam"));
+      }
+    } catch { /* goalie edge is best-effort */ }
+    return { restAwayDays, restHomeDays, goalieAway, goalieHome };
+  } catch { return fallback; }
+}
+
 async function loadFirstGoalMatchup(ctx: Ctx, awayTeam: (typeof teamCodes)[number], homeTeam: (typeof teamCodes)[number], force: boolean): Promise<z.infer<typeof firstGoalMatchupResponse>> {
-  const cacheKey = `matchup-v2:${awayTeam}:${homeTeam}`;
+  const cacheKey = `matchup-v3:${awayTeam}:${homeTeam}`;
   const db = ctx.db;
   const cachedRows = await db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey)).limit(1);
   const cached = cachedRows[0];
@@ -1128,11 +1315,22 @@ async function loadFirstGoalMatchup(ctx: Ctx, awayTeam: (typeof teamCodes)[numbe
   const mean = (a: number | null, b: number | null): number | null => a !== null && b !== null ? (a + b) / 2 : a ?? b;
   const awayWinForm = venueBlend(away.winPct, away.venueWinPct, away.venueGames);
   const homeWinForm = venueBlend(home.winPct, home.venueWinPct, home.venueGames);
-  const awayWinRaw = awayWinForm !== null && homeWinForm !== null ? (awayWinForm + (1 - homeWinForm)) / 2 : null;
-  const homeWinRaw = awayWinForm !== null && homeWinForm !== null ? (homeWinForm + (1 - awayWinForm)) / 2 : null;
-  const winTotal = awayWinRaw !== null && homeWinRaw !== null ? awayWinRaw + homeWinRaw : null;
-  const awayWinProbability = awayWinRaw !== null && winTotal !== null && winTotal > 0 ? awayWinRaw / winTotal : null;
-  const homeWinProbability = homeWinRaw !== null && winTotal !== null && winTotal > 0 ? homeWinRaw / winTotal : null;
+  // Flip % v3 winner read: 50/50 blend of the venue-blended recent-form pair
+  // and the season model pair (Pythagorean + last-10 form + venue), then
+  // small contextual nudges for the real fixture — rest differential and,
+  // when both starters are known with real recent save pct, the goalie edge.
+  const formPair = pairProbs(awayWinForm, homeWinForm);
+  const seasonPair = await nhlModelPair(awayTeam, homeTeam);
+  const blendedPair = blendPairs(formPair, seasonPair);
+  const fixtureCtx = await nhlFixtureContext(ctx, results, awayTeam, homeTeam);
+  let awayShift = restAwayShift(fixtureCtx.restAwayDays, fixtureCtx.restHomeDays, dailyFatigue, 0.04, 0.05);
+  if (fixtureCtx.goalieAway && fixtureCtx.goalieHome) {
+    const svDiff = fixtureCtx.goalieAway.savePct - fixtureCtx.goalieHome.savePct;
+    awayShift += Math.max(-0.05, Math.min(0.05, svDiff * 1.2));
+  }
+  const finalPair = shiftPair(blendedPair?.away ?? null, blendedPair?.home ?? null, awayShift);
+  const awayWinProbability = finalPair.away;
+  const homeWinProbability = finalPair.home;
   const winnerTeam = awayWinProbability === null || homeWinProbability === null ? null : awayWinProbability >= homeWinProbability ? awayTeam : homeTeam;
   const winnerEdgePoints = awayWinProbability === null || homeWinProbability === null ? null : Math.abs(awayWinProbability - homeWinProbability) * 100;
   const firstPeriodUnder25Probability = mean(venueBlend(away.firstPeriodUnder25Pct, away.venueFirstPeriodUnder25Pct, away.venueGames), venueBlend(home.firstPeriodUnder25Pct, home.venueFirstPeriodUnder25Pct, home.venueGames));
@@ -1143,7 +1341,9 @@ async function loadFirstGoalMatchup(ctx: Ctx, awayTeam: (typeof teamCodes)[numbe
   const edgeTeam = awayProbability === null || homeProbability === null ? null : awayProbability >= homeProbability ? awayTeam : homeTeam;
   const edgePoints = awayProbability === null || homeProbability === null ? null : Math.abs(awayProbability - homeProbability) * 100;
   const response: z.infer<typeof firstGoalMatchupResponse> = {
-    away, home, awayProbability, homeProbability, edgeTeam, edgePoints, awayWinProbability, homeWinProbability, winnerTeam, winnerEdgePoints, firstPeriodUnder25Probability, blowoutProbability, bothTeamsTwoProbability, regulationDrawProbability,
+    away, home, awayProbability, homeProbability, edgeTeam, edgePoints, awayWinProbability, homeWinProbability, winnerTeam, winnerEdgePoints,
+    restAwayDays: fixtureCtx.restAwayDays, restHomeDays: fixtureCtx.restHomeDays, goalieAway: fixtureCtx.goalieAway, goalieHome: fixtureCtx.goalieHome,
+    firstPeriodUnder25Probability, blowoutProbability, bothTeamsTwoProbability, regulationDrawProbability,
     headToHead: { games: headGames.length, awayScoredFirst: headGames.filter((game) => game.firstTeam === awayTeam).length, homeScoredFirst: headGames.filter((game) => game.firstTeam === homeTeam).length },
     fetchedAt: new Date().toISOString(), sourceUrl: results[0]?.sourceUrl ?? awaySchedule.sourceUrl,
     sampleNote: `Recent ${away.games} ${awayTeam} and ${home.games} ${homeTeam} completed regular-season games, using 2026–27 first and 2025–26 when needed.`,
@@ -1304,6 +1504,10 @@ const nflStandingSchema = z.object({
   // toward .500 early in the season. Null when the sample is too thin.
   // Always a model estimate, never a sportsbook price.
   modelWinPct: z.number().nullable(),
+  // Flip % v3: venue-specific model win pcts from ESPN home/road record
+  // splits (the away side's road value, the home side's home value).
+  modelHomePct: z.number().nullable(),
+  modelAwayPct: z.number().nullable(),
 });
 const nflOverviewResponse = z.object({
   week: z.number(), weeks: z.array(z.number()), season: z.number(), fetchedAt: z.string(),
@@ -1327,6 +1531,9 @@ const nflMatchupResponse = z.object({
   away: nflMatchupTeamSchema, home: nflMatchupTeamSchema,
   awayWinProbability: z.number().nullable(), homeWinProbability: z.number().nullable(),
   winnerTeam: z.string().nullable(), winnerEdgePoints: z.number().nullable(),
+  // Flip % v3: rest days per side for the actual fixture (null when the
+  // fixture isn't on this week's scoreboard).
+  restAwayDays: z.number().nullable(), restHomeDays: z.number().nullable(),
   firstScoreAwayProbability: z.number().nullable(), firstScoreHomeProbability: z.number().nullable(),
   firstScoreEdgeTeam: z.string().nullable(), firstScoreEdgePoints: z.number().nullable(),
   firstHalfUnder245Probability: z.number().nullable(), blowoutProbability: z.number().nullable(),
@@ -1401,6 +1608,10 @@ const ncaafStandingSchema = z.object({
   // toward .500 early in the season. Null when the sample is too thin.
   // Always a model estimate, never a sportsbook price.
   modelWinPct: z.number().nullable(),
+  // Flip % v3: venue-specific model win pcts from ESPN home/road record
+  // splits (the away side's road value, the home side's home value).
+  modelHomePct: z.number().nullable(),
+  modelAwayPct: z.number().nullable(),
 });
 const ncaafOverviewResponse = z.object({
   week: z.number(), weeks: z.array(z.number()), season: z.number(), fetchedAt: z.string(),
@@ -1484,7 +1695,8 @@ const ncaafGameLogResponse = z.object({
 
 
 // ---------------------------------------------------------------------------
-// Flip % v2 model engine (NFL + NBA; the NHL side keeps its existing model).
+// Flip % v2 model engine (NFL + NBA; Flip % v3 extends it to the NHL and
+// adds venue-specific values for all four two-way sports).
 //
 // modelWinPct blends three signals, all from keyless official feeds:
 //   1. Pythagorean expectation from points for/against (exp 2.37 NFL, 13.91 NBA)
@@ -1509,25 +1721,172 @@ async function pool<T, R>(items: T[], concurrency: number, fn: (item: T) => Prom
   return results;
 }
 
+// Pythagorean expectation on a scoring split (0-1).
+function pythagPct(pointsFor: number, pointsAgainst: number, exponent: number): number {
+  const pf = Math.max(0, pointsFor);
+  const pa = Math.max(0, pointsAgainst);
+  const pfE = Math.pow(pf, exponent);
+  const paE = Math.pow(pa, exponent);
+  return pfE + paE > 0 ? pfE / (pfE + paE) : 0.5;
+}
+
 function modelWinPct(opts: {
   pointsFor: number; pointsAgainst: number;
   wins: number; losses: number; ties?: number;
   exponent: number;
   form: { wins: number; games: number } | null;
+  // Optional precomputed 0-1 recent-form strength, used in place of the W/L
+  // form blend when the feed offers a richer form window (the NHL's last-10
+  // goals for/against). Callers gate their own minimum sample.
+  formValue?: number | null;
 }): number | null {
   const games = opts.wins + opts.losses + (opts.ties ?? 0);
   if (games < 2) return null;
-  const pf = Math.max(0, opts.pointsFor);
-  const pa = Math.max(0, opts.pointsAgainst);
-  const pfExp = Math.pow(pf, opts.exponent);
-  const paExp = Math.pow(pa, opts.exponent);
-  const pythag = pfExp + paExp > 0 ? pfExp / (pfExp + paExp) : 0.5;
+  const pythag = pythagPct(opts.pointsFor, opts.pointsAgainst, opts.exponent);
   const w = Math.min(games, 8);
   const blended = (pythag * w + 0.5 * (8 - w)) / 8;
   const f = opts.form;
-  const formPct = f && f.games >= 3 && games >= 3 ? f.wins / f.games : null;
+  const formPct = opts.formValue ?? (f && f.games >= 3 && games >= 3 ? f.wins / f.games : null);
   const value = formPct === null ? blended : 0.7 * blended + 0.3 * formPct;
   return Math.round(value * 1000) / 1000;
+}
+
+// Venue blend (house style, mirroring the matchup calculators' venueBlend):
+// a team's venue-specific model value = 40% neutral + 60% its venue rate,
+// once the venue sample is deep enough; otherwise the neutral value stands.
+function venueModelPct(base: number | null, venueValue: number | null, venueGames: number, minGames: number): number | null {
+  if (base === null) return null;
+  if (venueValue === null || venueGames < minGames) return base;
+  return Math.round((base * 0.4 + venueValue * 0.6) * 1000) / 1000;
+}
+
+type SplitRecord = { wins: number | null; losses: number | null; ties: number | null };
+
+// Venue-specific model pcts from ESPN-style home/road W-L splits: the venue
+// rate is the split's win pct (ties = half a win), blended over the neutral
+// model value by venueModelPct.
+function venueModelPctsFromSplits(opts: {
+  neutral: number | null;
+  home: SplitRecord;
+  road: SplitRecord;
+  minGames: number;
+}): { modelHomePct: number | null; modelAwayPct: number | null } {
+  const venueGames = (v: SplitRecord): number =>
+    v.wins === null || v.losses === null ? 0 : v.wins + v.losses + (v.ties ?? 0);
+  const venuePct = (v: SplitRecord): number | null => {
+    const gp = venueGames(v);
+    return gp > 0 ? ((v.wins ?? 0) + (v.ties ?? 0) / 2) / gp : null;
+  };
+  return {
+    modelHomePct: venueModelPct(opts.neutral, venuePct(opts.home), venueGames(opts.home), opts.minGames),
+    modelAwayPct: venueModelPct(opts.neutral, venuePct(opts.road), venueGames(opts.road), opts.minGames),
+  };
+}
+
+// Standard two-way pairing from per-side strengths: each side's raw edge is
+// the average of its own strength and the other side's weakness, normalized.
+function pairProbs(awayPct: number | null, homePct: number | null): { away: number; home: number } | null {
+  if (awayPct === null || homePct === null) return null;
+  const awayRaw = (awayPct + (1 - homePct)) / 2;
+  const homeRaw = (homePct + (1 - awayPct)) / 2;
+  const total = awayRaw + homeRaw;
+  if (total <= 0) return null;
+  return { away: awayRaw / total, home: homeRaw / total };
+}
+
+// 50/50 blend of two probability pairs (recent-form read + season-model read).
+function blendPairs(
+  a: { away: number; home: number } | null,
+  b: { away: number; home: number } | null,
+): { away: number; home: number } | null {
+  if (!a) return b;
+  if (!b) return a;
+  return {
+    away: Math.round((a.away * 0.5 + b.away * 0.5) * 1000) / 1000,
+    home: Math.round((a.home * 0.5 + b.home * 0.5) * 1000) / 1000,
+  };
+}
+
+// Apply an away-side probability shift (positive favors the away team) and
+// renormalize. Every contextual nudge (rest, goalie) routes through here so
+// the pair always sums to 1 and stays within sane bounds.
+function shiftPair(away: number | null, home: number | null, awayShift: number, cap = 0.06): { away: number | null; home: number | null } {
+  if (away === null || home === null) return { away, home };
+  const shift = Math.max(-cap, Math.min(cap, awayShift));
+  if (shift === 0) return { away, home };
+  const clamp = (n: number) => Math.min(0.99, Math.max(0.01, n));
+  const a = clamp(away + shift);
+  const h = clamp(home - shift);
+  const total = a + h;
+  return { away: Math.round((a / total) * 1000) / 1000, home: Math.round((h / total) * 1000) / 1000 };
+}
+
+// Rest days between a team's last completed game and its next fixture:
+// 0 = back-to-back (played yesterday), 1+ = real days off. Null when either
+// date is unknown, so rest is only ever applied to real fixtures.
+function restDaysBetween(lastGameDate: string | null, fixtureDate: string | null): number | null {
+  if (!lastGameDate || !fixtureDate) return null;
+  const ms = Date.parse(fixtureDate.slice(0, 10)) - Date.parse(lastGameDate.slice(0, 10));
+  if (!Number.isFinite(ms)) return null;
+  return ms / 86400000 - 1;
+}
+
+// Fatigue curves. Daily sports (NHL/NBA): a true back-to-back is the
+// expensive case, one day off is half as bad, 2+ days is rested. Weekly
+// sports (NFL): 7 days is neutral, short weeks bite, bye weeks help.
+function dailyFatigue(restDays: number): number { return restDays <= 0 ? 1 : restDays <= 1 ? 0.5 : 0; }
+function weeklyFatigue(restDays: number): number { return Math.max(-1, Math.min(1, (7 - restDays) / 4)); }
+
+// Away-side probability shift from a rest differential (positive favors the
+// away team). Returns 0 unless both rests are known. Scale/cap are per
+// sport: NHL/NBA 0.04/0.05, NFL 0.03/0.04.
+function restAwayShift(restAway: number | null, restHome: number | null, fatigue: (days: number) => number, scale: number, cap: number): number {
+  if (restAway === null || restHome === null) return 0;
+  const shift = scale * (fatigue(restHome) - fatigue(restAway));
+  return Math.max(-cap, Math.min(cap, shift));
+}
+
+// Season-model two-way pair for an NFL/NBA/NCAAF fixture: Pythagorean
+// expectation (exp 2.37 football, 13.91 NBA) blended with last-5 form per
+// team, venue-adjusted (away team's road value, home team's home value),
+// then paired. Null when the data is too thin.
+async function espnModelPair(ctx: Ctx, sport: "nfl" | "nba" | "ncaaf", awayTeam: string, homeTeam: string): Promise<{ away: number; home: number } | null> {
+  try {
+    const fetched = sport === "nfl" ? await fetchNflStandings() : sport === "nba" ? await fetchNbaStandings() : await fetchNcaafStandings();
+    type ModelStandingRow = {
+      team: string; wins: number; losses: number; ties?: number | null;
+      pointsFor: number; pointsAgainst: number;
+      homeWins: number | null; homeLosses: number | null; homeTies: number | null;
+      roadWins: number | null; roadLosses: number | null; roadTies: number | null;
+    };
+    const standings: ModelStandingRow[] = fetched.standings;
+    const formMap = await formForOverview(ctx, sport);
+    const exponent = sport === "nba" ? 13.91 : 2.37;
+    const venue = (s: {
+      team: string; wins: number; losses: number; ties: number | null;
+      pointsFor: number; pointsAgainst: number;
+      home: SplitRecord; road: SplitRecord;
+    }, side: "home" | "away"): number | null => {
+      const neutral = modelWinPct({
+        pointsFor: s.pointsFor, pointsAgainst: s.pointsAgainst,
+        wins: s.wins, losses: s.losses, ties: s.ties ?? 0, exponent,
+        form: formMap?.[s.team] ?? null,
+      });
+      const { modelHomePct, modelAwayPct } = venueModelPctsFromSplits({ neutral, home: s.home, road: s.road, minGames: 3 });
+      return side === "home" ? modelHomePct : modelAwayPct;
+    };
+    const normalize = (s: ModelStandingRow) => ({
+      team: s.team, wins: s.wins, losses: s.losses, ties: s.ties ?? null,
+      pointsFor: s.pointsFor, pointsAgainst: s.pointsAgainst,
+      home: { wins: s.homeWins, losses: s.homeLosses, ties: s.homeTies },
+      road: { wins: s.roadWins, losses: s.roadLosses, ties: s.roadTies },
+    });
+    const rows = standings.map(normalize);
+    const a = rows.find((r) => r.team === awayTeam);
+    const h = rows.find((r) => r.team === homeTeam);
+    if (!a || !h) return null;
+    return pairProbs(venue(a, "away"), venue(h, "home"));
+  } catch { return null; }
 }
 
 type TeamForm = { wins: number; games: number };
@@ -1645,15 +2004,24 @@ async function loadNflOverview(week?: number, ctx?: Ctx): Promise<z.infer<typeof
   try {
     const data = await fetchNflStandings();
     standingsUrl = data.sourceUrl;
-    standings = data.standings.map((s) => ({
-      ...s,
-      division: s.division || nflDivision(s.team),
-      modelWinPct: modelWinPct({
+    standings = data.standings.map((s) => {
+      const neutral = modelWinPct({
         pointsFor: s.pointsFor, pointsAgainst: s.pointsAgainst,
         wins: s.wins, losses: s.losses, ties: s.ties, exponent: 2.37,
         form: formMap?.[s.team] ?? null,
-      }),
-    }));
+      });
+      return {
+        ...s,
+        division: s.division || nflDivision(s.team),
+        modelWinPct: neutral,
+        ...venueModelPctsFromSplits({
+          neutral,
+          home: { wins: s.homeWins, losses: s.homeLosses, ties: s.homeTies },
+          road: { wins: s.roadWins, losses: s.roadLosses, ties: s.roadTies },
+          minGames: 3,
+        }),
+      };
+    });
   } catch { /* schedule still renders without standings */ }
   const weeks = Array.from({ length: 18 }, (_, i) => i + 1);
   const games = board.games.map((g) => ({
@@ -1856,7 +2224,7 @@ function nflTeamMatchupStats(team: (typeof nflTeamCodes)[number], venue: "away" 
 }
 
 async function loadNflMatchup(ctx: Ctx, awayTeam: (typeof nflTeamCodes)[number], homeTeam: (typeof nflTeamCodes)[number], force: boolean): Promise<z.infer<typeof nflMatchupResponse>> {
-  const cacheKey = `nfl-matchup:${awayTeam}:${homeTeam}`;
+  const cacheKey = `nfl-matchup-v2:${awayTeam}:${homeTeam}`;
   const db = ctx.db;
   const cachedRows = await db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey)).limit(1);
   const cached = cachedRows[0];
@@ -1876,11 +2244,27 @@ async function loadNflMatchup(ctx: Ctx, awayTeam: (typeof nflTeamCodes)[number],
 
   const awayWinForm = venueBlend(away.winPct, away.venueWinPct, away.venueGames);
   const homeWinForm = venueBlend(home.winPct, home.venueWinPct, home.venueGames);
-  const awayWinRaw = awayWinForm !== null && homeWinForm !== null ? (awayWinForm + (1 - homeWinForm)) / 2 : null;
-  const homeWinRaw = awayWinForm !== null && homeWinForm !== null ? (homeWinForm + (1 - awayWinForm)) / 2 : null;
-  const winTotal = awayWinRaw !== null && homeWinRaw !== null ? awayWinRaw + homeWinRaw : null;
-  const awayWinProbability = awayWinRaw !== null && winTotal !== null && winTotal > 0 ? awayWinRaw / winTotal : null;
-  const homeWinProbability = homeWinRaw !== null && winTotal !== null && winTotal > 0 ? homeWinRaw / winTotal : null;
+  // Flip % v3 winner read: 50/50 blend of the venue-blended recent-form pair
+  // and the season model pair (Pythagorean + last-5 form + venue), then a
+  // small rest nudge when the real fixture is on this week's scoreboard
+  // (short weeks bite, bye weeks help — weekly fatigue scale).
+  const formPair = pairProbs(awayWinForm, homeWinForm);
+  const seasonPair = await espnModelPair(ctx, "nfl", awayTeam, homeTeam);
+  const blendedPair = blendPairs(formPair, seasonPair);
+  let restAwayDays: number | null = null;
+  let restHomeDays: number | null = null;
+  try {
+    const board = await fetchNflScoreboard();
+    const fixture = board.games.find((g) => g.away.abbr === awayTeam && g.home.abbr === homeTeam && g.state === "pre");
+    if (fixture) {
+      restAwayDays = restDaysBetween(awayData.games[0]?.date ?? null, fixture.date);
+      restHomeDays = restDaysBetween(homeData.games[0]?.date ?? null, fixture.date);
+    }
+  } catch { /* rest is best-effort */ }
+  const finalPair = shiftPair(blendedPair?.away ?? null, blendedPair?.home ?? null,
+    restAwayShift(restAwayDays, restHomeDays, weeklyFatigue, 0.03, 0.04));
+  const awayWinProbability = finalPair.away;
+  const homeWinProbability = finalPair.home;
   const winnerTeam = awayWinProbability === null || homeWinProbability === null ? null : awayWinProbability >= homeWinProbability ? awayTeam : homeTeam;
   const winnerEdgePoints = awayWinProbability === null || homeWinProbability === null ? null : Math.abs(awayWinProbability - homeWinProbability) * 100;
 
@@ -1905,6 +2289,7 @@ async function loadNflMatchup(ctx: Ctx, awayTeam: (typeof nflTeamCodes)[number],
   const h2h = awayData.games.filter((g) => g.opponent === homeTeam);
   const response: z.infer<typeof nflMatchupResponse> = {
     away, home, awayWinProbability, homeWinProbability, winnerTeam, winnerEdgePoints,
+    restAwayDays, restHomeDays,
     firstScoreAwayProbability, firstScoreHomeProbability, firstScoreEdgeTeam, firstScoreEdgePoints,
     firstHalfUnder245Probability, blowoutProbability, bothTeams20Probability, overtimeProbability,
     headToHead: { games: h2h.length, awayWins: h2h.filter((g) => g.won).length, homeWins: h2h.filter((g) => !g.won).length },
@@ -2043,15 +2428,24 @@ async function loadNcaafOverview(week?: number, ctx?: Ctx): Promise<z.infer<type
   try {
     const data = await fetchNcaafStandings();
     standingsUrl = data.sourceUrl;
-    standings = data.standings.map((s) => ({
-      ...s,
-      division: s.division || ncaafConference(s.team),
-      modelWinPct: modelWinPct({
+    standings = data.standings.map((s) => {
+      const neutral = modelWinPct({
         pointsFor: s.pointsFor, pointsAgainst: s.pointsAgainst,
         wins: s.wins, losses: s.losses, ties: s.ties, exponent: 2.37,
         form: formMap?.[s.team] ?? null,
-      }),
-    }));
+      });
+      return {
+        ...s,
+        division: s.division || ncaafConference(s.team),
+        modelWinPct: neutral,
+        ...venueModelPctsFromSplits({
+          neutral,
+          home: { wins: s.homeWins, losses: s.homeLosses, ties: s.homeTies },
+          road: { wins: s.roadWins, losses: s.roadLosses, ties: s.roadTies },
+          minGames: 3,
+        }),
+      };
+    });
   } catch { /* schedule still renders without standings */ }
   const weeks = Array.from({ length: 15 }, (_, i) => i + 1);
   const games = board.games.map((g) => ({
@@ -2249,7 +2643,7 @@ function ncaafTeamMatchupStats(team: (typeof ncaafTeamCodes)[number], venue: "aw
 }
 
 async function loadNcaafMatchup(ctx: Ctx, awayTeam: (typeof ncaafTeamCodes)[number], homeTeam: (typeof ncaafTeamCodes)[number], force: boolean): Promise<z.infer<typeof ncaafMatchupResponse>> {
-  const cacheKey = `ncaaf-matchup:${awayTeam}:${homeTeam}`;
+  const cacheKey = `ncaaf-matchup-v2:${awayTeam}:${homeTeam}`;
   const db = ctx.db;
   const cachedRows = await db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey)).limit(1);
   const cached = cachedRows[0];
@@ -2269,11 +2663,15 @@ async function loadNcaafMatchup(ctx: Ctx, awayTeam: (typeof ncaafTeamCodes)[numb
 
   const awayWinForm = venueBlend(away.winPct, away.venueWinPct, away.venueGames);
   const homeWinForm = venueBlend(home.winPct, home.venueWinPct, home.venueGames);
-  const awayWinRaw = awayWinForm !== null && homeWinForm !== null ? (awayWinForm + (1 - homeWinForm)) / 2 : null;
-  const homeWinRaw = awayWinForm !== null && homeWinForm !== null ? (homeWinForm + (1 - awayWinForm)) / 2 : null;
-  const winTotal = awayWinRaw !== null && homeWinRaw !== null ? awayWinRaw + homeWinRaw : null;
-  const awayWinProbability = awayWinRaw !== null && winTotal !== null && winTotal > 0 ? awayWinRaw / winTotal : null;
-  const homeWinProbability = homeWinRaw !== null && winTotal !== null && winTotal > 0 ? homeWinRaw / winTotal : null;
+  // Flip % v3 winner read: 50/50 blend of the venue-blended recent-form pair
+  // and the season model pair (Pythagorean + last-5 form + venue). No rest
+  // nudge here: the Saturday cadence makes rest differentials minor and the
+  // fixture anchor is not plumbed into this loader.
+  const formPair = pairProbs(awayWinForm, homeWinForm);
+  const seasonPair = await espnModelPair(ctx, "ncaaf", awayTeam, homeTeam);
+  const blendedPair = blendPairs(formPair, seasonPair);
+  const awayWinProbability = blendedPair?.away ?? null;
+  const homeWinProbability = blendedPair?.home ?? null;
   const winnerTeam = awayWinProbability === null || homeWinProbability === null ? null : awayWinProbability >= homeWinProbability ? awayTeam : homeTeam;
   const winnerEdgePoints = awayWinProbability === null || homeWinProbability === null ? null : Math.abs(awayWinProbability - homeWinProbability) * 100;
 
@@ -2448,6 +2846,10 @@ const nbaStandingSchema = z.object({
   // toward .500 early in the season. Null when the sample is too thin.
   // Always a model estimate, never a sportsbook price.
   modelWinPct: z.number().nullable(),
+  // Flip % v3: venue-specific model win pcts from ESPN home/road record
+  // splits (the away side's road value, the home side's home value).
+  modelHomePct: z.number().nullable(),
+  modelAwayPct: z.number().nullable(),
 });
 const nbaOverviewResponse = z.object({
   season: z.number(), fetchedAt: z.string(),
@@ -2473,6 +2875,9 @@ const nbaMatchupResponse = z.object({
   away: nbaMatchupTeamSchema, home: nbaMatchupTeamSchema,
   awayWinProbability: z.number().nullable(), homeWinProbability: z.number().nullable(),
   winnerTeam: z.string().nullable(), winnerEdgePoints: z.number().nullable(),
+  // Flip % v3: rest days per side for the actual fixture (null when the
+  // fixture isn't on today's/tomorrow's scoreboard).
+  restAwayDays: z.number().nullable(), restHomeDays: z.number().nullable(),
   firstBasketAwayProbability: z.number().nullable(), firstBasketHomeProbability: z.number().nullable(),
   firstBasketEdgeTeam: z.string().nullable(), firstBasketEdgePoints: z.number().nullable(),
   firstHalfOver115Probability: z.number().nullable(), blowoutProbability: z.number().nullable(),
@@ -2543,14 +2948,23 @@ async function loadNbaOverview(ctx?: Ctx, dateStr?: string): Promise<z.infer<typ
   try {
     const data = await fetchNbaStandings();
     standingsUrl = data.sourceUrl;
-    standings = data.standings.map((s) => ({
-      ...s,
-      modelWinPct: modelWinPct({
+    standings = data.standings.map((s) => {
+      const neutral = modelWinPct({
         pointsFor: s.pointsFor, pointsAgainst: s.pointsAgainst,
         wins: s.wins, losses: s.losses, exponent: 13.91,
         form: formMap?.[s.team] ?? null,
-      }),
-    }));
+      });
+      return {
+        ...s,
+        modelWinPct: neutral,
+        ...venueModelPctsFromSplits({
+          neutral,
+          home: { wins: s.homeWins, losses: s.homeLosses, ties: s.homeTies },
+          road: { wins: s.roadWins, losses: s.roadLosses, ties: s.roadTies },
+          minGames: 3,
+        }),
+      };
+    });
   } catch { /* schedule still renders without standings */ }
   const games = board.games.map((g) => ({
     id: g.id, date: g.date.slice(0, 10), startsAt: g.date, state: g.state, detail: g.detail,
@@ -3000,6 +3414,86 @@ async function loadSoccerMatchup(ctx: Ctx, league: SoccerLeagueParam, awayTeam: 
   return response;
 }
 
+// ---------------------------------------------------------------------------
+// Team trends (team file Charts tab): the club's own recent game log as a
+// scoring series — score for/against per game, margin, and cumulative
+// margin. Official game logs only; nothing is synthesized. Cached 6h.
+// ---------------------------------------------------------------------------
+
+const teamTrendGameSchema = z.object({
+  date: z.string(), opponent: z.string(), homeAway: z.enum(["home", "away"]),
+  scoreFor: z.number(), scoreAgainst: z.number(), margin: z.number(), cumMargin: z.number(),
+});
+const teamTrendsResponse = z.object({
+  team: z.string(), sport: z.enum(sports), league: z.string().nullable(),
+  scoreLabel: z.string(), fetchedAt: z.string(), sourceUrl: z.string(),
+  games: z.array(teamTrendGameSchema),
+});
+
+async function loadTeamTrends(ctx: Ctx, sport: Sport, team: string, league: SoccerLeagueParam | null): Promise<z.infer<typeof teamTrendsResponse>> {
+  const cacheKey = `team-trends:${sport}:${league ?? ""}:${team}`;
+  try {
+    const rows = await ctx.db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey)).limit(1);
+    const row = rows[0];
+    if (row && row.expiresAt.getTime() > Date.now()) return teamTrendsResponse.parse(JSON.parse(row.payloadJson));
+  } catch { /* fall through to live compute */ }
+  type RawGame = { date: string; opponent: string; homeAway: "home" | "away"; scoreFor: number; scoreAgainst: number };
+  let raw: RawGame[] = [];
+  let sourceUrl = "";
+  const scoreLabel = sport === "nhl" || sport === "soccer" ? "Goals" : "Points";
+  if (sport === "nhl") {
+    if (!isTeamCode(team)) throw new Error(`Unknown NHL team ${team}`);
+    const sched = await loadClubSchedule(team);
+    sourceUrl = sched.sourceUrl;
+    raw = sched.games
+      .filter((g) => g.awayScore !== null && g.homeScore !== null)
+      .map((g) => {
+        const isAway = g.away === team;
+        return {
+          date: g.date, opponent: isAway ? g.home : g.away,
+          homeAway: (isAway ? "away" : "home") as "home" | "away",
+          scoreFor: (isAway ? g.awayScore : g.homeScore) as number,
+          scoreAgainst: (isAway ? g.homeScore : g.awayScore) as number,
+        };
+      });
+  } else if (sport === "nfl") {
+    const data = await fetchNflTeamGames(team, 17);
+    sourceUrl = data.sourceUrl;
+    raw = data.games.map((g) => ({ date: g.date.slice(0, 10), opponent: g.opponent, homeAway: g.homeAway, scoreFor: g.teamScore, scoreAgainst: g.oppScore }));
+  } else if (sport === "ncaaf") {
+    const data = await fetchNcaafTeamGames(team, 15);
+    sourceUrl = data.sourceUrl;
+    raw = data.games.map((g) => ({ date: g.date.slice(0, 10), opponent: g.opponent, homeAway: g.homeAway, scoreFor: g.teamScore, scoreAgainst: g.oppScore }));
+  } else if (sport === "nba") {
+    const data = await fetchNbaTeamGames(team, 82);
+    sourceUrl = data.sourceUrl;
+    raw = data.games.map((g) => ({ date: g.date.slice(0, 10), opponent: g.opponent, homeAway: g.homeAway, scoreFor: g.teamScore, scoreAgainst: g.oppScore }));
+  } else {
+    if (!league) throw new Error("Soccer team trends need a league");
+    const data = await fetchSoccerTeamGames(league, team, 30);
+    sourceUrl = data.sourceUrl;
+    raw = data.games.map((g) => ({ date: g.date.slice(0, 10), opponent: g.opponent, homeAway: g.homeAway, scoreFor: g.teamScore, scoreAgainst: g.oppScore }));
+  }
+  raw.sort((a, b) => a.date.localeCompare(b.date));
+  let cum = 0;
+  const games = raw.map((g) => {
+    const margin = g.scoreFor - g.scoreAgainst;
+    cum += margin;
+    return { ...g, margin, cumMargin: cum };
+  });
+  const response: z.infer<typeof teamTrendsResponse> = {
+    team, sport, league, scoreLabel, fetchedAt: new Date().toISOString(), sourceUrl, games,
+  };
+  try {
+    await ctx.db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey));
+    await ctx.db.insert(schema.nhlInsightCache).values({
+      key: cacheKey, payloadJson: JSON.stringify(response),
+      fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(Date.now() + 6 * 60 * 60 * 1000),
+    });
+  } catch { /* cache is best-effort */ }
+  return response;
+}
+
 const soccerStreakPlayerSchema = z.object({
   name: z.string(), team: z.string(), position: z.string().nullable(),
   goals: z.number(), games: z.number(), braces: z.number(),
@@ -3351,7 +3845,7 @@ function nbaTeamMatchupStats(team: (typeof nbaTeamCodes)[number], venue: "away" 
 }
 
 async function loadNbaMatchup(ctx: Ctx, awayTeam: (typeof nbaTeamCodes)[number], homeTeam: (typeof nbaTeamCodes)[number], force: boolean): Promise<z.infer<typeof nbaMatchupResponse>> {
-  const cacheKey = `nba-matchup:${awayTeam}:${homeTeam}`;
+  const cacheKey = `nba-matchup-v2:${awayTeam}:${homeTeam}`;
   const db = ctx.db;
   const cachedRows = await db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey)).limit(1);
   const cached = cachedRows[0];
@@ -3380,11 +3874,30 @@ async function loadNbaMatchup(ctx: Ctx, awayTeam: (typeof nbaTeamCodes)[number],
 
   const awayWinForm = venueBlend(baseWin(away), away.venueWinPct, away.venueGames);
   const homeWinForm = venueBlend(baseWin(home), home.venueWinPct, home.venueGames);
-  const awayWinRaw = awayWinForm !== null && homeWinForm !== null ? (awayWinForm + (1 - homeWinForm)) / 2 : null;
-  const homeWinRaw = awayWinForm !== null && homeWinForm !== null ? (homeWinForm + (1 - awayWinForm)) / 2 : null;
-  const winTotal = awayWinRaw !== null && homeWinRaw !== null ? awayWinRaw + homeWinRaw : null;
-  const awayWinProbability = awayWinRaw !== null && winTotal !== null && winTotal > 0 ? awayWinRaw / winTotal : null;
-  const homeWinProbability = homeWinRaw !== null && winTotal !== null && winTotal > 0 ? homeWinRaw / winTotal : null;
+  // Flip % v3 winner read: 50/50 blend of the venue-blended recent-form pair
+  // and the season model pair (Pythagorean + last-5 form + venue), then a
+  // small rest nudge when the real fixture is on today's or tomorrow's
+  // scoreboard (back-to-backs are the expensive case — daily fatigue scale).
+  const formPair = pairProbs(awayWinForm, homeWinForm);
+  const seasonPair = await espnModelPair(ctx, "nba", awayTeam, homeTeam);
+  const blendedPair = blendPairs(formPair, seasonPair);
+  let restAwayDays: number | null = null;
+  let restHomeDays: number | null = null;
+  try {
+    for (const key of [nbaDateKey(0), nbaDateKey(-1)]) {
+      const board = await fetchNbaScoreboard(key);
+      const fixture = board.games.find((g) => g.away.abbr === awayTeam && g.home.abbr === homeTeam && g.state === "pre");
+      if (fixture) {
+        restAwayDays = restDaysBetween(awayData.games[0]?.date ?? null, fixture.date);
+        restHomeDays = restDaysBetween(homeData.games[0]?.date ?? null, fixture.date);
+        break;
+      }
+    }
+  } catch { /* rest is best-effort */ }
+  const finalPair = shiftPair(blendedPair?.away ?? null, blendedPair?.home ?? null,
+    restAwayShift(restAwayDays, restHomeDays, dailyFatigue, 0.04, 0.05));
+  const awayWinProbability = finalPair.away;
+  const homeWinProbability = finalPair.home;
   const winnerTeam = awayWinProbability === null || homeWinProbability === null ? null : awayWinProbability >= homeWinProbability ? awayTeam : homeTeam;
   const winnerEdgePoints = awayWinProbability === null || homeWinProbability === null ? null : Math.abs(awayWinProbability - homeWinProbability) * 100;
 
@@ -3409,11 +3922,12 @@ async function loadNbaMatchup(ctx: Ctx, awayTeam: (typeof nbaTeamCodes)[number],
   const seasonLabel = awayData.seasonLabel || homeData.seasonLabel;
   const response: z.infer<typeof nbaMatchupResponse> = {
     away, home, awayWinProbability, homeWinProbability, winnerTeam, winnerEdgePoints,
+    restAwayDays, restHomeDays,
     firstBasketAwayProbability, firstBasketHomeProbability, firstBasketEdgeTeam, firstBasketEdgePoints,
     firstHalfOver115Probability, blowoutProbability, bothTeams110Probability, overtimeProbability,
     headToHead: { games: h2h.length, awayWins: h2h.filter((g) => g.won).length, homeWins: h2h.filter((g) => !g.won).length },
     fetchedAt: new Date().toISOString(), sourceUrl: awayData.sourceUrl,
-    sampleNote: `Last ${away.games} ${awayTeam} and ${home.games} ${homeTeam} completed ${seasonLabel} games from the official ESPN scoreboard. Win probabilities start from season records, venue-blended. All figures are model estimates.`,
+    sampleNote: `Last ${away.games} ${awayTeam} and ${home.games} ${homeTeam} completed ${seasonLabel} games from the official ESPN scoreboard. Win probabilities blend the season model (scoring margin + recent form), venue splits and — when the fixture is on the scoreboard — rest. All figures are model estimates.`,
   };
   await db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey));
   await db.insert(schema.nhlInsightCache).values({ key: cacheKey, payloadJson: JSON.stringify(response), fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(Date.now() + 12 * 60 * 60 * 1000) });
@@ -4752,6 +5266,7 @@ export const Actions = {
   getNbaPlayerGameLog: defineAction({ request: z.object({ team: z.enum(nbaTeamCodes), playerId: z.number().int().positive() }), response: nbaGameLogResponse, async handler(ctx, args) { return loadNbaPlayerGameLog(ctx, args.team, args.playerId); } }),
   getSoccerOverview: defineAction({ request: z.object({ league: z.enum(soccerLeagues) }), response: soccerOverviewResponse, async handler(ctx, args) { return loadSoccerOverview(ctx, args.league); } }),
   getSoccerMatchup: defineAction({ request: z.object({ league: z.enum(soccerLeagues), awayTeam: z.string(), homeTeam: z.string(), force: z.boolean().default(false) }).refine((value) => value.awayTeam !== value.homeTeam, { message: "Choose two different teams" }), response: soccerMatchupResponse, async handler(ctx, args) { return loadSoccerMatchup(ctx, args.league, args.awayTeam, args.homeTeam, args.force); } }),
+  getTeamTrends: defineAction({ request: z.object({ sport: z.enum(sports), team: z.string().min(1), league: z.enum(soccerLeagues).optional() }), response: teamTrendsResponse, async handler(ctx, args) { return loadTeamTrends(ctx, args.sport, args.team, args.league ?? null); } }),
   getSoccerHotStreaks: defineAction({ request: z.object({ league: z.enum(soccerLeagues), force: z.boolean().default(false) }), response: soccerHotStreaksResponse, async handler(ctx, args) { return fetchSoccerHotStreaks(ctx, args.league, args.force); } }),
   getSoccerColdStreaks: defineAction({ request: z.object({ league: z.enum(soccerLeagues), force: z.boolean().default(false) }), response: soccerColdStreaksResponse, async handler(ctx, args) { return fetchSoccerColdStreaks(ctx, args.league, args.force); } }),
   getSoccerRoster: defineAction({ request: z.object({ league: z.enum(soccerLeagues), team: z.string() }), response: soccerRosterResponse, async handler(ctx, args) { return loadSoccerRoster(ctx, args.league, args.team); } }),

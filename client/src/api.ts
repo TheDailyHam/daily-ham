@@ -84,6 +84,7 @@ export type SoccerMatchupTeam = {
   venueGames: number; venueWins: number; venueDraws: number; venueLosses: number;
   goalsFor: number; goalsAgainst: number; venueGoalsFor: number; venueGoalsAgainst: number;
   form: string;
+  recentGames?: { date: string; opponent: string; homeAway: "home" | "away"; teamScore: number; oppScore: number; won: boolean }[];
 };
 export type SoccerMatchup = {
   league: SoccerLeague; away: SoccerMatchupTeam; home: SoccerMatchupTeam;
@@ -155,6 +156,7 @@ export const api = {
   getNbaColdStreaks: (args: ActionArgs<"getNbaColdStreaks">) => callAction("getNbaColdStreaks", args),
   getNbaRoster: (args: ActionArgs<"getNbaRoster">) => callAction("getNbaRoster", args),
   getNbaPlayerGameLog: (args: ActionArgs<"getNbaPlayerGameLog">) => callAction("getNbaPlayerGameLog", args),
+  getTeamTrends: (args: ActionArgs<"getTeamTrends">) => callAction("getTeamTrends", args),
   getPremiumBoard: (args: ActionArgs<"getPremiumBoard">) => callAction("getPremiumBoard", args),
   getTrackRecord: () => callAction("getTrackRecord", {}),
   getCalibration: () => callAction("getCalibration", {}),

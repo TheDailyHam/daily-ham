@@ -146,6 +146,10 @@ export type NflStanding = {
   wins: number; losses: number; ties: number;
   pointsFor: number; pointsAgainst: number;
   streak: string | null; playoffSeed: number | null;
+  // Home/road splits from ESPN core `records` (type "home" / "road"). Null
+  // when the feed omits them, so the model can tell real splits from zeros.
+  homeWins: number | null; homeLosses: number | null; homeTies: number | null;
+  roadWins: number | null; roadLosses: number | null; roadTies: number | null;
 };
 
 function statValue(stats: unknown[], name: string): string | null {
@@ -176,6 +180,15 @@ export async function fetchNflStandings(): Promise<{ fetchedAt: string; sourceUr
     const rec = record(arr(entry.records)[0]);
     const stats = arr(rec?.stats);
     const intStat = (name: string) => { const v = statValue(stats, name); const n = v === null ? null : parseInt(v, 10); return Number.isFinite(n) ? (n as number) : 0; };
+    // Home/road splits live in sibling records (type "home" / "road").
+    const split = (type: string): { wins: number | null; losses: number | null; ties: number | null } => {
+      const splitRec = arr(entry.records).map((r) => record(r)).find((r) => r && text(r.type) === type);
+      const splitStats = arr(splitRec?.stats);
+      const splitStat = (name: string): number | null => { const v = statValue(splitStats, name); const n = v === null ? null : parseInt(v, 10); return n !== null && Number.isFinite(n) ? n : null; };
+      return { wins: splitStat("wins"), losses: splitStat("losses"), ties: splitStat("ties") };
+    };
+    const homeSplit = split("home");
+    const roadSplit = split("road");
     const division = NFL_DIVISIONS[abbr] ?? "";
     out.push({
       team: abbr,
@@ -189,6 +202,8 @@ export async function fetchNflStandings(): Promise<{ fetchedAt: string; sourceUr
       pointsAgainst: intStat("pointsAgainst"),
       streak: statValue(stats, "streak"),
       playoffSeed: (() => { const v = statValue(stats, "playoffSeed"); const n = v === null ? null : parseInt(v, 10); return Number.isFinite(n) ? (n as number) : null; })(),
+      homeWins: homeSplit.wins, homeLosses: homeSplit.losses, homeTies: homeSplit.ties,
+      roadWins: roadSplit.wins, roadLosses: roadSplit.losses, roadTies: roadSplit.ties,
     });
   }
   out.sort((a, b) => b.wins - a.wins || a.losses - b.losses || b.pointsFor - b.pointsAgainst - (a.pointsFor - a.pointsAgainst));

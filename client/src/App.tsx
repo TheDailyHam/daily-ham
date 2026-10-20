@@ -412,7 +412,7 @@ function GameGoalieLine({ market, games }: { market: MarketGroup; games: NhlOver
   return <span className="market-goalies">G {display(game.away)} · {display(game.home)}</span>;
 }
 
-type StandingRow = { team: string; name: string; wins: number; losses: number; ties?: number; gamesPlayed?: number; modelWinPct?: number | null };
+type StandingRow = { team: string; name: string; wins: number; losses: number; ties?: number; gamesPlayed?: number; modelWinPct?: number | null; modelHomePct?: number | null; modelAwayPct?: number | null };
 
 function recordPct(row: StandingRow): number | null {
   const gp = row.gamesPlayed ?? row.wins + row.losses + (row.ties ?? 0);
@@ -422,11 +422,13 @@ function recordPct(row: StandingRow): number | null {
 
 function flipProbability(awayRow: StandingRow | null, homeRow: StandingRow | null): { away: number; home: number } | null {
   if (!awayRow || !homeRow || awayRow.team === homeRow.team) return null;
-  // Flip % v2: prefer the server's model-derived win pct when present
-  // (NFL/NBA rows); fall back to the pure W/L record. NHL rows carry no
-  // modelWinPct, so their behavior is unchanged.
-  const awayPct = awayRow.modelWinPct ?? recordPct(awayRow);
-  const homePct = homeRow.modelWinPct ?? recordPct(homeRow);
+  // Flip % v3: prefer each side's venue-specific model pct — the away
+  // team's road value against the home team's home value — then the neutral
+  // model pct (all four two-way sports), then the pure W/L record. The
+  // model blends scoring margin (Pythagorean) with recent form, regressed
+  // early in the season. Always a model estimate, never a sportsbook line.
+  const awayPct = awayRow.modelAwayPct ?? awayRow.modelWinPct ?? recordPct(awayRow);
+  const homePct = homeRow.modelHomePct ?? homeRow.modelWinPct ?? recordPct(homeRow);
   if (awayPct === null || homePct === null) return null;
   const awayRaw = (awayPct + (1 - homePct)) / 2;
   const homeRaw = (homePct + (1 - awayPct)) / 2;
@@ -438,7 +440,7 @@ function flipProbability(awayRow: StandingRow | null, homeRow: StandingRow | nul
 function FlipBars({ awayAbbrev, homeAbbrev, awayProb, homeProb }: { awayAbbrev: string; homeAbbrev: string; awayProb: number; homeProb: number }) {
   const pct = (v: number) => `${Math.round(v * 100)}%`;
   return <>
-    <div className="winner-track" role="img" aria-label={`Model win probability: ${awayAbbrev} ${pct(awayProb)}, ${homeAbbrev} ${pct(homeProb)}. Model estimate from season records, not a sportsbook line.`}>
+    <div className="winner-track" role="img" aria-label={`Model win probability: ${awayAbbrev} ${pct(awayProb)}, ${homeAbbrev} ${pct(homeProb)}. Model estimate from scoring, form and venue splits, not a sportsbook line.`}>
       <i style={{ width: `${awayProb * 100}%` }} /><b style={{ width: `${homeProb * 100}%` }} />
     </div>
     <div className="flip-labels"><span>{awayAbbrev} <b>{pct(awayProb)}</b></span><span><b>{pct(homeProb)}</b> {homeAbbrev}</span></div>
@@ -655,7 +657,7 @@ const TUTORIAL_SLIDES: { icon: string; kicker: string; title: string; points: st
   ]},
   { icon: "📋", kicker: "THE BOARD", title: "Every game, one card.", points: [
     "Each game card shows the matchup, start time, and the Flip % bar.",
-    "Flip % is the model's win estimate from each team's actual record — e.g. 58% vs 42%.",
+    "Flip % is the model's win estimate from scoring margin, recent form and home/road splits — e.g. 58% vs 42%.",
     "Under it sit the two likely scorers: season leaders by goals (NHL), TDs (NFL), points (NBA) or goals (soccer). A stat, not a prop.",
   ]},
   { icon: "⚠️", kicker: "INJURY WATCH", title: "Know who's out.", points: [
@@ -1824,7 +1826,7 @@ function deepDiveRead(awayName: string, homeName: string, away: ReturnType<typeo
   parts.push(formLine(homeName, home, "home"));
   if (h2h.length) {
     const last = h2h[0];
-    parts.push(h2h.length === 1 ? `They've met once in the recent sample: ${last.label}.` : `Recent meetings favor the numbers: ${h2h.slice(0, 3).map((m) => m.label).join("; ")}.`);
+    if (last) parts.push(h2h.length === 1 ? `They've met once in the recent sample: ${last.label}.` : `Recent meetings favor the numbers: ${h2h.slice(0, 3).map((m) => m.label).join("; ")}.`);
   }
   if (call.pick && call.confidence !== null) {
     parts.push(`The model's call: ${call.pick} (${call.confidence.toFixed(0)}% edge) — ${call.basis.toLowerCase()}. A read, not a lock.`);
@@ -2730,8 +2732,38 @@ const NFL_DEPTH_GROUPS: { title: string; positions: string[] }[] = [
   { title: "Special Teams", positions: ["K", "P", "LS", "KR", "PR"] },
 ];
 
+function TeamChartsSection({ sport, team, league }: { sport: League; team: string; league: SoccerLeague }) {
+  const trends = useQuery({
+    queryKey: ["team-trends", sport, league, team],
+    queryFn: () => api.getTeamTrends({
+      sport,
+      team: sport === "nba" ? nbaServerTeam(team) : team,
+      league: sport === "soccer" ? league : undefined,
+    }),
+    retry: 1,
+  });
+  if (trends.isPending) return <div className="loading"><span />Loading team charts…</div>;
+  if (trends.isError || !trends.data || trends.data.games.length === 0) {
+    return <div className="history-empty"><strong>No team game log yet.</strong><span>Charts appear once official games are on record.</span></div>;
+  }
+  const data = trends.data;
+  const label = data.scoreLabel === "Goals" ? "goals" : "points";
+  const scoredLabel = data.scoreLabel === "Goals" ? "Goals scored" : "Points scored";
+  const allowedLabel = data.scoreLabel === "Goals" ? "Goals allowed" : "Points allowed";
+  const games = data.games.map((g) => ({ ...g, date: g.date.slice(5) }));
+  return <div className="team-charts">
+    <div className="chart-caption"><strong>{scoredLabel} vs {allowedLabel.toLowerCase()}</strong><span>Last {games.length} official games</span></div>
+    <div className="player-trend-chart" role="img" aria-label={`${team} ${label} scored vs allowed per game`}><ResponsiveContainer width="100%" height="100%"><LineChart data={games} margin={{ top: 14, right: 10, bottom: 0, left: -22 }}><CartesianGrid stroke="var(--rule)" vertical={false}/><XAxis dataKey="date" axisLine={false} tickLine={false} interval="preserveStartEnd" minTickGap={28}/><YAxis domain={[0, "auto"]} axisLine={false} tickLine={false}/><Tooltip formatter={(value) => [value, label]}/><Line type="monotone" dataKey="scoreFor" name={scoredLabel} stroke="var(--green)" strokeWidth={3} dot={{ r: 3, fill: "var(--paper)", strokeWidth: 2 }} connectNulls /><Line type="monotone" dataKey="scoreAgainst" name={allowedLabel} stroke="var(--red)" strokeWidth={3} dot={{ r: 3, fill: "var(--paper)", strokeWidth: 2 }} connectNulls /><Legend /></LineChart></ResponsiveContainer></div>
+    <div className="chart-caption"><strong>Scoring margin by game</strong><span>Blowouts vs close losses</span></div>
+    <div className="team-margin-chart" role="img" aria-label={`${team} scoring margin per game`}><ResponsiveContainer width="100%" height="100%"><BarChart data={games} margin={{ top: 10, right: 8, bottom: 0, left: -22 }}><CartesianGrid stroke="var(--rule)" vertical={false}/><XAxis dataKey="date" axisLine={false} tickLine={false} interval="preserveStartEnd" minTickGap={28}/><YAxis axisLine={false} tickLine={false}/><Tooltip formatter={(value) => [`${value}`, `Margin (${label})`]}/><Bar dataKey="margin" name={`Margin (${label})`}>{games.map((g, i) => <Cell key={i} fill={g.margin >= 0 ? "var(--green)" : "var(--red)"} />)}</Bar></BarChart></ResponsiveContainer></div>
+    <div className="chart-caption"><strong>Cumulative margin</strong><span>The season's scoring story in one line</span></div>
+    <div className="player-trend-chart" role="img" aria-label={`${team} cumulative scoring margin`}><ResponsiveContainer width="100%" height="100%"><LineChart data={games} margin={{ top: 14, right: 10, bottom: 0, left: -22 }}><CartesianGrid stroke="var(--rule)" vertical={false}/><XAxis dataKey="date" axisLine={false} tickLine={false} interval="preserveStartEnd" minTickGap={28}/><YAxis domain={["auto", "auto"]} axisLine={false} tickLine={false}/><Tooltip formatter={(value) => [`${value}`, `Cum. margin (${label})`]}/><Line type="monotone" dataKey="cumMargin" name="Cumulative margin" stroke="var(--accent)" strokeWidth={3} dot={{ r: 3, fill: "var(--paper)", strokeWidth: 2 }} connectNulls /></LineChart></ResponsiveContainer></div>
+    <p className="team-chart-note">Official league game logs — context for the model's reads, not a pick.</p>
+  </div>;
+}
+
 function TeamDetailSheet({ sport, team, onClose, onViewRoster }: { sport: League; team: string; onClose: () => void; onViewRoster: (sport: League, team: string) => void }) {
-  const [tab, setTab] = useState<"depth" | "stats">("depth");
+  const [tab, setTab] = useState<"depth" | "stats" | "charts">("depth");
   const [selectedNfl, setSelectedNfl] = useState<NflPlayer | null>(null);
   const [selectedNhl, setSelectedNhl] = useState<NhlPlayer | null>(null);
   const [selectedNba, setSelectedNba] = useState<NbaPlayer | null>(null);
@@ -2814,6 +2846,7 @@ function TeamDetailSheet({ sport, team, onClose, onViewRoster }: { sport: League
       <div className="metric-tabs" role="tablist" aria-label="Team detail">
         <button className={tab === "depth" ? "active" : ""} onClick={() => setTab("depth")}>Depth chart</button>
         <button className={tab === "stats" ? "active" : ""} onClick={() => setTab("stats")}>Team stats</button>
+        <button className={tab === "charts" ? "active" : ""} onClick={() => setTab("charts")}>Charts</button>
       </div>
       {tab === "depth" && (loading ? <div className="loading"><span />Loading roster…</div> :
         <div className="depth-chart">
@@ -2861,6 +2894,7 @@ function TeamDetailSheet({ sport, team, onClose, onViewRoster }: { sport: League
         </> : <div className="history-empty"><strong>Team stats unavailable.</strong><span>The league feed did not answer.</span></div>}
         <div className="source-box"><span>Source</span><span>{sport === "nfl" ? "ESPN NFL data" : "NHL official data"}</span></div>
       </div>}
+      {tab === "charts" && <TeamChartsSection sport={sport} team={team} league={teamSoccerLeague} />}
     </section>
     {selectedNfl && <NflPlayerStatsSheet player={{ id: selectedNfl.id, name: selectedNfl.name, jersey: selectedNfl.jersey, position: selectedNfl.position, group: selectedNfl.group, games: null, passYards: null, passTds: null, interceptions: null, rushYards: null, rushTds: null, receptions: null, recYards: null, recTds: null }} team={team as NflTeamCode} onClose={() => setSelectedNfl(null)} />}
     {selectedNba && <NbaPlayerSheet player={{ id: selectedNba.id, name: selectedNba.name, jersey: selectedNba.jersey, position: selectedNba.position, group: selectedNba.group, games: null, points: null, rebounds: null, assists: null, steals: null, blocks: null, turnovers: null, minutes: null }} team={team as NbaTeamCode} onClose={() => setSelectedNba(null)} />}
