@@ -1475,57 +1475,64 @@ async function fetchJsonWithRetry(url: string, attempts = 3): Promise<unknown | 
 async function collectNhlRecentGames(): Promise<{ byPlayer: Map<number, NhlPlayerAcc>; dates: string[]; start: Date; now: Date; degraded: boolean }> {
   const now = new Date(); const start = new Date(now.getTime() - 21 * 86400000);
   const dates = [0, 7, 14, 21].map((days) => nyDate(new Date(now.getTime() - days * 86400000)));
-  // Game discovery runs through per-team club schedules, NOT the league
-  // schedule-week archive: from this host the archive weeks answer with
-  // silent blanks (the same weeks missing on every compute, immune to
-  // retries and sequencing), while club-schedule-season — the feed the
-  // matchup engine already reads — answers reliably. Every game appears
-  // on both clubs' schedules, so one club failing loses nothing. As a
-  // bonus this path is regular-season only (gameType 2), where the old
-  // archive path let early-October preseason games into the logs.
-  const gameMap = new Map<number, { date: string; away: string; home: string }>();
-  let failedClubs = 0;
+  // The collector is built on per-player official game logs — the endpoint
+  // the player stat files read — because from this host the schedule-week
+  // archive and the club-schedule feed answer older content with silent
+  // blanks (deterministic across retries, sequencing, and cache-busters),
+  // while a live probe of the game-log endpoint through this very API
+  // returned a player's full log. No schedule discovery, no boxscores:
+  // the universe comes from club season stats (one call per team carries
+  // every skater and goalie who has appeared, with ids, names, positions),
+  // then each player's log supplies their recent games directly. The log
+  // endpoint is regular-season only for gameType 2, so the preseason games
+  // the old archive path let in are gone too.
   const startKey = nyDate(start); const nowKey = nyDate(now);
+  type UniversePlayer = { playerId: number; name: string; team: (typeof teamCodes)[number]; position: string };
+  const universe: UniversePlayer[] = [];
+  let failedClubs = 0;
   for (let index = 0; index < teamCodes.length; index += 8) {
     const batch = teamCodes.slice(index, index + 8);
-    const clubResults = await Promise.all(batch.map(async (team) => {
-      try { return await loadClubSchedule(team); } catch { failedClubs += 1; return null; }
-    }));
-    for (const result of clubResults) {
-      if (!result) continue;
-      for (const game of result.games) {
-        if (game.date < startKey || game.date > nowKey) continue;
-        if (!gameMap.has(game.id)) gameMap.set(game.id, { date: game.date, away: game.away, home: game.home });
+    const payloads = await Promise.all(batch.map(async (team) => ({ team, payload: await fetchJsonWithRetry(`${NHL_API}/club-stats/${team}/${NHL_SEASON}/2`) })));
+    for (const { team, payload } of payloads) {
+      const root = objectValue(payload); if (!root) { failedClubs += 1; continue; }
+      for (const value of arrayValue(root.skaters)) {
+        const row = objectValue(value); const playerId = num(row?.playerId); const gamesPlayed = num(row?.gamesPlayed) ?? 0;
+        const name = row ? `${localized(row.firstName)} ${localized(row.lastName)}`.trim() : "";
+        if (playerId === null || !name || gamesPlayed < 2) continue;
+        universe.push({ playerId, name, team, position: textValue(row?.positionCode) ?? "F" });
+      }
+      for (const value of arrayValue(root.goalies)) {
+        const row = objectValue(value); const playerId = num(row?.playerId); const gamesPlayed = num(row?.gamesPlayed) ?? 0;
+        const name = row ? `${localized(row.firstName)} ${localized(row.lastName)}`.trim() : "";
+        if (playerId === null || !name || gamesPlayed < 1) continue;
+        universe.push({ playerId, name, team, position: "G" });
       }
     }
-  }
-  const boxes: Array<{ game: { date: string; away: string; home: string }; id: number; payload: unknown }> = [];
-  const games = Array.from(gameMap.entries());
-  for (let index = 0; index < games.length; index += 10) {
-    const batch = games.slice(index, index + 10);
-    const rows = await Promise.all(batch.map(async ([id, game]) => { const payload = await fetchJsonWithRetry(`${NHL_API}/gamecenter/${id}/boxscore`); const row: { game: { date: string; away: string; home: string }; id: number; payload: unknown } | null = payload === null ? null : { game, id, payload }; return row; }));
-    boxes.push(...rows.filter((row): row is { game: { date: string; away: string; home: string }; id: number; payload: unknown } => row !== null));
   }
   const byPlayer = new Map<number, NhlPlayerAcc>();
-  for (const box of boxes) {
-    const root = objectValue(box.payload); const stats = objectValue(root?.playerByGameStats);
-    for (const side of ["awayTeam", "homeTeam"] as const) {
-      const teamCode = (side === "awayTeam" ? box.game.away : box.game.home) as (typeof teamCodes)[number]; if (!teamCodes.includes(teamCode)) continue;
-      const opponent = side === "awayTeam" ? box.game.home : box.game.away; const team = objectValue(stats?.[side]);
-      for (const group of ["forwards", "defense", "goalies"] as const) for (const playerValue of arrayValue(team?.[group])) {
-        const player = objectValue(playerValue); const playerId = num(player?.playerId); const name = localized(player?.name); if (playerId === null || !name) continue;
-        if (group === "goalies" && textValue(player?.toi) === "00:00") continue;
-        const goals = num(player?.goals) ?? 0; const assists = num(player?.assists) ?? 0; const shotsAgainst = num(player?.shotsAgainst); const saves = num(player?.saves); const savePct = shotsAgainst !== null && shotsAgainst > 0 && saves !== null ? saves / shotsAgainst : num(player?.savePctg);
-        const game = { gameId: box.id, date: box.game.date, opponent, goals, assists, points: num(player?.points) ?? goals + assists, shots: num(player?.sog) ?? num(player?.shots) ?? 0, saves, savePct, shotsAgainst };
-        const acc = byPlayer.get(playerId) ?? { playerId, name, team: teamCode, position: textValue(player?.position) ?? (group === "goalies" ? "G" : group === "defense" ? "D" : "F"), games: [] };
-        acc.games.push(game); byPlayer.set(playerId, acc);
+  let failedLogs = 0;
+  for (let index = 0; index < universe.length; index += 12) {
+    const batch = universe.slice(index, index + 12);
+    const payloads = await Promise.all(batch.map(async (player) => ({ player, payload: await fetchJsonWithRetry(`${NHL_API}/player/${player.playerId}/game-log/${NHL_SEASON}/2`) })));
+    for (const { player, payload } of payloads) {
+      const root = objectValue(payload); if (!root) { failedLogs += 1; continue; }
+      const games: NhlRecentGame[] = [];
+      for (const value of arrayValue(root.gameLog)) {
+        const row = objectValue(value); const gameId = num(row?.gameId); const date = textValue(row?.gameDate);
+        if (gameId === null || date === null || date < startKey || date > nowKey) continue;
+        const goals = num(row?.goals) ?? 0; const assists = num(row?.assists) ?? 0;
+        const shotsAgainst = num(row?.shotsAgainst); const goalsAgainst = num(row?.goalsAgainst) ?? 0;
+        const saves = shotsAgainst !== null ? shotsAgainst - goalsAgainst : null;
+        const savePct = shotsAgainst !== null && shotsAgainst > 0 && saves !== null ? saves / shotsAgainst : num(row?.savePctg);
+        games.push({ gameId, date, opponent: textValue(row?.opponentAbbrev) ?? "—", goals, assists, points: num(row?.points) ?? goals + assists, shots: num(row?.shots) ?? 0, saves, savePct, shotsAgainst });
       }
+      if (games.length > 0) byPlayer.set(player.playerId, { playerId: player.playerId, name: player.name, team: player.team, position: player.position, games });
     }
   }
-  // Degraded = a real share of boxscores never arrived even after retries,
-  // OR a chunk of club schedules failed outright. Callers cache degraded
-  // computes only briefly so a degraded board self-heals on the next view.
-  return { byPlayer, dates, start, now, degraded: failedClubs >= 4 || boxes.length < games.length * 0.9 };
+  // Degraded = a chunk of club-stat calls failed, or a real share of the
+  // player logs never arrived. Callers cache degraded computes only
+  // briefly so a degraded board self-heals on the next view.
+  return { byPlayer, dates, start, now, degraded: failedClubs >= 4 || (universe.length > 0 && failedLogs > universe.length * 0.1) };
 }
 
 async function fetchHotStreaks(ctx: Ctx, force: boolean): Promise<z.infer<typeof hotStreaksResponse>> {
