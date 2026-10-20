@@ -1255,7 +1255,7 @@ async function loadGoalieFormMap(ctx: Ctx): Promise<Map<string, { savePct: numbe
   } catch { /* fall through to live build */ }
   const built = new Map<string, { saves: number; shots: number; games: number }>();
   try {
-    const { byPlayer } = await collectNhlRecentGames();
+    const { byPlayer } = await collectNhlRecentGames(ctx);
     for (const p of byPlayer.values()) {
       if (p.position !== "G") continue;
       let saves = 0, shots = 0, games = 0;
@@ -1472,9 +1472,30 @@ async function fetchJsonWithRetry(url: string, attempts = 3): Promise<unknown | 
   return null;
 }
 
-async function collectNhlRecentGames(): Promise<{ byPlayer: Map<number, NhlPlayerAcc>; dates: string[]; start: Date; now: Date; degraded: boolean }> {
+async function collectNhlRecentGames(ctx?: Ctx, force = false): Promise<{ byPlayer: Map<number, NhlPlayerAcc>; dates: string[]; start: Date; now: Date; degraded: boolean }> {
   const now = new Date(); const start = new Date(now.getTime() - 21 * 86400000);
   const dates = [0, 7, 14, 21].map((days) => nyDate(new Date(now.getTime() - days * 86400000)));
+  // One sweep serves every consumer (hot board, Cutting Board, goalie form,
+  // matchup head-to-head): the league edge throttles this host after heavy
+  // bursts, and two full sweeps back to back starved the second one to an
+  // empty board. The sweep result is shared through the insight cache for
+  // six hours; a forced board refresh re-sweeps once and refills it.
+  const cacheKey = "nhl-recent-games-v1";
+  if (ctx) {
+    try {
+      const rows = await ctx.db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey)).limit(1);
+      const row = rows[0];
+      // A sweep younger than 30 minutes is served even to forced callers:
+      // the daily refresh forces the hot board and then the cold board
+      // seconds apart, and a second full sweep is exactly what starves.
+      // Older than that, only unforced callers take the shared copy.
+      const freshSweep = row !== undefined && Date.now() - row.fetchedAt.getTime() < 30 * 60 * 1000;
+      if (row && row.expiresAt.getTime() > Date.now() && (freshSweep || !force)) {
+        const parsed = JSON.parse(row.payloadJson) as { players: NhlPlayerAcc[]; degraded: boolean };
+        return { byPlayer: new Map(parsed.players.map((player) => [player.playerId, player])), dates, start, now, degraded: parsed.degraded };
+      }
+    } catch { /* fall through to a live sweep */ }
+  }
   // The collector is built on per-player official game logs — the endpoint
   // the player stat files read — because from this host the schedule-week
   // archive and the club-schedule feed answer older content with silent
@@ -1532,7 +1553,14 @@ async function collectNhlRecentGames(): Promise<{ byPlayer: Map<number, NhlPlaye
   // Degraded = a chunk of club-stat calls failed, or a real share of the
   // player logs never arrived. Callers cache degraded computes only
   // briefly so a degraded board self-heals on the next view.
-  return { byPlayer, dates, start, now, degraded: failedClubs >= 4 || (universe.length > 0 && failedLogs > universe.length * 0.1) };
+  const degraded = failedClubs >= 4 || (universe.length > 0 && failedLogs > universe.length * 0.1);
+  if (ctx) {
+    try {
+      await ctx.db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey));
+      await ctx.db.insert(schema.nhlInsightCache).values({ key: cacheKey, payloadJson: JSON.stringify({ players: Array.from(byPlayer.values()), degraded }), fetchedAt: new Date(), expiresAt: new Date(Date.now() + (degraded ? 15 * 60 * 1000 : 6 * 60 * 60 * 1000)) });
+    } catch { /* sharing the sweep is best-effort */ }
+  }
+  return { byPlayer, dates, start, now, degraded };
 }
 
 async function fetchHotStreaks(ctx: Ctx, force: boolean): Promise<z.infer<typeof hotStreaksResponse>> {
@@ -1540,7 +1568,7 @@ async function fetchHotStreaks(ctx: Ctx, force: boolean): Promise<z.infer<typeof
   const cachedRows = await db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, "hot-streaks-v2")).limit(1);
   const cached = cachedRows[0];
   if (!force && cached && cached.expiresAt.getTime() > Date.now()) return hotStreaksResponse.parse(JSON.parse(cached.payloadJson));
-  const { byPlayer, dates, start, now, degraded } = await collectNhlRecentGames();
+  const { byPlayer, dates, start, now, degraded } = await collectNhlRecentGames(ctx, force);
   const players = Array.from(byPlayer.values()).flatMap((player) => {
     const recent = player.games.sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5); if (recent.length < 2) return [];
     let pointStreak = 0; for (const game of recent) { if (game.points <= 0) break; pointStreak += 1; }
@@ -1575,7 +1603,7 @@ async function fetchColdStreaks(ctx: Ctx, force: boolean): Promise<z.infer<typeo
   const cachedRows = await db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, "cold-streaks-v2")).limit(1);
   const cached = cachedRows[0];
   if (!force && cached && cached.expiresAt.getTime() > Date.now()) return coldStreaksResponse.parse(JSON.parse(cached.payloadJson));
-  const { byPlayer, dates, start, now, degraded } = await collectNhlRecentGames();
+  const { byPlayer, dates, start, now, degraded } = await collectNhlRecentGames(ctx, force);
   const players = Array.from(byPlayer.values()).flatMap((player) => {
     const recent = player.games.sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5); if (recent.length < 2) return [];
     const isGoalie = player.position === "G";
@@ -4799,7 +4827,7 @@ type H2hMap = Map<string, { stat: number; games: number }>;
 async function matchupH2h(ctx: Ctx, sport: (typeof sports)[number], team: string, opp: string, league?: SoccerLeagueParam): Promise<H2hMap> {
   const map: H2hMap = new Map();
   if (sport === "nhl") {
-    const { byPlayer } = await collectNhlRecentGames();
+    const { byPlayer } = await collectNhlRecentGames(ctx);
     for (const acc of byPlayer.values()) {
       if (acc.team !== team) continue;
       const meetings = acc.games.filter((g) => g.opponent === opp);
