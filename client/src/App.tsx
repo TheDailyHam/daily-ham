@@ -438,12 +438,16 @@ function flipProbability(awayRow: StandingRow | null, homeRow: StandingRow | nul
 }
 
 function FlipBars({ awayAbbrev, homeAbbrev, awayProb, homeProb }: { awayAbbrev: string; homeAbbrev: string; awayProb: number; homeProb: number }) {
-  const pct = (v: number) => `${Math.round(v * 100)}%`;
+  // Round once and derive the other side, so the printed pair always sums
+  // to exactly 100% (independent rounding could show 51% + 50%).
+  const awayPct = Math.round(awayProb * 100);
+  const pctA = `${awayPct}%`;
+  const pctH = `${100 - awayPct}%`;
   return <>
-    <div className="winner-track" role="img" aria-label={`Model win probability: ${awayAbbrev} ${pct(awayProb)}, ${homeAbbrev} ${pct(homeProb)}. Model estimate from scoring, form and venue splits, not a sportsbook line.`}>
+    <div className="winner-track" role="img" aria-label={`Model win probability: ${awayAbbrev} ${pctA}, ${homeAbbrev} ${pctH}. Model estimate from scoring, form and venue splits, not a sportsbook line.`}>
       <i style={{ width: `${awayProb * 100}%` }} /><b style={{ width: `${homeProb * 100}%` }} />
     </div>
-    <div className="flip-labels"><span>{awayAbbrev} <b>{pct(awayProb)}</b></span><span><b>{pct(homeProb)}</b> {homeAbbrev}</span></div>
+    <div className="flip-labels"><span>{awayAbbrev} <b>{pctA}</b></span><span><b>{pctH}</b> {homeAbbrev}</span></div>
   </>;
 }
 
@@ -727,7 +731,7 @@ const TUTORIAL_SLIDES: { icon: string; kicker: string; title: string; points: st
   { icon: "⚖️", kicker: "MODEL VS BOOKS", title: "Finding value", points: [
     "The matchup calculator compares the model's estimate to what the books imply.",
     "A flip alert fires when the model likes a side more than the books do.",
-    "When the model is unsure or disagrees with the books, the Book Read deep dive explains what the market might be seeing — venue, form, injuries, head-to-head — with an honest take.",
+    "When the model's lean is slim or it disagrees with the books, the Book Read deep dive explains what the market might be seeing — venue, form, injuries, head-to-head — with an honest take.",
   ]},
   { icon: "📜", kicker: "TRACK RECORD", title: "The receipts.", points: [
     "The Record tab grades every pregame model pick against final scores — and against the books' own prices.",
@@ -897,7 +901,7 @@ function RecordView() {
           showBooks={true}
           emptyHint="First snapshots land with the morning refresh — check back after today's games."
         />
-        <p className="record-note">Live picks are snapshotted every morning before games, with the model's win probability and each side's best book price (vig removed for the book comparison). The model always shows its read — when it's unsure or disagrees with the books, the Book Read deep dive in each matchup explains what the market might be seeing. ROI assumes a flat 1 unit on every model pick at the best captured price.</p>
+        <p className="record-note">Live picks are snapshotted every morning before games, with the model's win probability and each side's best book price (vig removed for the book comparison). The model always shows its read — when its lean is slim or it disagrees with the books, the Book Read deep dive in each matchup explains what the market might be seeing. ROI assumes a flat 1 unit on every model pick at the best captured price.</p>
         <CalibrationSection />
         {data.recent.length > 0 && <section className="record-recent" aria-label="Recent graded picks">
           <div className="section-heading"><div><p className="kicker">RECEIPT</p><h3>Recent picks</h3></div></div>
@@ -1136,20 +1140,25 @@ function ModelVsBooks({ sport, awayCode, homeCode, awayModel, homeModel, groups 
   const modelWinner = awayModel >= homeModel ? awayCode : homeCode;
   const bookFave = awayBook >= homeBook ? awayCode : homeCode;
   const isFlip = modelWinner !== bookFave;
-  const isCoinToss = Math.abs(awayModel - 0.5) < 0.03;
-  const pct = (v: number) => `${Math.round(v * 100)}%`;
+  const isSlim = Math.abs(awayModel - 0.5) < 0.03;
+  // Round each pair once and derive the other side so the printed numbers
+  // always sum to exactly 100%.
+  const pairPct = (away: number) => { const a = Math.round(away * 100); return [`${a}%`, `${100 - a}%`] as const; };
+  const [modelAwayPct, modelHomePct] = pairPct(awayModel);
+  const [bookAwayPct, bookHomePct] = pairPct(awayBook);
+  const winnerPct = modelWinner === awayCode ? modelAwayPct : modelHomePct;
   return <section className="model-vs-books" aria-label="Model versus sportsbook comparison">
     <div className="section-heading"><div><p className="kicker">MODEL VS BOOKS</p><h3>Does it flip?</h3></div>
-    <span>{isFlip ? "⚡ Flip alert" : isCoinToss ? "🪙 Coin toss" : "✓ Aligned"}</span></div>
+    <span>{isFlip ? "⚡ Flip alert" : isSlim ? "⚖️ Slim lean" : "✓ Aligned"}</span></div>
     <div className="mvb-rows">
-      <div className="mvb-row"><span>Model</span><div className="winner-track"><i style={{ width: `${awayModel * 100}%` }} /><b style={{ width: `${homeModel * 100}%` }} /></div><span>{awayCode} <b>{pct(awayModel)}</b> · {homeCode} <b>{pct(homeModel)}</b></span></div>
-      <div className="mvb-row"><span>Books</span><div className="winner-track books"><i style={{ width: `${awayBook * 100}%` }} /><b style={{ width: `${homeBook * 100}%` }} /></div><span>{awayCode} <b>{pct(awayBook)}</b> · {homeCode} <b>{pct(homeBook)}</b></span></div>
+      <div className="mvb-row"><span>Model</span><div className="winner-track"><i style={{ width: `${awayModel * 100}%` }} /><b style={{ width: `${homeModel * 100}%` }} /></div><span>{awayCode} <b>{modelAwayPct}</b> · {homeCode} <b>{modelHomePct}</b></span></div>
+      <div className="mvb-row"><span>Books</span><div className="winner-track books"><i style={{ width: `${awayBook * 100}%` }} /><b style={{ width: `${homeBook * 100}%` }} /></div><span>{awayCode} <b>{bookAwayPct}</b> · {homeCode} <b>{bookHomePct}</b></span></div>
     </div>
     <p className="mvb-note">
       {isFlip
         ? `The model flips the books: it likes ${modelWinner} while the books favor ${bookFave}.`
-        : isCoinToss
-          ? "Too close to call — the model sees this as a coin toss."
+        : isSlim
+          ? `The model leans ${modelWinner} at ${winnerPct} — a slim lean, not a strong play, and the books agree.`
           : `Both agree on ${modelWinner}.`}
       {" "}Book percentages are vig-stripped from the best available moneyline; the model is a statistical estimate, not a pick.
     </p>
@@ -1298,8 +1307,8 @@ function BookReadSection({ sport, awayCode, homeCode, league }: {
   const d = data;
   const pct = (n: number | null) => n === null ? "—" : `${Math.round(n * 100)}%`;
   const price = (n: number | null) => n === null ? "—" : n > 0 ? `+${n}` : `${n}`;
-  const statusLabel = d.status === "agree" ? "Model & books agree" : d.status === "unsure" ? "Model is unsure — here's the book's case" : d.status === "disagree" ? "Model vs books: disagreement" : d.status === "no-book" ? "No book price yet" : "Model still gathering data";
-  const statusIcon = d.status === "agree" ? "✅" : d.status === "unsure" ? "🔍" : d.status === "disagree" ? "⚔️" : "📊";
+  const statusLabel = d.status === "agree" ? "Model & books agree" : d.status === "slim" ? "Slim lean — model & books agree" : d.status === "disagree" ? "Model vs books: disagreement" : d.status === "no-book" ? "No book price yet" : "Model still gathering data";
+  const statusIcon = d.status === "agree" ? "✅" : d.status === "slim" ? "⚖️" : d.status === "disagree" ? "⚔️" : "📊";
   return <section className="book-read" aria-label="Book read deep dive">
     <div className="section-heading"><div><p className="kicker">BOOK READ</p><h3>Why the books see it this way</h3></div><span>{statusIcon}</span></div>
     <p className="mvb-note"><strong>{statusLabel}.</strong></p>
@@ -3417,12 +3426,23 @@ function soccerFlipProbs(homeRow: SoccerStandingRow | null, awayRow: SoccerStand
 }
 
 function SoccerFlipBars({ homeAbbrev, awayAbbrev, probs }: { homeAbbrev: string; awayAbbrev: string; probs: { home: number; draw: number; away: number } }) {
-  const pct = (v: number) => `${Math.round(v * 100)}%`;
+  // Round all three, then absorb the rounding residue into the largest
+  // share so the printed triple always sums to exactly 100%.
+  const raw = [probs.home * 100, probs.draw * 100, probs.away * 100];
+  const rounded = raw.map((v) => Math.round(v));
+  const residue = 100 - (rounded[0]! + rounded[1]! + rounded[2]!);
+  if (residue !== 0) {
+    const largest = raw.indexOf(Math.max(...raw));
+    rounded[largest] = rounded[largest]! + residue;
+  }
+  const pctH = `${rounded[0]}%`;
+  const pctD = `${rounded[1]}%`;
+  const pctA = `${rounded[2]}%`;
   return <>
-    <div className="winner-track three-way" role="img" aria-label={`Model result probability: ${homeAbbrev} ${pct(probs.home)}, draw ${pct(probs.draw)}, ${awayAbbrev} ${pct(probs.away)}. Model estimate, not a sportsbook line.`}>
+    <div className="winner-track three-way" role="img" aria-label={`Model result probability: ${homeAbbrev} ${pctH}, draw ${pctD}, ${awayAbbrev} ${pctA}. Model estimate, not a sportsbook line.`}>
       <i style={{ width: `${probs.home * 100}%` }} /><u style={{ width: `${probs.draw * 100}%` }} /><b style={{ width: `${probs.away * 100}%` }} />
     </div>
-    <div className="flip-labels three"><span>{homeAbbrev} <b>{pct(probs.home)}</b></span><span>Draw <b>{pct(probs.draw)}</b></span><span><b>{pct(probs.away)}</b> {awayAbbrev}</span></div>
+    <div className="flip-labels three"><span>{homeAbbrev} <b>{pctH}</b></span><span>Draw <b>{pctD}</b></span><span><b>{pctA}</b> {awayAbbrev}</span></div>
   </>;
 }
 
@@ -3470,7 +3490,11 @@ function SoccerFlipMeter({ league, market }: { league: SoccerLeague; market: Mar
   if (!codes) return null;
   const homeRow = standings.find((row) => row.team === codes[1]) ?? null;
   const awayRow = standings.find((row) => row.team === codes[0]) ?? null;
-  const probs = soccerFlipProbs(homeRow, awayRow);
+  // Prefer the server's Poisson fixture model (the same read the slate card
+  // and calculator show); fall back to the record-based estimate only when
+  // the fixture read isn't available.
+  const fixture = overview.data?.games.find((g) => g.away.abbrev === codes[0] && g.home.abbrev === codes[1]);
+  const probs = fixture?.modelThreeWay ?? soccerFlipProbs(homeRow, awayRow);
   if (!probs || !homeRow || !awayRow) return null;
   return <div className="flip-meter">
     <div className="flip-head"><span>Flip %</span><em>model estimate</em></div>

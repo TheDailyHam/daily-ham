@@ -689,7 +689,7 @@ async function snapshotTwoWaySport(
     const vf = vigFreeProbs([awayDec, homeDec]);
     const vfAway = vf[0] ?? null;
     const vfHome = vf[1] ?? null;
-    // No selectivity gate: the model always shows its read, even when unsure.
+    // No selectivity gate: the model always shows its read, even on a slim lean.
     // When confidence is low or the model disagrees with the books, the
     // Book Read deep dive explains what the books might be seeing.
     const rawPick: Pick3 = flip === null ? null : topPick({ away: flip.away, home: flip.home });
@@ -802,8 +802,8 @@ async function snapshotTrackRecord(ctx: Ctx): Promise<{ snapshotted: number; gra
     try { await fn(); } catch (e) { console.error("[track-record] per-sport block failed:", e instanceof Error ? e.message : e); }
   };
   await run(async () => {
-    const overview = await loadNhlOverview();
-    const yOverview = await loadNhlOverview(yDateStr);
+    const overview = await loadNhlOverview(undefined, ctx);
+    const yOverview = await loadNhlOverview(yDateStr, ctx);
     const board = await loadPremium(ctx, "nhl");
     snapshotted += await snapshotTwoWaySport(ctx, "nhl", overview.standings, nhlTrackGames(overview), board.offers, now);
     graded += await gradePendingSnapshots(ctx, "nhl", "", nhlTrackGames(yOverview), now);
@@ -1052,7 +1052,7 @@ function confirmedGoalies(payload: unknown, side: "awayTeam" | "homeTeam"): stri
   return arrayValue(team?.goalies).flatMap((value) => { const row = objectValue(value); return row?.starter === true ? [localized(row.name)] : []; }).filter(Boolean);
 }
 
-async function loadNhlOverview(dateStr?: string): Promise<z.infer<typeof nhlOverviewResponse>> {
+async function loadNhlOverview(dateStr?: string, ctx?: Ctx): Promise<z.infer<typeof nhlOverviewResponse>> {
   const date = dateStr ?? nyDate(new Date());
   const scheduleUrl = `${NHL_API}/schedule/${date}`;
   const standingsUrl = `${NHL_API}/standings/${date}`;
@@ -1073,6 +1073,22 @@ async function loadNhlOverview(dateStr?: string): Promise<z.infer<typeof nhlOver
   }));
   const details = new Map<number, unknown>(detailPairs);
   const scoringProfiles = nhlScoringProfilesFromPayload(standingsPayload);
+  // Board totals run the matchup calculator's goalie adjustment too, so the
+  // same game shows the same model total in both places: starters come from
+  // the game detail already fetched above (today's games), recent save %
+  // from the shared goalie form map, scaled against the games-weighted
+  // league average exactly as nhlFixtureContext computes it. Without ctx
+  // (or the data), the board keeps the unadjusted base total.
+  let goalieFormMap: Map<string, { savePct: number; games: number }> | null = null;
+  let goalieLeagueAvg: number | null = null;
+  if (ctx && scoringProfiles) {
+    try {
+      goalieFormMap = await loadGoalieFormMap(ctx);
+      let weighted = 0; let formGames = 0;
+      for (const entry of goalieFormMap.values()) { weighted += entry.savePct * entry.games; formGames += entry.games; }
+      if (formGames >= 15) goalieLeagueAvg = Math.round((weighted / formGames) * 1000) / 1000;
+    } catch { goalieFormMap = null; }
+  }
   const games = gameRows.flatMap(({ gameDate, game }) => {
     const id = num(game.id); const startsAt = textValue(game.startTimeUTC); if (id === null || !startsAt) return [];
     const awayRaw = objectValue(game.awayTeam); const homeRaw = objectValue(game.homeTeam); if (!awayRaw || !homeRaw) return [];
@@ -1080,7 +1096,25 @@ async function loadNhlOverview(dateStr?: string): Promise<z.infer<typeof nhlOver
     const awayConfirmed = confirmedGoalies(detail, "awayTeam"); const homeConfirmed = confirmedGoalies(detail, "homeTeam");
     const awayWatch = goalieWatch(detail, "awayTeam"); const homeWatch = goalieWatch(detail, "homeTeam");
     const indicator = (confirmed: string[], watch: string[]) => confirmed.length ? { status: "confirmed" as const, names: confirmed } : watch.length ? { status: "watch" as const, names: watch } : { status: "unavailable" as const, names: [] };
-    const modelTotal = scoringProfiles ? nhlProjectedTotals(scoringProfiles, shortTeam(awayRaw), shortTeam(homeRaw))?.projectedTotal ?? null : null;
+    const eg = scoringProfiles ? nhlExpectedGoals(scoringProfiles, shortTeam(awayRaw), shortTeam(homeRaw)) : null;
+    let modelTotal: number | null = null;
+    if (eg) {
+      let { expAway, expHome } = eg;
+      const starterSave = (confirmed: string[], watch: string[]): number | null => {
+        const name = confirmed[0] ?? watch[0];
+        if (!name || !goalieFormMap) return null;
+        const entry = goalieFormMap.get(normGoalieName(name));
+        return entry ? Math.round(entry.savePct * 1000) / 1000 : null;
+      };
+      const awaySave = starterSave(awayConfirmed, awayWatch);
+      const homeSave = starterSave(homeConfirmed, homeWatch);
+      if (awaySave !== null && homeSave !== null && goalieLeagueAvg !== null && goalieLeagueAvg > 0 && goalieLeagueAvg < 1) {
+        const leagueLeak = 1 - goalieLeagueAvg;
+        expAway = clampNum(expAway * clampNum((1 - homeSave) / leagueLeak, 0.9, 1.1), 0.3, 7.5);
+        expHome = clampNum(expHome * clampNum((1 - awaySave) / leagueLeak, 0.9, 1.1), 0.3, 7.5);
+      }
+      modelTotal = round1(expAway + expHome);
+    }
     return [{ id, date: gameDate, startsAt, state, venue: localized(game.venue) || "Venue unavailable", away: { abbrev: shortTeam(awayRaw), name: fullTeam(awayRaw), score: num(awayRaw.score), goalie: indicator(awayConfirmed, awayWatch) }, home: { abbrev: shortTeam(homeRaw), name: fullTeam(homeRaw), score: num(homeRaw.score), goalie: indicator(homeConfirmed, homeWatch) }, broadcasts: arrayValue(game.tvBroadcasts).flatMap((value) => { const network = textValue(objectValue(value)?.network); return network ? [network] : []; }), modelTotal }];
   });
   const standings = arrayValue(objectValue(standingsPayload)?.standings)
@@ -1240,7 +1274,9 @@ async function loadGoalieFormMap(ctx: Ctx): Promise<Map<string, { savePct: numbe
     await ctx.db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, key));
     await ctx.db.insert(schema.nhlInsightCache).values({
       key, payloadJson: JSON.stringify(out),
-      fetchedAt: new Date(), expiresAt: new Date(Date.now() + 12 * 60 * 60 * 1000),
+      // An empty map means the boxscore scan failed — retry soon, don't
+      // let a failed build suppress the goalie edge for half a day.
+      fetchedAt: new Date(), expiresAt: new Date(Date.now() + (Object.keys(out).length === 0 ? DEGRADED_TTL_MS : 12 * 60 * 60 * 1000)),
     });
   } catch { /* cache is best-effort */ }
   return new Map(Object.entries(out));
@@ -1411,8 +1447,11 @@ async function loadFirstGoalMatchup(ctx: Ctx, awayTeam: (typeof teamCodes)[numbe
     fetchedAt: new Date().toISOString(), sourceUrl: results[0]?.sourceUrl ?? awaySchedule.sourceUrl,
     sampleNote: `Recent ${away.games} ${awayTeam} and ${home.games} ${homeTeam} completed regular-season games, using 2026–27 first and 2025–26 when needed.`,
   };
+  // If the standings feed failed mid-computation the totals/model pair came
+  // out null — cache that degraded response only briefly so it self-heals.
+  const cacheTtlMs = scoringModel === null || seasonPair === null ? DEGRADED_TTL_MS : 12 * 60 * 60 * 1000;
   await db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey));
-  await db.insert(schema.nhlInsightCache).values({ key: cacheKey, payloadJson: JSON.stringify(response), fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(Date.now() + 12 * 60 * 60 * 1000) });
+  await db.insert(schema.nhlInsightCache).values({ key: cacheKey, payloadJson: JSON.stringify(response), fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(Date.now() + cacheTtlMs) });
   return response;
 }
 
@@ -2110,17 +2149,6 @@ function nhlExpectedGoals(model: { leagueAvg: number; profiles: Map<string, NhlS
   };
 }
 
-function nhlProjectedTotals(model: { leagueAvg: number; profiles: Map<string, NhlScoringProfile> }, awayTeam: string, homeTeam: string): ProjectedTotals | null {
-  const eg = nhlExpectedGoals(model, awayTeam, homeTeam);
-  if (!eg) return null;
-  return {
-    projectedTotal: round1(eg.expAway + eg.expHome),
-    projectedAwayScore: round1(eg.expAway),
-    projectedHomeScore: round1(eg.expHome),
-    awayScoredPerGame: eg.awayScoredPerGame,
-    homeScoredPerGame: eg.homeScoredPerGame,
-  };
-}
 
 /* ---- ESPN sports (NFL / NBA / NCAAF): standings + game-log form ---- */
 
@@ -2154,17 +2182,6 @@ async function espnScoringModel(sport: "nfl" | "nba" | "ncaaf"): Promise<{ leagu
     const fetched = sport === "nfl" ? await fetchNflStandings() : sport === "nba" ? await fetchNbaStandings() : await fetchNcaafStandings();
     return espnScoringProfilesFromRows(fetched.standings);
   } catch { return null; }
-}
-
-// Season-rate-only total for board game rows (no game-log form/venue yet;
-// the full form-adjusted number lives on the matchup response).
-function espnSeasonTotal(model: { leagueAvg: number; profiles: Map<string, EspnScoringProfile> }, awayTeam: string, homeTeam: string): number | null {
-  const a = model.profiles.get(awayTeam);
-  const h = model.profiles.get(homeTeam);
-  if (!a || !h || a.gamesPlayed < 2 || h.gamesPlayed < 2) return null;
-  const expAway = clampNum((a.attack * h.concede) / model.leagueAvg, model.leagueAvg * 0.25, model.leagueAvg * 2.4);
-  const expHome = clampNum((h.attack * a.concede) / model.leagueAvg, model.leagueAvg * 0.25, model.leagueAvg * 2.4);
-  return round1(expAway + expHome);
 }
 
 // Layer recent form (the matchup loader's last-8 game list) and the
@@ -2216,6 +2233,39 @@ function espnProjectedTotals(
 
 type TeamForm = { wins: number; games: number };
 const FORM_TTL_MS = 12 * 60 * 60 * 1000;
+// A response computed while an official feed was failing (standings fetch
+// returned nothing, so totals/reads came out null) must not sit in the
+// cache for the full TTL — it self-heals in minutes instead of half a day.
+const DEGRADED_TTL_MS = 15 * 60 * 1000;
+
+type EspnBoardGameLite = { state: string; date: string; away: { abbr: string; score: number | null }; home: { abbr: string; score: number | null } };
+
+// The matchup calculators build each team's last-8 list from weekly ESPN
+// scoreboards (fetchNflTeamGames / fetchNcaafTeamGames). This builds every
+// team's list in one pass over the same scoreboards — current week
+// backwards, finals only, most recent 8 — so board rows can run the
+// identical form/venue-adjusted totals computation as the matchup response
+// instead of a season-rate-only shortcut.
+async function espnWeeklyFormGames(
+  fetchBoard: (week?: number) => Promise<{ week: number; games: EspnBoardGameLite[] }>,
+): Promise<Map<string, { teamScore: number; oppScore: number; homeAway: "home" | "away" }[]>> {
+  const byTeam = new Map<string, { date: string; teamScore: number; oppScore: number; homeAway: "home" | "away" }[]>();
+  let currentWeek: number;
+  try { currentWeek = (await fetchBoard()).week; } catch { return new Map(); }
+  for (let week = currentWeek; week >= 1 && week > currentWeek - 10; week--) {
+    let games: EspnBoardGameLite[] = [];
+    try { games = (await fetchBoard(week)).games; } catch { continue; }
+    for (const g of games) {
+      if (g.state !== "final" || g.away.score === null || g.home.score === null) continue;
+      const a = byTeam.get(g.away.abbr) ?? []; a.push({ date: g.date, teamScore: g.away.score, oppScore: g.home.score, homeAway: "away" }); byTeam.set(g.away.abbr, a);
+      const h = byTeam.get(g.home.abbr) ?? []; h.push({ date: g.date, teamScore: g.home.score, oppScore: g.away.score, homeAway: "home" }); byTeam.set(g.home.abbr, h);
+    }
+    if (byTeam.size > 0 && [...byTeam.values()].every((l) => l.length >= 8)) break;
+  }
+  const out = new Map<string, { teamScore: number; oppScore: number; homeAway: "home" | "away" }[]>();
+  for (const [team, list] of byTeam) out.set(team, list.sort((x, y) => y.date.localeCompare(x.date)).slice(0, 8).map(({ teamScore, oppScore, homeAway }) => ({ teamScore, oppScore, homeAway })));
+  return out;
+}
 
 async function readLeagueForm(ctx: Ctx, sport: "nfl" | "nba" | "ncaaf"): Promise<Record<string, TeamForm> | null> {
   try {
@@ -2351,12 +2401,13 @@ async function loadNflOverview(week?: number, ctx?: Ctx): Promise<z.infer<typeof
     });
   } catch { /* schedule still renders without standings */ }
   const weeks = Array.from({ length: 18 }, (_, i) => i + 1);
+  const formGames = scoringModel ? await espnWeeklyFormGames(fetchNflScoreboard) : null;
   const games = board.games.map((g) => ({
     id: g.id, week: g.week, date: g.date.slice(0, 10), startsAt: g.date, state: g.state, detail: g.detail,
     shortName: g.shortName,
     away: { abbrev: g.away.abbr, name: g.away.name, score: g.away.score, winner: g.away.winner },
     home: { abbrev: g.home.abbr, name: g.home.name, score: g.home.score, winner: g.home.winner },
-    modelTotal: scoringModel ? espnSeasonTotal(scoringModel, g.away.abbr, g.home.abbr) : null,
+    modelTotal: scoringModel ? espnProjectedTotals(scoringModel, g.away.abbr, g.home.abbr, formGames?.get(g.away.abbr) ?? [], formGames?.get(g.home.abbr) ?? [])?.projectedTotal ?? null : null,
   }));
   return {
     week: board.week, weeks, season: board.season, fetchedAt: new Date().toISOString(),
@@ -2631,8 +2682,11 @@ async function loadNflMatchup(ctx: Ctx, awayTeam: (typeof nflTeamCodes)[number],
     fetchedAt: new Date().toISOString(), sourceUrl: awayData.sourceUrl,
     sampleNote: `Last ${away.games} ${awayTeam} and ${home.games} ${homeTeam} completed regular-season games from the official ESPN scoreboard.`,
   };
+  // Degraded responses (standings feed failed → null totals/model pair)
+  // get a short cache so they self-heal instead of sticking for 12h.
+  const cacheTtlMs = scoringModel === null || seasonPair === null ? DEGRADED_TTL_MS : 12 * 60 * 60 * 1000;
   await db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey));
-  await db.insert(schema.nhlInsightCache).values({ key: cacheKey, payloadJson: JSON.stringify(response), fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(Date.now() + 12 * 60 * 60 * 1000) });
+  await db.insert(schema.nhlInsightCache).values({ key: cacheKey, payloadJson: JSON.stringify(response), fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(Date.now() + cacheTtlMs) });
   return response;
 }
 
@@ -2785,12 +2839,13 @@ async function loadNcaafOverview(week?: number, ctx?: Ctx): Promise<z.infer<type
     });
   } catch { /* schedule still renders without standings */ }
   const weeks = Array.from({ length: 15 }, (_, i) => i + 1);
+  const formGames = scoringModel ? await espnWeeklyFormGames(fetchNcaafScoreboard) : null;
   const games = board.games.map((g) => ({
     id: g.id, week: g.week, date: g.date.slice(0, 10), startsAt: g.date, state: g.state, detail: g.detail,
     shortName: g.shortName,
     away: { abbrev: g.away.abbr, name: g.away.name, score: g.away.score, winner: g.away.winner },
     home: { abbrev: g.home.abbr, name: g.home.name, score: g.home.score, winner: g.home.winner },
-    modelTotal: scoringModel ? espnSeasonTotal(scoringModel, g.away.abbr, g.home.abbr) : null,
+    modelTotal: scoringModel ? espnProjectedTotals(scoringModel, g.away.abbr, g.home.abbr, formGames?.get(g.away.abbr) ?? [], formGames?.get(g.home.abbr) ?? [])?.projectedTotal ?? null : null,
   }));
   return {
     week: board.week, weeks, season: board.season, fetchedAt: new Date().toISOString(),
@@ -3044,8 +3099,11 @@ async function loadNcaafMatchup(ctx: Ctx, awayTeam: (typeof ncaafTeamCodes)[numb
     fetchedAt: new Date().toISOString(), sourceUrl: awayData.sourceUrl,
     sampleNote: `Last ${away.games} ${awayTeam} and ${home.games} ${homeTeam} completed regular-season games from the official ESPN scoreboard.`,
   };
+  // Degraded responses (standings feed failed → null totals/model pair)
+  // get a short cache so they self-heal instead of sticking for 12h.
+  const cacheTtlMs = ncaafScoringModel === null || seasonPair === null ? DEGRADED_TTL_MS : 12 * 60 * 60 * 1000;
   await db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey));
-  await db.insert(schema.nhlInsightCache).values({ key: cacheKey, payloadJson: JSON.stringify(response), fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(Date.now() + 12 * 60 * 60 * 1000) });
+  await db.insert(schema.nhlInsightCache).values({ key: cacheKey, payloadJson: JSON.stringify(response), fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(Date.now() + cacheTtlMs) });
   return response;
 }
 
@@ -3312,12 +3370,25 @@ async function loadNbaOverview(ctx?: Ctx, dateStr?: string): Promise<z.infer<typ
       };
     });
   } catch { /* schedule still renders without standings */ }
+  // Board totals run the matchup's form/venue-adjusted computation: each
+  // slate team's last-8 list comes from the same team-schedule feed the
+  // matchup loader uses. Skipped for dated (snapshot/grading) loads, where
+  // board totals are not consumed.
+  const formGames = new Map<string, { teamScore: number; oppScore: number; homeAway: "home" | "away" }[]>();
+  if (scoringModel && !dateStr) {
+    const slateTeams = [...new Set(board.games.flatMap((g) => [g.away.abbr, g.home.abbr]))];
+    await pool(slateTeams, 5, async (team) => {
+      const profile = scoringModel.profiles.get(team);
+      if (!profile || profile.gamesPlayed < 2) return;
+      try { const { games: teamGames } = await fetchNbaTeamGames(team, 8); formGames.set(team, teamGames); } catch { /* season rates still apply */ }
+    });
+  }
   const games = board.games.map((g) => ({
     id: g.id, date: g.date.slice(0, 10), startsAt: g.date, state: g.state, detail: g.detail,
     shortName: g.shortName,
     away: { abbrev: g.away.abbr, name: g.away.name, score: g.away.score, winner: g.away.winner },
     home: { abbrev: g.home.abbr, name: g.home.name, score: g.home.score, winner: g.home.winner },
-    modelTotal: scoringModel ? espnSeasonTotal(scoringModel, g.away.abbr, g.home.abbr) : null,
+    modelTotal: scoringModel ? espnProjectedTotals(scoringModel, g.away.abbr, g.home.abbr, formGames.get(g.away.abbr) ?? [], formGames.get(g.home.abbr) ?? [])?.projectedTotal ?? null : null,
   }));
   return {
     season: board.season, fetchedAt: new Date().toISOString(),
@@ -3576,6 +3647,31 @@ function soccerRatings(s: SoccerStanding, avgGoals: number): { attack: number; d
   };
 }
 
+// Blend a season rating with the club's venue scoring (60/40) when it has
+// 3+ venue games; below that the season rating stands. Shared by the
+// matchup calculator and the board overview so the same game carries the
+// same three-way read and model total in both places.
+function soccerVenueBlend(season: number, venueFor: number, venueAgainst: number, venueGames: number, isAttack: boolean, avgGoals: number): number {
+  if (venueGames < 3) return season;
+  const venueRate = isAttack ? venueFor / venueGames : venueAgainst / venueGames;
+  return 0.6 * season + 0.4 * regressedRate(venueRate * venueGames, venueGames, avgGoals);
+}
+
+function soccerBlendedProbabilities(
+  homeRow: SoccerStanding, awayRow: SoccerStanding,
+  leagueCtx: { avgGoals: number; avgHome: number; avgAway: number },
+  homeVenue: { goalsFor: number; goalsAgainst: number; games: number },
+  awayVenue: { goalsFor: number; goalsAgainst: number; games: number },
+): ReturnType<typeof soccerMatchProbabilities> {
+  const hr = soccerRatings(homeRow, leagueCtx.avgGoals);
+  const ar = soccerRatings(awayRow, leagueCtx.avgGoals);
+  const homeAttack = soccerVenueBlend(hr.attack, homeVenue.goalsFor, homeVenue.goalsAgainst, homeVenue.games, true, leagueCtx.avgGoals);
+  const homeDefense = soccerVenueBlend(hr.defense, homeVenue.goalsFor, homeVenue.goalsAgainst, homeVenue.games, false, leagueCtx.avgGoals);
+  const awayAttack = soccerVenueBlend(ar.attack, awayVenue.goalsFor, awayVenue.goalsAgainst, awayVenue.games, true, leagueCtx.avgGoals);
+  const awayDefense = soccerVenueBlend(ar.defense, awayVenue.goalsFor, awayVenue.goalsAgainst, awayVenue.games, false, leagueCtx.avgGoals);
+  return soccerMatchProbabilities(homeAttack, homeDefense, awayAttack, awayDefense, leagueCtx.avgHome, leagueCtx.avgAway);
+}
+
 async function loadSoccerOverview(ctx: Ctx, league: SoccerLeagueParam, dateStr?: string): Promise<z.infer<typeof soccerOverviewResponse>> {
   const board = await fetchSoccerScoreboard(league, dateStr);
   let standings: SoccerStanding[] = [];
@@ -3589,15 +3685,44 @@ async function loadSoccerOverview(ctx: Ctx, league: SoccerLeagueParam, dateStr?:
     leagueCtx = soccerLeagueContext(standings);
     for (const s of standings) ratingsByTeam.set(s.team, soccerRatings(s, leagueCtx.avgGoals));
   }
+  // Board three-way + total run the matchup calculator's venue-blended
+  // computation (same helper, same gates) so a game shows one read in both
+  // places. Venue scoring comes from each slate club's official game log,
+  // sliced to the last 12 exactly as the matchup slices it.
+  const standingByTeam = new Map(standings.map((s) => [s.team, s]));
+  const venueStats = new Map<string, { goalsFor: number; goalsAgainst: number; games: number }>();
+  if (standings.length >= 10) {
+    const slateTeams = [...new Set(board.games.flatMap((g) => [g.away.abbr, g.home.abbr]))];
+    await pool(slateTeams, 4, async (team) => {
+      const row = standingByTeam.get(team);
+      if (!row || row.played < 2) return;
+      try {
+        const { games: teamGames } = await fetchSoccerTeamGames(league, team, 30);
+        const recent = teamGames.slice(0, 12);
+        const homeStats = soccerMatchupTeamStats(team, "home", recent);
+        const awayStats = soccerMatchupTeamStats(team, "away", recent);
+        venueStats.set(`${team}:home`, { goalsFor: homeStats.venueGoalsFor, goalsAgainst: homeStats.venueGoalsAgainst, games: homeStats.venueGames });
+        venueStats.set(`${team}:away`, { goalsFor: awayStats.venueGoalsFor, goalsAgainst: awayStats.venueGoalsAgainst, games: awayStats.venueGames });
+      } catch { /* season ratings still apply */ }
+    });
+  }
   const games = board.games.map((g) => {
     const homeR = ratingsByTeam.get(g.home.abbr);
     const awayR = ratingsByTeam.get(g.away.abbr);
     let modelThreeWay: z.infer<typeof soccerThreeWaySchema> | null = null;
     let modelTotal: number | null = null;
     if (homeR && awayR) {
-      const probs = soccerMatchProbabilities(homeR.attack, homeR.defense, awayR.attack, awayR.defense, leagueCtx.avgHome, leagueCtx.avgAway);
-      modelThreeWay = { home: probs.home, draw: probs.draw, away: probs.away };
-      modelTotal = round1(probs.homeXg + probs.awayXg);
+      const hs = standingByTeam.get(g.home.abbr);
+      const as = standingByTeam.get(g.away.abbr);
+      // Same gates as the matchup: both clubs need 2+ played, otherwise the
+      // model has no read on either surface (early-season honesty).
+      if (hs && as && hs.played >= 2 && as.played >= 2) {
+        const probs = soccerBlendedProbabilities(hs, as, leagueCtx,
+          venueStats.get(`${g.home.abbr}:home`) ?? { goalsFor: 0, goalsAgainst: 0, games: 0 },
+          venueStats.get(`${g.away.abbr}:away`) ?? { goalsFor: 0, goalsAgainst: 0, games: 0 });
+        modelThreeWay = { home: probs.home, draw: probs.draw, away: probs.away };
+        modelTotal = round1(probs.homeXg + probs.awayXg);
+      }
     }
     return {
       id: g.id, date: g.date.slice(0, 10), startsAt: g.date, state: g.state, detail: g.detail,
@@ -3727,19 +3852,9 @@ async function loadSoccerMatchup(ctx: Ctx, league: SoccerLeagueParam, awayTeam: 
     const hs = find(homeTeam);
     const as = find(awayTeam);
     if (hs && as && hs.played >= 2 && as.played >= 2) {
-      const hr = soccerRatings(hs, leagueCtx.avgGoals);
-      const ar = soccerRatings(as, leagueCtx.avgGoals);
-      // Blend season ratings with venue scoring (60/40) when 3+ venue games.
-      const venueBlend = (season: number, venueFor: number, venueAgainst: number, venueGames: number, isAttack: boolean) => {
-        if (venueGames < 3) return season;
-        const venueRate = isAttack ? venueFor / venueGames : venueAgainst / venueGames;
-        return 0.6 * season + 0.4 * regressedRate(venueRate * venueGames, venueGames, leagueCtx.avgGoals);
-      };
-      const homeAttack = venueBlend(hr.attack, home.venueGoalsFor, home.venueGoalsAgainst, home.venueGames, true);
-      const homeDefense = venueBlend(hr.defense, home.venueGoalsFor, home.venueGoalsAgainst, home.venueGames, false);
-      const awayAttack = venueBlend(ar.attack, away.venueGoalsFor, away.venueGoalsAgainst, away.venueGames, true);
-      const awayDefense = venueBlend(ar.defense, away.venueGoalsFor, away.venueGoalsAgainst, away.venueGames, false);
-      probs = soccerMatchProbabilities(homeAttack, homeDefense, awayAttack, awayDefense, leagueCtx.avgHome, leagueCtx.avgAway);
+      probs = soccerBlendedProbabilities(hs, as, leagueCtx,
+        { goalsFor: home.venueGoalsFor, goalsAgainst: home.venueGoalsAgainst, games: home.venueGames },
+        { goalsFor: away.venueGoalsFor, goalsAgainst: away.venueGoalsAgainst, games: away.venueGames });
     }
   }
   const p = probs ?? { home: 0, draw: 0, away: 0 };
@@ -3774,11 +3889,13 @@ async function loadSoccerMatchup(ctx: Ctx, league: SoccerLeagueParam, awayTeam: 
     fetchedAt: new Date().toISOString(), sourceUrl: siteBasePublic(league),
     sampleNote: "Model estimate from official scoring data — not a sportsbook price. Draws are modeled explicitly via a Poisson goal model.",
   };
+  // If the standings feed failed, the model read is null — cache briefly.
+  const cacheTtlMs = standingsData === null ? DEGRADED_TTL_MS : 12 * 60 * 60 * 1000;
   try {
     await db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey));
     await db.insert(schema.nhlInsightCache).values({
       key: cacheKey, payloadJson: JSON.stringify(response),
-      fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(Date.now() + 12 * 60 * 60 * 1000),
+      fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(Date.now() + cacheTtlMs),
     });
   } catch { /* cache is best-effort */ }
   return response;
@@ -4303,8 +4420,11 @@ async function loadNbaMatchup(ctx: Ctx, awayTeam: (typeof nbaTeamCodes)[number],
     fetchedAt: new Date().toISOString(), sourceUrl: awayData.sourceUrl,
     sampleNote: `Last ${away.games} ${awayTeam} and ${home.games} ${homeTeam} completed ${seasonLabel} games from the official ESPN scoreboard. Win probabilities blend the season model (scoring margin + recent form), venue splits and — when the fixture is on the scoreboard — rest. All figures are model estimates.`,
   };
+  // Degraded responses (standings feed failed → null totals/model pair)
+  // get a short cache so they self-heal instead of sticking for 12h.
+  const cacheTtlMs = nbaScoringModel === null || seasonPair === null ? DEGRADED_TTL_MS : 12 * 60 * 60 * 1000;
   await db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey));
-  await db.insert(schema.nhlInsightCache).values({ key: cacheKey, payloadJson: JSON.stringify(response), fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(Date.now() + 12 * 60 * 60 * 1000) });
+  await db.insert(schema.nhlInsightCache).values({ key: cacheKey, payloadJson: JSON.stringify(response), fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(Date.now() + cacheTtlMs) });
   return response;
 }
 
@@ -4574,7 +4694,7 @@ const matchupScorersResponse = z.object({
 });
 
 // Book Read: deep dive into why the books favor their side, for games where
-// the model is unsure or disagrees. Every factor is grounded in real data.
+// the model's lean is slim or it disagrees. Every factor is grounded in real data.
 const bookReadFactorSchema = z.object({
   side: z.enum(["away", "home", "neutral"]),
   icon: z.string(),
@@ -4590,7 +4710,7 @@ const bookReadResponse = z.object({
   bookAway: z.number().nullable(), bookHome: z.number().nullable(), bookDraw: z.number().nullable(),
   bookPick: z.string().nullable(),
   bookAwayPrice: z.number().nullable(), bookHomePrice: z.number().nullable(), bookDrawPrice: z.number().nullable(),
-  status: z.enum(["agree", "unsure", "disagree", "no-book", "no-model"]),
+  status: z.enum(["agree", "slim", "disagree", "no-book", "no-model"]),
   factors: z.array(bookReadFactorSchema),
   read: z.string(),
   fetchedAt: z.string(),
@@ -4701,7 +4821,7 @@ async function fetchMatchupScorers(ctx: Ctx, sport: (typeof sports)[number], awa
 
 // ---------------------------------------------------------------------------
 // Book Read: deep dive into why the books favor their side.
-// When the model is unsure (<55%) or disagrees with the books, this analyzes
+// When the model's lean is slim (<55%) or it disagrees with the books, this analyzes
 // the book's position using real data — venue, form, injuries, head-to-head —
 // and gives an honest read. The model always shows its numbers; this explains
 // what the books might be seeing that the model doesn't fully capture.
@@ -4852,7 +4972,7 @@ async function loadBookRead(
   if (modelPick === null) status = "no-model";
   else if (bookPick === null) status = "no-book";
   else if (modelPick !== bookPick) status = "disagree";
-  else if ((modelConfidence ?? 0) < 0.55) status = "unsure";
+  else if ((modelConfidence ?? 0) < 0.55) status = "slim";
   else status = "agree";
 
   const pct = (n: number | null) => n === null ? "—" : `${Math.round(n * 100)}%`;
@@ -4957,17 +5077,17 @@ async function loadBookRead(
     read = `No book price posted yet. Model leans ${pickName(modelPick)} at ${pct(modelConfidence)} — a pure model read, no market to check it against.`;
   } else if (status === "agree") {
     read = `Model and books agree on ${pickName(modelPick)} — model ${pct(modelConfidence)}, books ${pct(bookPick === "away" ? book.awayProb : bookPick === "home" ? book.homeProb : book.drawProb)} vig-free. ${factors.length ? "The factors below line up behind it." : "Clean agreement, no red flags in the data."}`;
-  } else if (status === "unsure") {
+  } else if (status === "slim") {
     const bookSide = pickName(bookPick);
     const agreeingFactors = factors.filter((f) => (f.side === "away" && bookPick === "away") || (f.side === "home" && bookPick === "home"));
-    read = `The model only leans ${pickName(modelPick)} (${pct(modelConfidence)}) — a coin flip it won't pretend is an edge. The books favor ${bookSide} (${pct(bookPick === "away" ? book.awayProb : bookPick === "home" ? book.homeProb : book.drawProb)} vig-free)${agreeingFactors.length ? `, and the data backs them: ${agreeingFactors.slice(0, 2).map((f) => f.detail).join(" ")}` : "."} Honest read: lean ${bookSide} with the books, but keep it small — the model sees this as too close to call.`;
+    read = `Model leans ${pickName(modelPick)} at ${pct(modelConfidence)} and the books agree — ${bookSide} at ${pct(bookPick === "away" ? book.awayProb : bookPick === "home" ? book.homeProb : book.drawProb)} vig-free. It's a slim lean, not a strong play${agreeingFactors.length ? `, and the data backs it: ${agreeingFactors.slice(0, 2).map((f) => f.detail).join(" ")}` : "."} Honest read: ${pickName(modelPick)} is the lean — take it at lean size, not lock size.`;
   } else {
     // disagree
     const bookSide = pickName(bookPick);
     const modelSide = pickName(modelPick);
     const bookFactors = factors.filter((f) => (f.side === "away" && bookPick === "away") || (f.side === "home" && bookPick === "home"));
     const modelFactors = factors.filter((f) => (f.side === "away" && modelPick === "away") || (f.side === "home" && modelPick === "home"));
-    read = `Genuine disagreement: model says ${modelSide} (${pct(modelConfidence)}), books say ${bookSide} (${pct(bookPick === "away" ? book.awayProb : bookPick === "home" ? book.homeProb : book.drawProb)} vig-free).${bookFactors.length ? ` Why the books might be right: ${bookFactors.slice(0, 2).map((f) => f.detail).join(" ")}` : ""}${modelFactors.length ? ` Why the model might be right: ${modelFactors.slice(0, 1).map((f) => f.detail).join(" ")}` : ""} Honest read: ${bookFactors.length >= modelFactors.length ? `the books' case is stronger on the data — lean ${bookSide}` : `the model has a real case for ${modelSide}, but respect the market`} — either way, this is not a spot to force.`;
+    read = `Genuine disagreement: model says ${modelSide} (${pct(modelConfidence)}), books say ${bookSide} (${pct(bookPick === "away" ? book.awayProb : bookPick === "home" ? book.homeProb : book.drawProb)} vig-free).${bookFactors.length ? ` Why the books might be right: ${bookFactors.slice(0, 2).map((f) => f.detail).join(" ")}` : ""}${modelFactors.length ? ` Why the model might be right: ${modelFactors.slice(0, 1).map((f) => f.detail).join(" ")}` : ""} Honest read: ${bookFactors.length >= modelFactors.length ? `lean ${bookSide} with the books — their case is stronger on the data` : `lean ${modelSide} with the model — its case is stronger on the data, but it's against the market, so size it carefully`}.`;
   }
 
   return {
@@ -5562,7 +5682,7 @@ async function loadTrackRecord(ctx: Ctx): Promise<z.infer<typeof trackRecordResp
 export const Actions = {
   getDashboard: defineAction({ request: z.object({ sport: z.enum(sports).default("nhl") }), response: dashboardResponse, async handler(ctx, args) { return loadDashboard(ctx, args.sport); } }),
   refreshDaily: defineAction({ request: z.object({}), response: z.object({ status: z.enum(["success", "partial", "failed"]), message: z.string(), rowCount: z.number(), snapshotDate: z.string() }), async handler(ctx) { const result = await refresh(ctx); try { await fetchHotStreaks(ctx, true); } catch { /* Keep odds refresh independent of free NHL insight refresh. */ } try { await fetchNflHotStreaks(ctx, true); } catch { /* Same for the NFL leg. */ } try { await fetchColdStreaks(ctx, true); } catch { /* Cold streaks refresh with the same daily job. */ } try { await fetchNflColdStreaks(ctx, true); } catch { /* Same for the NFL leg. */ } try { await fetchNcaafHotStreaks(ctx, true); } catch { /* Same for the NCAAF leg. */ } try { await fetchNcaafColdStreaks(ctx, true); } catch { /* Same for the NCAAF leg. */ } try { await fetchNbaHotStreaks(ctx, true); } catch { /* Same for the NBA leg. */ } try { await fetchNbaColdStreaks(ctx, true); } catch { /* Same for the NBA leg. */ } try { await fetchLikelyScorers(ctx, "nhl", true); } catch { /* Likely scorers warm with the same daily job. */ } try { await fetchLikelyScorers(ctx, "nfl", true); } catch { /* Same for the NFL leg. */ } try { await fetchLikelyScorers(ctx, "ncaaf", true); } catch { /* Same for the NCAAF leg. */ } try { await fetchLikelyScorers(ctx, "nba", true); } catch { /* Same for the NBA leg. */ } try { await warmNflForm(ctx); } catch { /* Flip % v2 form warms with the same daily job. */ } try { await warmNcaafForm(ctx); } catch { /* Same for the NCAAF leg. */ } try { await warmNbaForm(ctx); } catch { /* Same for the NBA leg. */ } try { await fetchKeyInjuries(ctx, "nfl", true); } catch { /* Injury warnings warm with the same daily job. */ } try { await fetchKeyInjuries(ctx, "ncaaf", true); } catch { /* Same for the NCAAF leg. */ } try { await fetchKeyInjuries(ctx, "nba", true); } catch { /* Same for the NBA leg. */ } try { await fetchKeyInjuries(ctx, "nhl", true); } catch { /* Same for the NHL leg. */ } try { await fetchKeyInjuries(ctx, "soccer", true, "mls"); } catch { /* Same for the MLS leg. */ } try { await fetchKeyInjuries(ctx, "soccer", true, "epl"); } catch { /* Same for the EPL leg. */ } try { await fetchLikelyScorers(ctx, "soccer", true, "mls"); } catch { /* Same for the MLS leg. */ } try { await fetchLikelyScorers(ctx, "soccer", true, "epl"); } catch { /* Same for the EPL leg. */ } try { await fetchSoccerHotStreaks(ctx, "mls", true); } catch { /* Same for the MLS leg. */ } try { await fetchSoccerHotStreaks(ctx, "epl", true); } catch { /* Same for the EPL leg. */ } try { await fetchSoccerColdStreaks(ctx, "mls", true); } catch { /* Same for the MLS leg. */ } try { await fetchSoccerColdStreaks(ctx, "epl", true); } catch { /* Same for the EPL leg. */ } try { await loadSoccerStandings(ctx, "mls"); } catch { /* Standings warm with the same daily job. */ } try { await loadSoccerStandings(ctx, "epl"); } catch { /* Same for the EPL leg. */ } return result; } }),
-  getNhlOverview: defineAction({ request: z.object({}), response: nhlOverviewResponse, async handler() { return loadNhlOverview(); } }),
+  getNhlOverview: defineAction({ request: z.object({}), response: nhlOverviewResponse, async handler(ctx) { return loadNhlOverview(undefined, ctx); } }),
   getFirstGoalMatchup: defineAction({ request: z.object({ awayTeam: z.enum(teamCodes), homeTeam: z.enum(teamCodes), force: z.boolean().default(false) }).refine((value) => value.awayTeam !== value.homeTeam, { message: "Choose two different teams" }), response: firstGoalMatchupResponse, async handler(ctx, args) { return loadFirstGoalMatchup(ctx, args.awayTeam, args.homeTeam, args.force); } }),
   getHotStreaks: defineAction({ request: z.object({ force: z.boolean().default(false) }), response: hotStreaksResponse, async handler(ctx, args) { return fetchHotStreaks(ctx, args.force); } }),
   getNhlRoster: defineAction({ request: z.object({ team: z.enum(teamCodes) }), response: rosterResponse, async handler(_ctx, args) { return loadRoster(args.team); } }),
