@@ -5600,6 +5600,15 @@ const trackRecordResponse = z.object({
   recent: z.array(trackRecordPickSchema),
   lastSnapshotAt: z.string().nullable(),
   lastGradedAt: z.string().nullable(),
+  // Daily counts: how many live picks were first tracked (snapshotted) and
+  // how many were graded on each of the last 14 ET days. The tracked count
+  // moves every day the refresh runs — it's the visible heartbeat of the
+  // tracker, separate from the graded record that only moves once games
+  // finish. snapshotAt is set once at first insert (re-snapshots update
+  // updatedAt, not snapshotAt), so it honestly marks the day a pick entered
+  // the ledger.
+  dailyCounts: z.array(z.object({ date: z.string(), tracked: z.number(), graded: z.number() })),
+  trackedTotal: z.number(),
 });
 
 // Model calibration: the learning readout. Graded live picks are bucketed by
@@ -5772,12 +5781,28 @@ async function loadTrackRecord(ctx: Ctx): Promise<z.infer<typeof trackRecordResp
     }
     return best === null ? null : new Date(best).toISOString();
   };
+  const liveRows = rows.filter((r) => r.source === "live");
+  const dayKey = (v: Date | number | null): string | null => (v === null ? null : nyDate(v instanceof Date ? v : new Date(Number(v))));
+  const trackedByDay = new Map<string, number>();
+  const gradedByDay = new Map<string, number>();
+  for (const r of liveRows) {
+    const tk = dayKey(r.snapshotAt); if (tk) trackedByDay.set(tk, (trackedByDay.get(tk) ?? 0) + 1);
+    const gk = dayKey(r.gradedAt); if (gk) gradedByDay.set(gk, (gradedByDay.get(gk) ?? 0) + 1);
+  }
+  const [ty, tm, td] = nyDate(new Date()).split("-").map(Number);
+  const dailyCounts: { date: string; tracked: number; graded: number }[] = [];
+  for (let back = 13; back >= 0; back--) {
+    const key = new Date(Date.UTC(ty, (tm ?? 1) - 1, (td ?? 1) - back, 12)).toISOString().slice(0, 10);
+    dailyCounts.push({ date: key, tracked: trackedByDay.get(key) ?? 0, graded: gradedByDay.get(key) ?? 0 });
+  }
   return {
     backtest: trackEra(rows.filter((r) => r.source === "backtest")),
     live: trackEra(rows.filter((r) => r.source === "live")),
     recent,
     lastSnapshotAt: maxDate(snapshotted, "snapshotAt"),
     lastGradedAt: maxDate(gradedRows, "gradedAt"),
+    dailyCounts,
+    trackedTotal: liveRows.length,
   };
 }
 

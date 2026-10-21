@@ -2155,3 +2155,13 @@ body[data-sport="soccer"] .app-shell {
 .team-charts .chart-caption:first-child { margin-top: 0; }
 .team-margin-chart { width: 100%; height: 220px; margin-bottom: 4px; }
 .team-chart-note { color: var(--dim); font-size: 11px; margin: 12px 0 0; }
+
+/* Daily counts (Track Record): the tracker's visible heartbeat — picks
+   snapshotted per day across the last 14 days. */
+.record-daily { margin-bottom: 18px; }
+.daily-bars { display: flex; gap: 4px; margin-top: 12px; }
+.daily-bar { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.daily-track { height: 52px; width: 100%; display: flex; align-items: flex-end; }
+.daily-track i { display: block; width: 100%; min-height: 3px; border-radius: 3px 3px 0 0; background: linear-gradient(180deg, var(--gold), var(--gold-deep)); }
+.daily-bar b { font-size: 11px; line-height: 1; }
+.daily-bar span { font-size: 8.5px; line-height: 1; opacity: .6; white-space: nowrap; }

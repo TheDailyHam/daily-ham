@@ -868,6 +868,30 @@ function CalibrationSection() {
   </section>;
 }
 
+function DailyCountsSection({ data }: { data: TrackRecord }) {
+  const days = data.dailyCounts;
+  const today = days[days.length - 1];
+  const max = Math.max(1, ...days.map((d) => d.tracked));
+  return <section className="record-daily" aria-label="Daily tracking counts">
+    <div className="section-heading"><div><p className="kicker">DAILY COUNT</p><h3>Counted fresh every morning</h3></div></div>
+    <div className="record-score">
+      <div><span>Tracked today</span><strong>{today ? today.tracked : 0}</strong><em>picks</em></div>
+      <div><span>Tracked total</span><strong>{data.trackedTotal}</strong><em>picks</em></div>
+      <div><span>Graded so far</span><strong>{data.live.picks}</strong><em>picks</em></div>
+    </div>
+    <div className="daily-bars" role="img" aria-label="Picks tracked per day, last 14 days">
+      {days.map((d) => (
+        <div key={d.date} className="daily-bar" title={`${d.date}: ${d.tracked} tracked, ${d.graded} graded`}>
+          <div className="daily-track"><i style={{ height: `${Math.max(5, (d.tracked / max) * 100)}%` }} /></div>
+          <b>{d.tracked}</b>
+          <span>{d.date.slice(5)}</span>
+        </div>
+      ))}
+    </div>
+    <p className="record-note">Every morning's refresh snapshots that day's model picks across all five sports before the games start — that's the tracked count, and it moves daily. A pick is graded after its game finishes, so graded counts land the following morning.</p>
+  </section>;
+}
+
 function RecordView() {
   const record = useQuery({
     queryKey: ["track-record"],
@@ -887,6 +911,7 @@ function RecordView() {
     {record.isPending ? <div className="slate-loading">Tallying the record…</div>
       : record.isError ? <div className="history-empty"><strong>Record unavailable.</strong><span>Pull to refresh and try again.</span></div>
       : data && <>
+        <DailyCountsSection data={data} />
         <EraCard
           title="Since launch · backtest"
           sub="OCT 7–12 · MODEL VS FINAL SCORES"
