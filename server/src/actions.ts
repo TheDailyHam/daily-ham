@@ -421,11 +421,15 @@ async function fetchPremiumAndCache(ctx: Ctx, sport: Sport, provider: OddsProvid
     if (!result.ok) throw providerError(result);
     parsed = parsePremiumPayload(sport, result.payload, fetchedAt);
   }
-  // The board is cached for ~22 hours: visitor page loads almost never trigger
-  // a provider request. The scheduled daily refresh (scripts/refresh.js via
-  // cron-job.org) performs the one real fetch per day, keeping the free
-  // provider quota shared across all visitors instead of per visit.
-  const expiresAt = new Date(fetchedAt.getTime() + 22 * 60 * 60 * 1000);
+  // Odds cache: 8 hours (was ~22h — lines a user saw at night had been
+  // pulled before 1 AM, the core of the "games aren't updated" complaint).
+  // The Odds API answers one request per sport carrying every game, market
+  // and book, so a full 5-sport cycle costs 5 credits; even under nonstop
+  // traffic the 8h TTL caps usage near ~15 requests/day (~450/month,
+  // inside the 500 free quota), and real traffic lands far below that
+  // because refetches are lazy — the cache only turns over when someone
+  // actually loads the board after it expires.
+  const expiresAt = new Date(fetchedAt.getTime() + 8 * 60 * 60 * 1000);
   const db = ctx.db;
   await db.delete(schema.premiumOddsCache).where(eq(schema.premiumOddsCache.sport, sport));
   await db.insert(schema.premiumOddsCache).values({ sport, payloadJson: JSON.stringify(parsed), fetchedAt, expiresAt, status: "fresh", message: parsed.healthMessage });
@@ -1295,7 +1299,7 @@ async function loadGoalieFormMap(ctx: Ctx): Promise<Map<string, { savePct: numbe
       key, payloadJson: JSON.stringify(out),
       // An empty map means the boxscore scan failed — retry soon, don't
       // let a failed build suppress the goalie edge for half a day.
-      fetchedAt: new Date(), expiresAt: new Date(Date.now() + (Object.keys(out).length === 0 ? DEGRADED_TTL_MS : 12 * 60 * 60 * 1000)),
+      fetchedAt: new Date(), expiresAt: new Date(Date.now() + (Object.keys(out).length === 0 ? DEGRADED_TTL_MS : 30 * 60 * 1000)),
     });
   } catch { /* cache is best-effort */ }
   return new Map(Object.entries(out));
@@ -1468,7 +1472,7 @@ async function loadFirstGoalMatchup(ctx: Ctx, awayTeam: (typeof teamCodes)[numbe
   };
   // If the standings feed failed mid-computation the totals/model pair came
   // out null — cache that degraded response only briefly so it self-heals.
-  const cacheTtlMs = scoringModel === null || seasonPair === null ? DEGRADED_TTL_MS : 12 * 60 * 60 * 1000;
+  const cacheTtlMs = scoringModel === null || seasonPair === null ? DEGRADED_TTL_MS : 30 * 60 * 1000;
   await db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey));
   await db.insert(schema.nhlInsightCache).values({ key: cacheKey, payloadJson: JSON.stringify(response), fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(Date.now() + cacheTtlMs) });
   return response;
@@ -2891,7 +2895,7 @@ async function loadNflMatchup(ctx: Ctx, awayTeam: (typeof nflTeamCodes)[number],
   };
   // Degraded responses (standings feed failed → null totals/model pair)
   // get a short cache so they self-heal instead of sticking for 12h.
-  const cacheTtlMs = scoringModel === null || seasonPair === null ? DEGRADED_TTL_MS : 12 * 60 * 60 * 1000;
+  const cacheTtlMs = scoringModel === null || seasonPair === null ? DEGRADED_TTL_MS : 30 * 60 * 1000;
   await db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey));
   await db.insert(schema.nhlInsightCache).values({ key: cacheKey, payloadJson: JSON.stringify(response), fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(Date.now() + cacheTtlMs) });
   return response;
@@ -3311,7 +3315,7 @@ async function loadNcaafMatchup(ctx: Ctx, awayTeam: (typeof ncaafTeamCodes)[numb
   };
   // Degraded responses (standings feed failed → null totals/model pair)
   // get a short cache so they self-heal instead of sticking for 12h.
-  const cacheTtlMs = ncaafScoringModel === null || seasonPair === null ? DEGRADED_TTL_MS : 12 * 60 * 60 * 1000;
+  const cacheTtlMs = ncaafScoringModel === null || seasonPair === null ? DEGRADED_TTL_MS : 30 * 60 * 1000;
   await db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey));
   await db.insert(schema.nhlInsightCache).values({ key: cacheKey, payloadJson: JSON.stringify(response), fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(Date.now() + cacheTtlMs) });
   return response;
@@ -4143,7 +4147,7 @@ async function loadSoccerMatchup(ctx: Ctx, league: SoccerLeagueParam, awayTeam: 
     sampleNote: "Model estimate from official scoring data — not a sportsbook price. Draws are modeled explicitly via a Poisson goal model.",
   };
   // If the standings feed failed, the model read is null — cache briefly.
-  const cacheTtlMs = standingsData === null ? DEGRADED_TTL_MS : 12 * 60 * 60 * 1000;
+  const cacheTtlMs = standingsData === null ? DEGRADED_TTL_MS : 30 * 60 * 1000;
   try {
     await db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey));
     await db.insert(schema.nhlInsightCache).values({
@@ -4702,7 +4706,7 @@ async function loadNbaMatchup(ctx: Ctx, awayTeam: (typeof nbaTeamCodes)[number],
   };
   // Degraded responses (standings feed failed → null totals/model pair)
   // get a short cache so they self-heal instead of sticking for 12h.
-  const cacheTtlMs = nbaScoringModel === null || seasonPair === null ? DEGRADED_TTL_MS : 12 * 60 * 60 * 1000;
+  const cacheTtlMs = nbaScoringModel === null || seasonPair === null ? DEGRADED_TTL_MS : 30 * 60 * 1000;
   await db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey));
   await db.insert(schema.nhlInsightCache).values({ key: cacheKey, payloadJson: JSON.stringify(response), fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(Date.now() + cacheTtlMs) });
   return response;
@@ -5435,7 +5439,7 @@ const keyInjuriesResponse = z.object({
   teams: z.array(injuryTeamSchema),
 });
 
-const INJURY_TTL_MS = 12 * 60 * 60 * 1000;
+const INJURY_TTL_MS = 60 * 60 * 1000;
 const ESPN_CORE_BASE = "https://sports.core.api.espn.com/v2/sports";
 const INJURY_LEAGUE_PATH: Record<Exclude<Sport, "soccer">, string> = {
   nhl: "hockey/leagues/nhl",

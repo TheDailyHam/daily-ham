@@ -238,7 +238,7 @@ function PlayerStatsSheet({ player, team, onClose }: { player: NhlPlayer; team: 
     pim: game.pim,
     powerPlayPoints: game.powerPlayPoints,
   }));
-  const overview = useQuery({ queryKey: ["nhl-overview"], queryFn: () => api.getNhlOverview({}), staleTime: 15 * 60 * 1000 });
+  const overview = useQuery({ queryKey: ["nhl-overview"], queryFn: () => api.getNhlOverview({}), staleTime:  90 * 1000, refetchInterval: 90 * 1000 });
   const upcoming = overview.data?.games.find((game) => new Date(game.startsAt).getTime() > Date.now() && (game.away.abbrev === team || game.home.abbrev === team));
   const opponent = upcoming ? (upcoming.away.abbrev === team ? upcoming.home.abbrev : upcoming.away.abbrev) : null;
   const opponentStanding = overview.data?.standings.find((row) => row.team === opponent);
@@ -320,8 +320,8 @@ function RosterView({ parlay, setParlay, sport, soccerLeague, onSoccerLeague, te
   }, [teamFocus]);
   const [selectedPlayer, setSelectedPlayer] = useState<NhlPlayer | null>(null);
   const nhl = useQuery({ queryKey: ["nhl-roster", team], queryFn: () => api.getNhlRoster({ team }) });
-  const teamBoard = useQuery({ queryKey: ["premium-board", "nhl"], queryFn: () => api.getPremiumBoard({ sport: "nhl" }), retry: false });
-  const overview = useQuery({ queryKey: ["nhl-overview"], queryFn: () => api.getNhlOverview({}), staleTime: 15 * 60 * 1000, retry: 1 });
+  const teamBoard = useQuery({ queryKey: ["premium-board", "nhl"], queryFn: () => api.getPremiumBoard({ sport: "nhl" }), staleTime: 90 * 1000, refetchInterval: 90 * 1000, retry: false });
+  const overview = useQuery({ queryKey: ["nhl-overview"], queryFn: () => api.getNhlOverview({}), staleTime:  90 * 1000, refetchInterval: 90 * 1000, retry: 1 });
   const selectedTeamName = teams.find((item) => item.code === team)?.name ?? team;
   const teamMoneylines = useMemo(() => moneylinePicks(groupPremiumOffers(teamBoard.data?.offers ?? [])).filter((group) => group.matchup.includes(selectedTeamName)), [teamBoard.data, selectedTeamName]);
 
@@ -500,13 +500,13 @@ function FlipMeter({ sport, market, nhlStandings, nflStandings, nbaStandings, nc
 // leg; until then the query fails quietly and no chips render. Designations
 // are rendered verbatim from the feed — never invented client-side.
 function useKeyInjuries(sport: Exclude<Sport, "soccer">) {
-  return useQuery({ queryKey: ["key-injuries", sport], queryFn: () => api.getKeyInjuries({ sport }), staleTime: 6 * 60 * 60 * 1000, retry: 1 });
+  return useQuery({ queryKey: ["key-injuries", sport], queryFn: () => api.getKeyInjuries({ sport }), staleTime:  30 * 60 * 1000, retry: 1 });
 }
 
 // Soccer injuries ride the parallel server leg; until it lands the query
 // fails quietly and no chips render.
 function useSoccerKeyInjuries(league: SoccerLeague) {
-  return useQuery({ queryKey: ["soccer-key-injuries", league], queryFn: () => api.getSoccerKeyInjuries({ league }), staleTime: 6 * 60 * 60 * 1000, retry: 1 });
+  return useQuery({ queryKey: ["soccer-key-injuries", league], queryFn: () => api.getSoccerKeyInjuries({ league }), staleTime:  30 * 60 * 1000, retry: 1 });
 }
 
 function shortDate(value: string | null | undefined): string | null {
@@ -1350,11 +1350,11 @@ function HamSelectionView() {
 
 function ProView({ parlay, setParlay, home = false, sport, soccerLeague, onSoccerLeague }: { parlay: ParlayPick[]; setParlay: (next: ParlayPick[]) => void; home?: boolean; sport: Sport; soccerLeague?: SoccerLeague; onSoccerLeague?: (l: SoccerLeague) => void }) {
   if (sport === "soccer") return <SoccerBoardView league={soccerLeague ?? "mls"} onLeagueChange={onSoccerLeague} parlay={parlay} setParlay={setParlay} home={home} />;
-  const board = useQuery({ queryKey: ["premium-board", sport], queryFn: () => api.getPremiumBoard({ sport }), retry: false });
-  const overview = useQuery({ queryKey: ["nhl-overview"], queryFn: () => api.getNhlOverview({}), staleTime: 15 * 60 * 1000, retry: 1, enabled: sport === "nhl" });
-  const nflOverview = useQuery({ queryKey: ["nfl-overview", "current"], queryFn: () => api.getNflOverview({}), staleTime: 15 * 60 * 1000, retry: 1, enabled: sport === "nfl" });
-  const ncaafOverview = useQuery({ queryKey: ["ncaaf-overview", "current"], queryFn: () => api.getNcaafOverview({}), staleTime: 15 * 60 * 1000, retry: 1, enabled: sport === "ncaaf" });
-  const nbaOverview = useQuery({ queryKey: ["nba-overview", "current"], queryFn: () => api.getNbaOverview({}), staleTime: 15 * 60 * 1000, retry: 1, enabled: sport === "nba" });
+  const board = useQuery({ queryKey: ["premium-board", sport], queryFn: () => api.getPremiumBoard({ sport }), staleTime: 90 * 1000, refetchInterval: 90 * 1000, retry: false });
+  const overview = useQuery({ queryKey: ["nhl-overview"], queryFn: () => api.getNhlOverview({}), staleTime:  90 * 1000, refetchInterval: 90 * 1000, retry: 1, enabled: sport === "nhl" });
+  const nflOverview = useQuery({ queryKey: ["nfl-overview", "current"], queryFn: () => api.getNflOverview({}), staleTime:  90 * 1000, refetchInterval: 90 * 1000, retry: 1, enabled: sport === "nfl" });
+  const ncaafOverview = useQuery({ queryKey: ["ncaaf-overview", "current"], queryFn: () => api.getNcaafOverview({}), staleTime:  90 * 1000, refetchInterval: 90 * 1000, retry: 1, enabled: sport === "ncaaf" });
+  const nbaOverview = useQuery({ queryKey: ["nba-overview", "current"], queryFn: () => api.getNbaOverview({}), staleTime:  90 * 1000, refetchInterval: 90 * 1000, retry: 1, enabled: sport === "nba" });
   const scorers = useQuery({ queryKey: ["likely-scorers", sport], queryFn: () => api.getLikelyScorers({ sport }), staleTime: 12 * 60 * 60 * 1000, retry: 1 });
   const injuries = useKeyInjuries(sport);
   const [search, setSearch] = useState("");
@@ -1407,7 +1407,7 @@ function ScheduleStrip({ compact = false, sport, soccerLeague }: { compact?: boo
 }
 
 function NhlScheduleStrip({ compact = false }: { compact?: boolean }) {
-  const overview = useQuery({ queryKey: ["nhl-overview"], queryFn: () => api.getNhlOverview({}), staleTime: 15 * 60 * 1000, retry: 1 });
+  const overview = useQuery({ queryKey: ["nhl-overview"], queryFn: () => api.getNhlOverview({}), staleTime:  90 * 1000, refetchInterval: 90 * 1000, retry: 1 });
   const injuries = useKeyInjuries("nhl");
   if (overview.isPending) return <div className="slate-loading">Loading the official NHL slate…</div>;
   if (overview.isError || !overview.data) return <div className="inline-error slate-error"><strong>NHL schedule unavailable.</strong><button onClick={() => overview.refetch()}>Retry</button></div>;
@@ -1420,7 +1420,7 @@ function LeagueView({ sport, soccerLeague, onSoccerLeague }: { sport: Sport; soc
   if (sport === "ncaaf") return <NcaafLeagueView />;
   if (sport === "nba") return <NbaLeagueView />;
   if (sport === "soccer") return <SoccerLeagueView league={soccerLeague ?? "mls"} onLeagueChange={onSoccerLeague} />;
-  const overview = useQuery({ queryKey: ["nhl-overview"], queryFn: () => api.getNhlOverview({}), staleTime: 15 * 60 * 1000, retry: 1 });
+  const overview = useQuery({ queryKey: ["nhl-overview"], queryFn: () => api.getNhlOverview({}), staleTime:  90 * 1000, refetchInterval: 90 * 1000, retry: 1 });
   const [conference, setConference] = useState("All");
   if (overview.isPending) return <div className="loading"><span />Loading NHL schedule and standings…</div>;
   if (overview.isError || !overview.data) return <div className="error-state"><h2>League center is between shifts.</h2><p>The official NHL feed did not answer.</p><button onClick={() => overview.refetch()}>Retry</button></div>;
@@ -1803,8 +1803,8 @@ function MatchupCalculator() {
   const [awayTeam, setAwayTeam] = useState<TeamCode>("WSH");
   const [homeTeam, setHomeTeam] = useState<TeamCode>("PIT");
   const [matchup, setMatchup] = useState<{ away: TeamCode; home: TeamCode }>({ away: "WSH", home: "PIT" });
-  const overview = useQuery({ queryKey: ["nhl-overview"], queryFn: () => api.getNhlOverview({}), staleTime: 15 * 60 * 1000, retry: 1 });
-  const board = useQuery({ queryKey: ["premium-board", "nhl"], queryFn: () => api.getPremiumBoard({ sport: "nhl" }), retry: false });
+  const overview = useQuery({ queryKey: ["nhl-overview"], queryFn: () => api.getNhlOverview({}), staleTime:  90 * 1000, refetchInterval: 90 * 1000, retry: 1 });
+  const board = useQuery({ queryKey: ["premium-board", "nhl"], queryFn: () => api.getPremiumBoard({ sport: "nhl" }), staleTime: 90 * 1000, refetchInterval: 90 * 1000, retry: false });
   const boardGroups = useMemo(() => groupPremiumOffers(board.data?.offers ?? []), [board.data]);
   const result = useQuery({ queryKey: ["first-goal-matchup", matchup.away, matchup.home], queryFn: () => api.getFirstGoalMatchup({ awayTeam: matchup.away, homeTeam: matchup.home, force: false }), retry: 1 });
   const injuries = useKeyInjuries("nhl");
@@ -2738,7 +2738,7 @@ function NcaafScheduleStrip({ compact = false }: { compact?: boolean }) {
 }
 
 function NflLeagueView() {
-  const overview = useQuery({ queryKey: ["nfl-overview", "current"], queryFn: () => api.getNflOverview({}), staleTime: 15 * 60 * 1000, retry: 1 });
+  const overview = useQuery({ queryKey: ["nfl-overview", "current"], queryFn: () => api.getNflOverview({}), staleTime:  90 * 1000, refetchInterval: 90 * 1000, retry: 1 });
   const [conference, setConference] = useState("All");
   if (overview.isPending) return <div className="loading"><span />Loading NFL schedule and standings…</div>;
   if (overview.isError || !overview.data) return <div className="error-state"><h2>League center is between downs.</h2><p>The ESPN feed did not answer.</p><button onClick={() => overview.refetch()}>Retry</button></div>;
@@ -2755,7 +2755,7 @@ function NflLeagueView() {
 }
 
 function NcaafLeagueView() {
-  const overview = useQuery({ queryKey: ["ncaaf-overview", "current"], queryFn: () => api.getNcaafOverview({}), staleTime: 15 * 60 * 1000, retry: 1 });
+  const overview = useQuery({ queryKey: ["ncaaf-overview", "current"], queryFn: () => api.getNcaafOverview({}), staleTime:  90 * 1000, refetchInterval: 90 * 1000, retry: 1 });
   const [conference, setConference] = useState("All");
   if (overview.isPending) return <div className="loading"><span />Loading college football schedule and standings…</div>;
   if (overview.isError || !overview.data) return <div className="error-state"><h2>League center is between downs.</h2><p>The ESPN feed did not answer.</p><button onClick={() => overview.refetch()}>Retry</button></div>;
@@ -2775,8 +2775,8 @@ function NflMatchupCalculator() {
   const [awayTeam, setAwayTeam] = useState<NflTeamCode>("KC");
   const [homeTeam, setHomeTeam] = useState<NflTeamCode>("BUF");
   const [matchup, setMatchup] = useState<{ away: NflTeamCode; home: NflTeamCode }>({ away: "KC", home: "BUF" });
-  const overview = useQuery({ queryKey: ["nfl-overview", "current"], queryFn: () => api.getNflOverview({}), staleTime: 15 * 60 * 1000, retry: 1 });
-  const board = useQuery({ queryKey: ["premium-board", "nfl"], queryFn: () => api.getPremiumBoard({ sport: "nfl" }), retry: false });
+  const overview = useQuery({ queryKey: ["nfl-overview", "current"], queryFn: () => api.getNflOverview({}), staleTime:  90 * 1000, refetchInterval: 90 * 1000, retry: 1 });
+  const board = useQuery({ queryKey: ["premium-board", "nfl"], queryFn: () => api.getPremiumBoard({ sport: "nfl" }), staleTime: 90 * 1000, refetchInterval: 90 * 1000, retry: false });
   const boardGroups = useMemo(() => groupPremiumOffers(board.data?.offers ?? []), [board.data]);
   const result = useQuery({ queryKey: ["nfl-matchup", matchup.away, matchup.home], queryFn: () => api.getNflMatchup({ awayTeam: matchup.away, homeTeam: matchup.home, force: false }), retry: 1 });
   const injuries = useKeyInjuries("nfl");
@@ -2847,8 +2847,8 @@ function NcaafMatchupCalculator() {
   const [awayTeam, setAwayTeam] = useState<NcaafTeamCode>("UGA");
   const [homeTeam, setHomeTeam] = useState<NcaafTeamCode>("ALA");
   const [matchup, setMatchup] = useState<{ away: NcaafTeamCode; home: NcaafTeamCode }>({ away: "UGA", home: "ALA" });
-  const overview = useQuery({ queryKey: ["ncaaf-overview", "current"], queryFn: () => api.getNcaafOverview({}), staleTime: 15 * 60 * 1000, retry: 1 });
-  const board = useQuery({ queryKey: ["premium-board", "ncaaf"], queryFn: () => api.getPremiumBoard({ sport: "ncaaf" }), retry: false });
+  const overview = useQuery({ queryKey: ["ncaaf-overview", "current"], queryFn: () => api.getNcaafOverview({}), staleTime:  90 * 1000, refetchInterval: 90 * 1000, retry: 1 });
+  const board = useQuery({ queryKey: ["premium-board", "ncaaf"], queryFn: () => api.getPremiumBoard({ sport: "ncaaf" }), staleTime: 90 * 1000, refetchInterval: 90 * 1000, retry: false });
   const boardGroups = useMemo(() => groupPremiumOffers(board.data?.offers ?? []), [board.data]);
   const result = useQuery({ queryKey: ["ncaaf-matchup", matchup.away, matchup.home], queryFn: () => api.getNcaafMatchup({ awayTeam: matchup.away, homeTeam: matchup.home, force: false }), retry: 1 });
   const injuries = useKeyInjuries("ncaaf");
@@ -3085,8 +3085,8 @@ function NflRosterView({ parlay, setParlay, teamFocus }: { parlay: ParlayPick[];
   const [selectedPlayer, setSelectedPlayer] = useState<NflPlayer | null>(null);
   const [watched, setWatched] = useState(0);
   const nfl = useQuery({ queryKey: ["nfl-roster", team], queryFn: () => api.getNflRoster({ team }) });
-  const teamBoard = useQuery({ queryKey: ["premium-board", "nfl"], queryFn: () => api.getPremiumBoard({ sport: "nfl" }), retry: false });
-  const nflOverview = useQuery({ queryKey: ["nfl-overview", "current"], queryFn: () => api.getNflOverview({}), staleTime: 15 * 60 * 1000, retry: 1 });
+  const teamBoard = useQuery({ queryKey: ["premium-board", "nfl"], queryFn: () => api.getPremiumBoard({ sport: "nfl" }), staleTime: 90 * 1000, refetchInterval: 90 * 1000, retry: false });
+  const nflOverview = useQuery({ queryKey: ["nfl-overview", "current"], queryFn: () => api.getNflOverview({}), staleTime:  90 * 1000, refetchInterval: 90 * 1000, retry: 1 });
   const selectedTeamName = nflTeams.find((item) => item.code === team)?.name ?? team;
   const teamMoneylines = useMemo(() => moneylinePicks(groupPremiumOffers(teamBoard.data?.offers ?? [])).filter((group) => group.matchup.includes(selectedTeamName)), [teamBoard.data, selectedTeamName]);
   useEffect(() => {
@@ -3141,8 +3141,8 @@ function NcaafRosterView({ parlay, setParlay, teamFocus }: { parlay: ParlayPick[
   const [selectedPlayer, setSelectedPlayer] = useState<NcaafPlayer | null>(null);
   const [watched, setWatched] = useState(0);
   const ncaaf = useQuery({ queryKey: ["ncaaf-roster", team], queryFn: () => api.getNcaafRoster({ team }) });
-  const teamBoard = useQuery({ queryKey: ["premium-board", "ncaaf"], queryFn: () => api.getPremiumBoard({ sport: "ncaaf" }), retry: false });
-  const ncaafOverview = useQuery({ queryKey: ["ncaaf-overview", "current"], queryFn: () => api.getNcaafOverview({}), staleTime: 15 * 60 * 1000, retry: 1 });
+  const teamBoard = useQuery({ queryKey: ["premium-board", "ncaaf"], queryFn: () => api.getPremiumBoard({ sport: "ncaaf" }), staleTime: 90 * 1000, refetchInterval: 90 * 1000, retry: false });
+  const ncaafOverview = useQuery({ queryKey: ["ncaaf-overview", "current"], queryFn: () => api.getNcaafOverview({}), staleTime:  90 * 1000, refetchInterval: 90 * 1000, retry: 1 });
   const selectedTeamName = ncaafTeams.find((item) => item.code === team)?.name ?? team;
   const teamMoneylines = useMemo(() => moneylinePicks(groupPremiumOffers(teamBoard.data?.offers ?? [])).filter((group) => group.matchup.includes(selectedTeamName)), [teamBoard.data, selectedTeamName]);
   useEffect(() => {
@@ -3609,7 +3609,7 @@ function nbaGroupFor(position: string): string {
 }
 
 function NbaScheduleStrip({ compact = false }: { compact?: boolean }) {
-  const overview = useQuery({ queryKey: ["nba-overview", "current"], queryFn: () => api.getNbaOverview({}), staleTime: 15 * 60 * 1000, retry: 1 });
+  const overview = useQuery({ queryKey: ["nba-overview", "current"], queryFn: () => api.getNbaOverview({}), staleTime:  90 * 1000, refetchInterval: 90 * 1000, retry: 1 });
   const injuries = useKeyInjuries("nba");
   if (overview.isPending) return <div className="slate-loading">Loading the official NBA slate…</div>;
   if (overview.isError || !overview.data) return <div className="inline-error slate-error"><strong>NBA schedule unavailable.</strong><button onClick={() => overview.refetch()}>Retry</button></div>;
@@ -3629,7 +3629,7 @@ function NbaScheduleStrip({ compact = false }: { compact?: boolean }) {
 }
 
 function NbaLeagueView() {
-  const overview = useQuery({ queryKey: ["nba-overview", "current"], queryFn: () => api.getNbaOverview({}), staleTime: 15 * 60 * 1000, retry: 1 });
+  const overview = useQuery({ queryKey: ["nba-overview", "current"], queryFn: () => api.getNbaOverview({}), staleTime:  90 * 1000, refetchInterval: 90 * 1000, retry: 1 });
   const [conference, setConference] = useState("All");
   if (overview.isPending) return <div className="loading"><span />Loading NBA schedule and standings…</div>;
   if (overview.isError || !overview.data) return <div className="error-state"><h2>League center is between quarters.</h2><p>The ESPN feed did not answer.</p><button onClick={() => overview.refetch()}>Retry</button></div>;
@@ -3649,8 +3649,8 @@ function NbaMatchupCalculator() {
   const [awayTeam, setAwayTeam] = useState<NbaTeamCode>("BOS");
   const [homeTeam, setHomeTeam] = useState<NbaTeamCode>("NY");
   const [matchup, setMatchup] = useState<{ away: NbaTeamCode; home: NbaTeamCode }>({ away: "BOS", home: "NY" });
-  const overview = useQuery({ queryKey: ["nba-overview", "current"], queryFn: () => api.getNbaOverview({}), staleTime: 15 * 60 * 1000, retry: 1 });
-  const board = useQuery({ queryKey: ["premium-board", "nba"], queryFn: () => api.getPremiumBoard({ sport: "nba" }), retry: false });
+  const overview = useQuery({ queryKey: ["nba-overview", "current"], queryFn: () => api.getNbaOverview({}), staleTime:  90 * 1000, refetchInterval: 90 * 1000, retry: 1 });
+  const board = useQuery({ queryKey: ["premium-board", "nba"], queryFn: () => api.getPremiumBoard({ sport: "nba" }), staleTime: 90 * 1000, refetchInterval: 90 * 1000, retry: false });
   const boardGroups = useMemo(() => groupPremiumOffers(board.data?.offers ?? []), [board.data]);
   const result = useQuery({ queryKey: ["nba-matchup", matchup.away, matchup.home], queryFn: () => api.getNbaMatchup({ awayTeam: nbaServerTeam(matchup.away) as NbaTeamCode, homeTeam: nbaServerTeam(matchup.home) as NbaTeamCode, force: false }), retry: 1 });
   const scorers = useQuery({ queryKey: ["likely-scorers", "nba"], queryFn: () => api.getLikelyScorers({ sport: "nba" }), staleTime: 12 * 60 * 60 * 1000, retry: 1 });
@@ -3797,8 +3797,8 @@ function NbaRosterView({ parlay, setParlay, teamFocus }: { parlay: ParlayPick[];
   const [selectedPlayer, setSelectedPlayer] = useState<NbaPlayer | null>(null);
   const [watched, setWatched] = useState(0);
   const nba = useQuery({ queryKey: ["nba-roster", team], queryFn: () => api.getNbaRoster({ team: nbaServerTeam(team) as NbaTeamCode }) });
-  const teamBoard = useQuery({ queryKey: ["premium-board", "nba"], queryFn: () => api.getPremiumBoard({ sport: "nba" }), retry: false });
-  const nbaOverview = useQuery({ queryKey: ["nba-overview", "current"], queryFn: () => api.getNbaOverview({}), staleTime: 15 * 60 * 1000, retry: 1 });
+  const teamBoard = useQuery({ queryKey: ["premium-board", "nba"], queryFn: () => api.getPremiumBoard({ sport: "nba" }), staleTime: 90 * 1000, refetchInterval: 90 * 1000, retry: false });
+  const nbaOverview = useQuery({ queryKey: ["nba-overview", "current"], queryFn: () => api.getNbaOverview({}), staleTime:  90 * 1000, refetchInterval: 90 * 1000, retry: 1 });
   const selectedTeamName = nbaTeams.find((item) => item.code === team)?.name ?? team;
   const teamMoneylines = useMemo(() => moneylinePicks(groupPremiumOffers(teamBoard.data?.offers ?? [])).filter((group) => group.matchup.includes(selectedTeamName)), [teamBoard.data, selectedTeamName]);
   useEffect(() => {
@@ -3921,7 +3921,7 @@ function soccerStateLabel(game: SoccerGame): string {
 }
 
 function SoccerScheduleStrip({ compact = false, league }: { compact?: boolean; league: SoccerLeague }) {
-  const overview = useQuery({ queryKey: ["soccer-overview", league], queryFn: () => api.getSoccerOverview({ league }), staleTime: 15 * 60 * 1000, retry: 1 });
+  const overview = useQuery({ queryKey: ["soccer-overview", league], queryFn: () => api.getSoccerOverview({ league }), staleTime:  90 * 1000, refetchInterval: 90 * 1000, retry: 1 });
   const injuries = useSoccerKeyInjuries(league);
   if (overview.isPending) return <div className="slate-loading">Loading the official soccer slate…</div>;
   if (overview.isError || !overview.data) return <div className="inline-error slate-error"><strong>Soccer schedule unavailable.</strong><span>The league feed hasn't served this side yet.</span><button onClick={() => overview.refetch()}>Retry</button></div>;
@@ -3941,7 +3941,7 @@ function SoccerScheduleStrip({ compact = false, league }: { compact?: boolean; l
 }
 
 function SoccerLeagueView({ league, onLeagueChange }: { league: SoccerLeague; onLeagueChange?: (next: SoccerLeague) => void }) {
-  const overview = useQuery({ queryKey: ["soccer-overview", league], queryFn: () => api.getSoccerOverview({ league }), staleTime: 15 * 60 * 1000, retry: 1 });
+  const overview = useQuery({ queryKey: ["soccer-overview", league], queryFn: () => api.getSoccerOverview({ league }), staleTime:  90 * 1000, refetchInterval: 90 * 1000, retry: 1 });
   if (overview.isPending) return <div className="loading"><span />Loading soccer schedule and standings…</div>;
   if (overview.isError || !overview.data) return <div className="error-state"><h2>League center is between matches.</h2><p>The league feed hasn't served this side yet.</p><button onClick={() => overview.refetch()}>Retry</button></div>;
   const data = overview.data;
@@ -4018,7 +4018,7 @@ function soccerMarketTeamCodes(market: MarketGroup, standings: SoccerStandingRow
 function SoccerSlateFlipCard({ league, awayAbbrev, homeAbbrev, active, onPick }: {
   league: SoccerLeague; awayAbbrev: string; homeAbbrev: string; active: boolean; onPick: () => void;
 }) {
-  const overview = useQuery({ queryKey: ["soccer-overview", league], queryFn: () => api.getSoccerOverview({ league }), staleTime: 15 * 60 * 1000, retry: 1 });
+  const overview = useQuery({ queryKey: ["soccer-overview", league], queryFn: () => api.getSoccerOverview({ league }), staleTime:  90 * 1000, refetchInterval: 90 * 1000, retry: 1 });
   const standings = overview.data?.standings ?? null;
   const fixture = overview.data?.games.find((g) => g.away.abbrev === awayAbbrev && g.home.abbrev === homeAbbrev);
   // Prefer the server's Poisson fixture model when available; fall back to the
@@ -4032,7 +4032,7 @@ function SoccerSlateFlipCard({ league, awayAbbrev, homeAbbrev, active, onPick }:
 }
 
 function SoccerFlipMeter({ league, market }: { league: SoccerLeague; market: MarketGroup }) {
-  const overview = useQuery({ queryKey: ["soccer-overview", league], queryFn: () => api.getSoccerOverview({ league }), staleTime: 15 * 60 * 1000, retry: 1 });
+  const overview = useQuery({ queryKey: ["soccer-overview", league], queryFn: () => api.getSoccerOverview({ league }), staleTime:  90 * 1000, refetchInterval: 90 * 1000, retry: 1 });
   const standings = overview.data?.standings ?? null;
   if (!standings || standings.length === 0) return null;
   const codes = soccerMarketTeamCodes(market, standings);
@@ -4103,8 +4103,8 @@ function SoccerBoardView({ league, onLeagueChange, parlay, setParlay, home = fal
   league: SoccerLeague; onLeagueChange?: (next: SoccerLeague) => void;
   parlay: ParlayPick[]; setParlay: (next: ParlayPick[]) => void; home?: boolean;
 }) {
-  const board = useQuery({ queryKey: ["soccer-board", league], queryFn: () => api.getSoccerBoard({ league }), retry: false });
-  const overview = useQuery({ queryKey: ["soccer-overview", league], queryFn: () => api.getSoccerOverview({ league }), staleTime: 15 * 60 * 1000, retry: 1 });
+  const board = useQuery({ queryKey: ["soccer-board", league], queryFn: () => api.getSoccerBoard({ league }), staleTime: 90 * 1000, refetchInterval: 90 * 1000, retry: false });
+  const overview = useQuery({ queryKey: ["soccer-overview", league], queryFn: () => api.getSoccerOverview({ league }), staleTime:  90 * 1000, refetchInterval: 90 * 1000, retry: 1 });
   const scorers = useQuery({ queryKey: ["soccer-likely-scorers", league], queryFn: () => api.getSoccerLikelyScorers({ league }), staleTime: 12 * 60 * 60 * 1000, retry: 1 });
   const injuries = useSoccerKeyInjuries(league);
   const [search, setSearch] = useState("");
@@ -4219,8 +4219,8 @@ function SoccerMatchupCalculator({ league, onLeagueChange }: { league: SoccerLea
     const d = defaults[league];
     setAwayTeam(d[0]); setHomeTeam(d[1]); setMatchup({ away: d[0], home: d[1] });
   }, [league]);
-  const overview = useQuery({ queryKey: ["soccer-overview", league], queryFn: () => api.getSoccerOverview({ league }), staleTime: 15 * 60 * 1000, retry: 1 });
-  const board = useQuery({ queryKey: ["soccer-board", league], queryFn: () => api.getSoccerBoard({ league }), retry: false });
+  const overview = useQuery({ queryKey: ["soccer-overview", league], queryFn: () => api.getSoccerOverview({ league }), staleTime:  90 * 1000, refetchInterval: 90 * 1000, retry: 1 });
+  const board = useQuery({ queryKey: ["soccer-board", league], queryFn: () => api.getSoccerBoard({ league }), staleTime: 90 * 1000, refetchInterval: 90 * 1000, retry: false });
   const boardGroups = useMemo(() => groupPremiumOffers(board.data?.offers ?? []), [board.data]);
   const result = useQuery({ queryKey: ["soccer-matchup", league, matchup.away, matchup.home], queryFn: () => api.getSoccerMatchup({ league, awayTeam: matchup.away, homeTeam: matchup.home, force: false }), retry: 1 });
   const injuries = useSoccerKeyInjuries(league);
@@ -4368,7 +4368,7 @@ function SoccerRosterView({ league, onLeagueChange, parlay, setParlay, teamFocus
   const [watched, setWatched] = useState(0);
   const teamLeague = soccerLeagueForTeam(team);
   const roster = useQuery({ queryKey: ["soccer-roster", teamLeague, team], queryFn: () => api.getSoccerRoster({ league: teamLeague, team }) });
-  const teamBoard = useQuery({ queryKey: ["soccer-board", teamLeague], queryFn: () => api.getSoccerBoard({ league: teamLeague }), retry: false });
+  const teamBoard = useQuery({ queryKey: ["soccer-board", teamLeague], queryFn: () => api.getSoccerBoard({ league: teamLeague }), staleTime: 90 * 1000, refetchInterval: 90 * 1000, retry: false });
   const selectedTeamName = soccerTeams.find((item) => item.code === team)?.name ?? team;
   const teamThreeWay = useMemo(() => groupPremiumOffers(teamBoard.data?.offers ?? []).filter(isThreeWayGroup).filter((group) => group.matchup.includes(selectedTeamName)), [teamBoard.data, selectedTeamName]);
   useEffect(() => {
