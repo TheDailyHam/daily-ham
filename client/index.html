@@ -43,6 +43,14 @@
         <p>Fresh Cuts Daily</p>
         <div class="splash-dots"><i></i><i></i><i></i></div>
       </div>
+    <script>
+      // Splash safety net: the app normally dismisses the splash itself at
+      // ~1s, but if the bundle is slow or fails, never trap the user on it.
+      setTimeout(function () {
+        var s = document.getElementById("dh-splash");
+        if (s) { s.style.opacity = "0"; setTimeout(function () { s.remove(); }, 400); }
+      }, 4000);
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

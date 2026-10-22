@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { timingSafeEqual } from "node:crypto";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
+import { dbSource, dbNote } from "./db.js";
+import { applyCalibration, ensureCalibrationLoaded, runLearningCycle, getLearningLogData } from "./learning.js";
 
 // Admin gate: key management and manual sportsbook refreshes require the
 // ADMIN_TOKEN environment variable. This keeps public visitors from
@@ -928,6 +930,7 @@ function nhlModelPcts(opts: {
   l10GamesPlayed: number; l10GoalsFor: number; l10GoalsAgainst: number;
 }): { modelWinPct: number | null; modelHomePct: number | null; modelAwayPct: number | null } {
   const neutral = modelWinPct({
+    sport: "nhl",
     pointsFor: opts.goalsFor, pointsAgainst: opts.goalsAgainst,
     wins: opts.wins, losses: opts.losses + opts.otLosses, exponent: 2.0,
     form: null,
@@ -1942,6 +1945,10 @@ function modelWinPct(opts: {
   // form blend when the feed offers a richer form window (the NHL's last-10
   // goals for/against). Callers gate their own minimum sample.
   formValue?: number | null;
+  // Which sport this reading belongs to — routes the value through the
+  // learning layer's calibration correction (identity until that sport's
+  // graded sample earns an adjustment; see learning.ts).
+  sport?: string;
 }): number | null {
   const games = opts.wins + opts.losses + (opts.ties ?? 0);
   if (games < 2) return null;
@@ -1951,7 +1958,7 @@ function modelWinPct(opts: {
   const f = opts.form;
   const formPct = opts.formValue ?? (f && f.games >= 3 && games >= 3 ? f.wins / f.games : null);
   const value = formPct === null ? blended : 0.7 * blended + 0.3 * formPct;
-  return Math.round(value * 1000) / 1000;
+  return applyCalibration(opts.sport, Math.round(value * 1000) / 1000);
 }
 
 // Venue blend (house style, mirroring the matchup calculators' venueBlend):
@@ -2071,6 +2078,7 @@ async function espnModelPair(ctx: Ctx, sport: "nfl" | "nba" | "ncaaf", awayTeam:
       home: SplitRecord; road: SplitRecord;
     }, side: "home" | "away"): number | null => {
       const neutral = modelWinPct({
+        sport: sport,
         pointsFor: s.pointsFor, pointsAgainst: s.pointsAgainst,
         wins: s.wins, losses: s.losses, ties: s.ties ?? 0, exponent,
         form: formMap?.[s.team] ?? null,
@@ -2480,6 +2488,7 @@ async function loadNflOverview(week?: number, ctx?: Ctx): Promise<z.infer<typeof
     scoringModel = espnScoringProfilesFromRows(data.standings);
     standings = data.standings.map((s) => {
       const neutral = modelWinPct({
+        sport: "nfl",
         pointsFor: s.pointsFor, pointsAgainst: s.pointsAgainst,
         wins: s.wins, losses: s.losses, ties: s.ties, exponent: 2.37,
         form: formMap?.[s.team] ?? null,
@@ -2920,6 +2929,7 @@ async function loadNcaafOverview(week?: number, ctx?: Ctx): Promise<z.infer<type
     scoringModel = espnScoringProfilesFromRows(data.standings);
     standings = data.standings.map((s) => {
       const neutral = modelWinPct({
+        sport: "ncaaf",
         pointsFor: s.pointsFor, pointsAgainst: s.pointsAgainst,
         wins: s.wins, losses: s.losses, ties: s.ties, exponent: 2.37,
         form: formMap?.[s.team] ?? null,
@@ -3457,6 +3467,7 @@ async function loadNbaOverview(ctx?: Ctx, dateStr?: string): Promise<z.infer<typ
     scoringModel = espnScoringProfilesFromRows(data.standings);
     standings = data.standings.map((s) => {
       const neutral = modelWinPct({
+        sport: "nba",
         pointsFor: s.pointsFor, pointsAgainst: s.pointsAgainst,
         wins: s.wins, losses: s.losses, exponent: 13.91,
         form: formMap?.[s.team] ?? null,
@@ -3772,7 +3783,13 @@ function soccerBlendedProbabilities(
   const homeDefense = soccerVenueBlend(hr.defense, homeVenue.goalsFor, homeVenue.goalsAgainst, homeVenue.games, false, leagueCtx.avgGoals);
   const awayAttack = soccerVenueBlend(ar.attack, awayVenue.goalsFor, awayVenue.goalsAgainst, awayVenue.games, true, leagueCtx.avgGoals);
   const awayDefense = soccerVenueBlend(ar.defense, awayVenue.goalsFor, awayVenue.goalsAgainst, awayVenue.games, false, leagueCtx.avgGoals);
-  return soccerMatchProbabilities(homeAttack, homeDefense, awayAttack, awayDefense, leagueCtx.avgHome, leagueCtx.avgAway);
+  const raw = soccerMatchProbabilities(homeAttack, homeDefense, awayAttack, awayDefense, leagueCtx.avgHome, leagueCtx.avgAway);
+  // Learning layer: shade the three-way by soccer's fitted calibration
+  // correction (identity until the graded sample earns it), renormalized.
+  const adj = (p: number): number => applyCalibration("soccer", p) ?? p;
+  const h = adj(raw.home), d = adj(raw.draw), a = adj(raw.away);
+  const sum = h + d + a;
+  return sum > 0 ? { ...raw, home: h / sum, draw: d / sum, away: a / sum } : raw;
 }
 
 async function loadSoccerOverview(ctx: Ctx, league: SoccerLeagueParam, dateStr?: string): Promise<z.infer<typeof soccerOverviewResponse>> {
@@ -5614,6 +5631,20 @@ const trackRecordResponse = z.object({
   trackedTotal: z.number(),
 });
 
+// Learning log: the public audit trail of the model's weekly self-review.
+// Each run records, per sport, how many graded picks fed it, the correction
+// weight in force (0 while measuring), and a plain-language headline naming
+// the biggest bias found. See learning.ts for the guardrails.
+const learningLogResponse = z.object({
+  runs: z.array(z.object({
+    id: z.number(), createdAt: z.string(), sport: z.string(),
+    gradedPicks: z.number(), weight: z.number(), status: z.string(), headline: z.string(),
+  })),
+  sports: z.array(z.object({
+    sport: z.string(), gradedPicks: z.number(), weight: z.number(), status: z.string(),
+  })),
+});
+
 // Model calibration: the learning readout. Graded live picks are bucketed by
 // the confidence the model stated on its pick; each bucket shows how often the
 // model actually won. A well-calibrated model wins ~62% of the games it prices
@@ -5672,6 +5703,11 @@ const trackerStatusResponse = z.object({
   lastSnapshotAt: z.string().nullable(),
   lastGradedAt: z.string().nullable(),
   bySport: z.array(z.object({ sport: z.string(), pending: z.number(), graded: z.number() })),
+  // Which database is actually live this boot. "turso" is the persistent
+  // cloud store; "local" is the throwaway file — if local shows up while
+  // Turso is configured, snapshots are at risk and dbNote says why.
+  dbSource: z.enum(["turso", "local"]),
+  dbNote: z.string().nullable(),
 });
 
 async function loadTrackerStatus(ctx: Ctx): Promise<z.infer<typeof trackerStatusResponse>> {
@@ -5697,6 +5733,8 @@ async function loadTrackerStatus(ctx: Ctx): Promise<z.infer<typeof trackerStatus
     lastSnapshotAt: maxDate(rows.map((r) => r.snapshotAt)),
     lastGradedAt: maxDate(rows.map((r) => r.gradedAt)),
     bySport: Object.entries(bySport).map(([sport, v]) => ({ sport, ...v })),
+    dbSource,
+    dbNote,
   };
 }
 
@@ -5813,7 +5851,7 @@ async function loadTrackRecord(ctx: Ctx): Promise<z.infer<typeof trackRecordResp
 
 export const Actions = {
   getDashboard: defineAction({ request: z.object({ sport: z.enum(sports).default("nhl") }), response: dashboardResponse, async handler(ctx, args) { return loadDashboard(ctx, args.sport); } }),
-  refreshDaily: defineAction({ request: z.object({}), response: z.object({ status: z.enum(["success", "partial", "failed"]), message: z.string(), rowCount: z.number(), snapshotDate: z.string() }), async handler(ctx) { const result = await refresh(ctx); try { const tr = await snapshotTrackRecord(ctx); console.log(`[track-record] daily refresh: snapshotted=${tr.snapshotted} graded=${tr.graded}`); } catch (e) { console.error("[track-record] snapshotTrackRecord failed in daily refresh:", e instanceof Error ? e.message : e); } try { await fetchHotStreaks(ctx, true); } catch { /* Keep odds refresh independent of free NHL insight refresh. */ } try { await fetchNflHotStreaks(ctx, true); } catch { /* Same for the NFL leg. */ } try { await fetchColdStreaks(ctx, true); } catch { /* Cold streaks refresh with the same daily job. */ } try { await fetchNflColdStreaks(ctx, true); } catch { /* Same for the NFL leg. */ } try { await fetchNcaafHotStreaks(ctx, true); } catch { /* Same for the NCAAF leg. */ } try { await fetchNcaafColdStreaks(ctx, true); } catch { /* Same for the NCAAF leg. */ } try { await fetchNbaHotStreaks(ctx, true); } catch { /* Same for the NBA leg. */ } try { await fetchNbaColdStreaks(ctx, true); } catch { /* Same for the NBA leg. */ } try { await fetchLikelyScorers(ctx, "nhl", true); } catch { /* Likely scorers warm with the same daily job. */ } try { await fetchLikelyScorers(ctx, "nfl", true); } catch { /* Same for the NFL leg. */ } try { await fetchLikelyScorers(ctx, "ncaaf", true); } catch { /* Same for the NCAAF leg. */ } try { await fetchLikelyScorers(ctx, "nba", true); } catch { /* Same for the NBA leg. */ } try { await warmNflForm(ctx); } catch { /* Flip % v2 form warms with the same daily job. */ } try { await warmNcaafForm(ctx); } catch { /* Same for the NCAAF leg. */ } try { await warmNbaForm(ctx); } catch { /* Same for the NBA leg. */ } try { await fetchKeyInjuries(ctx, "nfl", true); } catch { /* Injury warnings warm with the same daily job. */ } try { await fetchKeyInjuries(ctx, "ncaaf", true); } catch { /* Same for the NCAAF leg. */ } try { await fetchKeyInjuries(ctx, "nba", true); } catch { /* Same for the NBA leg. */ } try { await fetchKeyInjuries(ctx, "nhl", true); } catch { /* Same for the NHL leg. */ } try { await fetchKeyInjuries(ctx, "soccer", true, "mls"); } catch { /* Same for the MLS leg. */ } try { await fetchKeyInjuries(ctx, "soccer", true, "epl"); } catch { /* Same for the EPL leg. */ } try { await fetchLikelyScorers(ctx, "soccer", true, "mls"); } catch { /* Same for the MLS leg. */ } try { await fetchLikelyScorers(ctx, "soccer", true, "epl"); } catch { /* Same for the EPL leg. */ } try { await fetchSoccerHotStreaks(ctx, "mls", true); } catch { /* Same for the MLS leg. */ } try { await fetchSoccerHotStreaks(ctx, "epl", true); } catch { /* Same for the EPL leg. */ } try { await fetchSoccerColdStreaks(ctx, "mls", true); } catch { /* Same for the MLS leg. */ } try { await fetchSoccerColdStreaks(ctx, "epl", true); } catch { /* Same for the EPL leg. */ } try { await loadSoccerStandings(ctx, "mls"); } catch { /* Standings warm with the same daily job. */ } try { await loadSoccerStandings(ctx, "epl"); } catch { /* Same for the EPL leg. */ } return result; } }),
+  refreshDaily: defineAction({ request: z.object({}), response: z.object({ status: z.enum(["success", "partial", "failed"]), message: z.string(), rowCount: z.number(), snapshotDate: z.string() }), async handler(ctx) { const result = await refresh(ctx); try { await ensureCalibrationLoaded(); } catch { /* learning cache warms opportunistically; identity is the safe default */ } try { const tr = await snapshotTrackRecord(ctx); console.log(`[track-record] daily refresh: snapshotted=${tr.snapshotted} graded=${tr.graded}`); } catch (e) { console.error("[track-record] snapshotTrackRecord failed in daily refresh:", e instanceof Error ? e.message : e); } try { const lc = await runLearningCycle(); if (lc.ran) console.log("[learning] weekly learning cycle ran in daily refresh"); } catch (e) { console.error("[learning] cycle failed in daily refresh:", e instanceof Error ? e.message : e); } try { await fetchHotStreaks(ctx, true); } catch { /* Keep odds refresh independent of free NHL insight refresh. */ } try { await fetchNflHotStreaks(ctx, true); } catch { /* Same for the NFL leg. */ } try { await fetchColdStreaks(ctx, true); } catch { /* Cold streaks refresh with the same daily job. */ } try { await fetchNflColdStreaks(ctx, true); } catch { /* Same for the NFL leg. */ } try { await fetchNcaafHotStreaks(ctx, true); } catch { /* Same for the NCAAF leg. */ } try { await fetchNcaafColdStreaks(ctx, true); } catch { /* Same for the NCAAF leg. */ } try { await fetchNbaHotStreaks(ctx, true); } catch { /* Same for the NBA leg. */ } try { await fetchNbaColdStreaks(ctx, true); } catch { /* Same for the NBA leg. */ } try { await fetchLikelyScorers(ctx, "nhl", true); } catch { /* Likely scorers warm with the same daily job. */ } try { await fetchLikelyScorers(ctx, "nfl", true); } catch { /* Same for the NFL leg. */ } try { await fetchLikelyScorers(ctx, "ncaaf", true); } catch { /* Same for the NCAAF leg. */ } try { await fetchLikelyScorers(ctx, "nba", true); } catch { /* Same for the NBA leg. */ } try { await warmNflForm(ctx); } catch { /* Flip % v2 form warms with the same daily job. */ } try { await warmNcaafForm(ctx); } catch { /* Same for the NCAAF leg. */ } try { await warmNbaForm(ctx); } catch { /* Same for the NBA leg. */ } try { await fetchKeyInjuries(ctx, "nfl", true); } catch { /* Injury warnings warm with the same daily job. */ } try { await fetchKeyInjuries(ctx, "ncaaf", true); } catch { /* Same for the NCAAF leg. */ } try { await fetchKeyInjuries(ctx, "nba", true); } catch { /* Same for the NBA leg. */ } try { await fetchKeyInjuries(ctx, "nhl", true); } catch { /* Same for the NHL leg. */ } try { await fetchKeyInjuries(ctx, "soccer", true, "mls"); } catch { /* Same for the MLS leg. */ } try { await fetchKeyInjuries(ctx, "soccer", true, "epl"); } catch { /* Same for the EPL leg. */ } try { await fetchLikelyScorers(ctx, "soccer", true, "mls"); } catch { /* Same for the MLS leg. */ } try { await fetchLikelyScorers(ctx, "soccer", true, "epl"); } catch { /* Same for the EPL leg. */ } try { await fetchSoccerHotStreaks(ctx, "mls", true); } catch { /* Same for the MLS leg. */ } try { await fetchSoccerHotStreaks(ctx, "epl", true); } catch { /* Same for the EPL leg. */ } try { await fetchSoccerColdStreaks(ctx, "mls", true); } catch { /* Same for the MLS leg. */ } try { await fetchSoccerColdStreaks(ctx, "epl", true); } catch { /* Same for the EPL leg. */ } try { await loadSoccerStandings(ctx, "mls"); } catch { /* Standings warm with the same daily job. */ } try { await loadSoccerStandings(ctx, "epl"); } catch { /* Same for the EPL leg. */ } return result; } }),
   getNhlOverview: defineAction({ request: z.object({}), response: nhlOverviewResponse, async handler(ctx) { return loadNhlOverview(undefined, ctx); } }),
   getFirstGoalMatchup: defineAction({ request: z.object({ awayTeam: z.enum(teamCodes), homeTeam: z.enum(teamCodes), force: z.boolean().default(false) }).refine((value) => value.awayTeam !== value.homeTeam, { message: "Choose two different teams" }), response: firstGoalMatchupResponse, async handler(ctx, args) { return loadFirstGoalMatchup(ctx, args.awayTeam, args.homeTeam, args.force); } }),
   getHotStreaks: defineAction({ request: z.object({ force: z.boolean().default(false) }), response: hotStreaksResponse, async handler(ctx, args) { return fetchHotStreaks(ctx, args.force); } }),
@@ -5899,6 +5937,7 @@ export const Actions = {
   getSoccerPlayerGameLog: defineAction({ request: z.object({ league: z.enum(soccerLeagues), team: z.string(), playerId: z.number().int().positive() }), response: soccerGameLogResponse, async handler(ctx, args) { return loadSoccerPlayerGameLog(ctx, args.league, args.team, args.playerId); } }),
   getPremiumBoard: defineAction({ request: z.object({ sport: z.enum(sports) }), response: premiumResponse, async handler(ctx, args) { return loadPremium(ctx, args.sport); } }),
   getTrackRecord: defineAction({ request: z.object({}), response: trackRecordResponse, async handler(ctx) { return loadTrackRecord(ctx); } }),
+  getLearningLog: defineAction({ request: z.object({}), response: learningLogResponse, async handler() { return getLearningLogData(); } }),
   getCalibration: defineAction({ request: z.object({}), response: calibrationResponse, async handler(ctx) { return loadCalibration(ctx); } }),
   getTrackerStatus: defineAction({ request: z.object({ adminToken: adminTokenSchema }), response: trackerStatusResponse, async handler(ctx, args) { requireAdmin(args); return loadTrackerStatus(ctx); } }),
   getAdminStatus: defineAction({ request: z.object({}), response: z.object({ configured: z.boolean() }), async handler() { return { configured: !!process.env.ADMIN_TOKEN?.trim() }; } }),

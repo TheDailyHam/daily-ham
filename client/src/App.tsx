@@ -892,6 +892,33 @@ function DailyCountsSection({ data }: { data: TrackRecord }) {
   </section>;
 }
 
+type LearningLog = ApiResponse<typeof api, "getLearningLog">;
+
+function LearningLogSection() {
+  const log = useQuery({
+    queryKey: ["learning-log"],
+    queryFn: () => api.getLearningLog(),
+    staleTime: 5 * 60 * 1000,
+    retry: 1,
+  });
+  const data = log.data;
+  return <section className="record-learning" aria-label="Learning log — how the model learns">
+    <div className="section-heading"><div><p className="kicker">THE BRAIN</p><h3>How the model learns</h3></div></div>
+    <p className="mvb-note">Once a week the model reviews its own graded picks, sport by sport, and measures where its stated confidence and reality disagree. A correction only starts applying once a sport has 50+ graded picks and the ledger has 200+ overall — before that it measures and reports, but doesn't touch the calls. Every review is logged here in plain language.</p>
+    {log.isPending ? <div className="slate-loading">Reading the learning log…</div>
+      : log.isError || !data ? <div className="history-empty"><strong>Learning log unavailable.</strong><span>Pull to refresh and try again.</span></div>
+      : data.runs.length === 0 ? <div className="history-empty"><strong>No learning cycles yet.</strong><span>The first weekly review runs once graded picks start landing.</span></div>
+      : <div className="record-list">
+        {data.runs.map((r) => (
+          <article key={r.id} className="record-row">
+            <div className="record-row-head"><strong>{plateLeagueLabel(r.sport)}</strong><span>{r.createdAt.slice(0, 10)} · {r.gradedPicks} graded picks</span><em className={`learn-status ${r.status}`}>{r.status === "adjusting" ? "Adjusting" : r.status === "measuring" ? "Measuring" : "Waiting"}</em></div>
+            <div className="record-row-body"><span>{r.headline}</span></div>
+          </article>
+        ))}
+      </div>}
+  </section>;
+}
+
 function RecordView() {
   const record = useQuery({
     queryKey: ["track-record"],
@@ -928,6 +955,7 @@ function RecordView() {
         />
         <p className="record-note">Live picks are snapshotted every morning before games, with the model's win probability and each side's best book price (vig removed for the book comparison). The model always shows its read — when its lean is slim or it disagrees with the books, the Book Read deep dive in each matchup explains what the market might be seeing. ROI assumes a flat 1 unit on every model pick at the best captured price.</p>
         <CalibrationSection />
+        <LearningLogSection />
         {data.recent.length > 0 && <section className="record-recent" aria-label="Recent graded picks">
           <div className="section-heading"><div><p className="kicker">RECEIPT</p><h3>Recent picks</h3></div></div>
           <div className="record-list">
@@ -1776,6 +1804,31 @@ function UsagePanel({ adminToken }: { adminToken: string }) {
   </section>;
 }
 
+// Database identity: which database is actually live this boot — the
+// persistent cloud store or the throwaway local fallback. Admin-only. The
+// red "LOCAL FALLBACK" state means tracker snapshots are writing to the
+// ephemeral file and will be lost on the next restart: check the Render
+// env vars (TURSO_DATABASE_URL / TURSO_AUTH_TOKEN) and the server logs.
+function DatabasePanel({ adminToken }: { adminToken: string }) {
+  const status = useQuery({ queryKey: ["tracker-status"], queryFn: () => api.getTrackerStatus({ adminToken }), staleTime: 60 * 1000, retry: 1 });
+  const live = status.data?.dbSource === "turso";
+  return <section className="credential-card usage-panel" aria-label="Private database status">
+    <div className="credential-status"><span className={"status-dot " + (live ? "configured" : "attention")} /><div><small>PRIVATE · ADMIN ONLY</small><strong>Database</strong><span>Which database is live right now. Never shown to the public.</span></div></div>
+    {status.isPending ? <p className="settings-message">Checking database…</p>
+    : status.isError || !status.data ? <p className="settings-message" role="status">Database status isn't available yet — the server update is still rolling out.</p>
+    : <>
+      {live
+        ? <p className="settings-message" role="status"><strong>Cloud database — live.</strong> Tracker snapshots and grades are writing to the persistent store.</p>
+        : <p className="settings-message" role="status"><strong>LOCAL FALLBACK — snapshots at risk.</strong> {status.data.dbNote ?? "The app is running on the throwaway database; anything written here is lost on the next restart."}</p>}
+      <div className="usage-grid">
+        <div className="usage-stat"><small>Tracked</small><strong>{status.data.liveTotal.toLocaleString()}</strong><span>live snapshots</span></div>
+        <div className="usage-stat"><small>Pending</small><strong>{status.data.pending.toLocaleString()}</strong><span>awaiting grading</span></div>
+        <div className="usage-stat"><small>Graded</small><strong>{status.data.graded.toLocaleString()}</strong><span>completed</span></div>
+      </div>
+    </>}
+  </section>;
+}
+
 function OwnerConsole() {
   const adminStatus = useQuery({ queryKey: ["admin-status"], queryFn: () => api.getAdminStatus({}), retry: false });
   const [adminToken, setAdminToken] = useState<string | null>(() => {
@@ -1816,6 +1869,7 @@ function OwnerConsole() {
     </>}
     {gateConfigured && adminToken && <HamSelectionManager adminToken={adminToken} />}
     {gateConfigured && adminToken && <UsagePanel adminToken={adminToken} />}
+    {gateConfigured && adminToken && <DatabasePanel adminToken={adminToken} />}
     {gateConfigured && adminToken && <FeedbackPanel adminToken={adminToken} />}
   </section></div>;
 }
@@ -3104,7 +3158,7 @@ export function App(){
     if (!splash) return;
     const t0 = performance.now();
     const dismiss = () => {
-      const wait = 8500 - (performance.now() - t0);
+      const wait = 1050 - (performance.now() - t0);
       if (wait > 0) { setTimeout(dismiss, wait); return; }
       splash.style.opacity = "0";
       setTimeout(() => splash.remove(), 400);

@@ -456,6 +456,7 @@ h1, h2, h3 { font-family: Rockwell, Georgia, serif; margin: 0; }
 .credential-status { display: flex; align-items: center; gap: 12px; padding-bottom: 18px; border-bottom: 1px solid var(--border); }
 .status-dot { flex: 0 0 auto; width: 14px; height: 14px; border: 2px solid var(--dim); border-radius: 50%; background: radial-gradient(circle at 35% 30%, rgba(255,255,255,.5), transparent 60%), transparent; box-shadow: inset 0 1px 2px rgba(0,0,0,.2); }
 .status-dot.configured { border-color: var(--green); background: radial-gradient(circle at 35% 30%, rgba(255,255,255,.55), transparent 55%), var(--green); box-shadow: 0 0 0 4px color-mix(in srgb, var(--green) 14%, transparent), 0 0 12px color-mix(in srgb, var(--green) 60%, transparent); }
+.status-dot.attention { border-color: var(--red); background: radial-gradient(circle at 35% 30%, rgba(255,255,255,.55), transparent 55%), var(--red); box-shadow: 0 0 0 4px color-mix(in srgb, var(--red) 14%, transparent), 0 0 12px color-mix(in srgb, var(--red) 60%, transparent); }
 .credential-status > div { display: grid; gap: 2px; }
 .credential-status small { color: var(--dim); font-size: 10px; font-weight: 900; letter-spacing: .1em; }
 .credential-status strong { font: 800 22px/1.15 Rockwell, Georgia, serif; }
@@ -2165,3 +2166,7 @@ body[data-sport="soccer"] .app-shell {
 .daily-track i { display: block; width: 100%; min-height: 3px; border-radius: 3px 3px 0 0; background: linear-gradient(180deg, var(--gold), var(--gold-deep)); }
 .daily-bar b { font-size: 11px; line-height: 1; }
 .daily-bar span { font-size: 8.5px; line-height: 1; opacity: .6; white-space: nowrap; }
+
+/* Learning log (Track Record): weekly self-review entries + status chip. */
+.learn-status { font-style: normal; font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; padding: 2px 7px; border-radius: 999px; background: color-mix(in srgb, var(--gold) 18%, transparent); white-space: nowrap; }
+.learn-status.adjusting { background: color-mix(in srgb, var(--green) 28%, transparent); }

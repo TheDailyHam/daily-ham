@@ -95,7 +95,9 @@ if (existsSync(clientDir)) {
     ownerHtml = readFileSync(join(clientDir, "index.html"), "utf8")
       .replace('rel="manifest" href="/manifest.json"', 'rel="manifest" href="/owner-manifest.json"\n    <meta name="robots" content="noindex, nofollow" />')
       .replace('<meta name="theme-color" content="#14100b" />', '<meta name="theme-color" content="#1a1410" />')
-      .replace("<title>The Daily Ham — NHL, NFL, NBA & Soccer · Fresh Cuts Daily</title>", "<title>Daily Ham Owner — Private Console</title>");
+      .replace("<title>The Daily Ham — NHL, NFL, NBA & Soccer · Fresh Cuts Daily</title>", "<title>Daily Ham Owner — Private Console</title>")
+      .replace("<h1>The Daily Ham</h1>", "<h1>Daily Ham Owner</h1>")
+      .replace("<p>Fresh Cuts Daily</p>", "<p>Private Console</p>");
   } catch { ownerHtml = null; /* fall through to the stock shell */ }
   app.get(/^(?!\/api\/).*/, (req, res) => {
     const isOwner = req.path === "/owner" || req.path.startsWith("/owner/");
