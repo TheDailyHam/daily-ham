@@ -6414,7 +6414,12 @@ export const Actions = {
   getTrackRecord: defineAction({ request: z.object({}), response: trackRecordResponse, async handler(ctx) { return loadTrackRecord(ctx); } }),
   getLearningLog: defineAction({ request: z.object({}), response: learningLogResponse, async handler() { return getLearningLogData(); } }),
   checkSlip: defineAction({ request: z.object({ legs: z.array(slipLegSchema).min(1).max(20) }), response: checkSlipResponse, async handler(ctx, args) { return analyzeSlip(ctx, args.legs); } }),
-  ocrSlipPhoto: defineAction({ request: z.object({ imageBase64: z.string().min(100).max(12000000) }), response: z.object({ text: z.string() }), async handler(_ctx, args) { const buf = Buffer.from(args.imageBase64, "base64"); if (buf.length === 0 || buf.length > 8 * 1024 * 1024) throw new Error("That image couldn't be read — try a screenshot of the slip instead of a full-resolution photo."); return { text: await recognizeSlipText(buf) }; } }),
+  // DISABLED 2026-10-22: in-process tesseract on this hosting tier OOM-
+  // crashes the whole app on real photos (proven in production: repeated
+  // 502s + restart loop under test). The action stays registered so the
+  // shipped client gets a clean answer instead of a dead endpoint, but it
+  // never runs OCR. Photo reading moves to self-hosted on-device assets.
+  ocrSlipPhoto: defineAction({ request: z.object({ imageBase64: z.string().min(1).max(12000000) }), response: z.object({ text: z.string() }), async handler() { throw new Error("Photo reading is being upgraded right now — for the moment, add the legs by hand below (it only takes a minute)."); } }),
   getCalibration: defineAction({ request: z.object({}), response: calibrationResponse, async handler(ctx) { return loadCalibration(ctx); } }),
   getTrackerStatus: defineAction({ request: z.object({ adminToken: adminTokenSchema }), response: trackerStatusResponse, async handler(ctx, args) { requireAdmin(args); return loadTrackerStatus(ctx); } }),
   getAdminStatus: defineAction({ request: z.object({}), response: z.object({ configured: z.boolean() }), async handler() { return { configured: !!process.env.ADMIN_TOKEN?.trim() }; } }),
