@@ -11,7 +11,7 @@ import { api, type ApiRequest, type ApiResponse, type KeyInjuries, type KeyInjur
 import logo from "./assets/daily-ham-logo.jpg";
 import { EPL_TEAM_THEMES, LEAGUE_THEMES, MLS_TEAM_THEMES, NBA_TEAM_THEMES, SOCCER_LEAGUES, applyLeagueTheme, loadFavorites, saveFavorite, soccerLeagueForTeam, themeFor, type League, type LeagueFavorites } from "./teams";
 import { isWatchedPlayer, isWatchedTeam, loadWatchlist, removeWatchedEntry, toggleWatch, type WatchedEntry, type WatchedPlayer, type WatchedTeam } from "./watchlist";
-import { detectSlipTeams, mergeSlipDrafts, parseParlayList, parseSlipText, type SlipCandidate, type SlipComparator, type SlipDirectory, type SlipDraftV2 } from "./slipParse";
+import { mergeSlipDrafts, parseParlayList, parseSlipText, type SlipCandidate, type SlipComparator, type SlipDirectory, type SlipDraftV2 } from "./slipParse";
 
 type Sport = League;
 type Mode = "board" | "matchup" | "rosters" | "streaks" | "standings" | "watchlist" | "parlay" | "settings" | "jamon" | "record" | "slipcheck";
@@ -746,6 +746,7 @@ interface SlipRow {
   stat: string; threshold: string; comparator: SlipRowComparator; price: string;
   winTeam: string;
   label: string;
+  unresolved?: boolean;
 }
 type SlipResult = Awaited<ReturnType<typeof api.checkSlip>>;
 const SLIPCHECK_KEY = "dh-slipcheck-v2";
@@ -880,7 +881,7 @@ function SlipCheckView({ sport, soccerLeague }: { sport: Sport; soccerLeague: So
     const base = { sport: r.sport, ...(r.sport === "soccer" ? { league: r.league } : {}), price: priceOf(r.price), gameAway: r.away, gameHome: r.home };
     if (r.kind === "winner") return { ...base, kind: "winner" as const, team: r.winTeam };
     if (r.kind === "total") return { ...base, kind: "total" as const, team: r.away, threshold: Number(r.threshold), comparator: r.comparator };
-    if (r.kind === "market") return { ...base, kind: "market" as const, team: r.team || r.home, label: r.label };
+    if (r.kind === "market") return { ...base, kind: "market" as const, team: r.team || r.home, label: r.label.slice(0, 200) };
     return { ...base, kind: "prop" as const, team: r.team || (r.side === "away" ? r.away : r.home), playerId: r.playerId!, playerName: r.playerName || "Unknown player", stat: r.stat, threshold: Number(r.threshold), comparator: r.comparator };
   });
   const check = useMutation({
@@ -891,6 +892,26 @@ function SlipCheckView({ sport, soccerLeague }: { sport: Sport; soccerLeague: So
   const gradeRows = (list: SlipRow[]) => { const legs = legsFromRows(list); if (legs.length > 0) check.mutate(legs); };
 
   const statLabelOf = (s: Sport, key: string) => SLIP_STATS[s].find((x) => x.key === key)?.label ?? key;
+
+  // Match a photo-read name against a game's real roster: exact name,
+  // then the name minus a leading OCR junk token ("Tir David Pastrnak"),
+  // then a unique last name. Diacritics fold (Stützle -> stutzle).
+  const matchPlayer = (cands: SlipCandidate[], rawName: string): SlipCandidate | null => {
+    const norm = (x: string) => x.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[.'’]/g, "").replace(/\s+/g, " ").trim();
+    const target = norm(rawName);
+    const exact = cands.find((c) => norm(c.name) === target);
+    if (exact) return exact;
+    const parts = target.split(" ");
+    if (parts.length >= 3) {
+      const dropped = parts.slice(1).join(" ");
+      const hit = cands.find((c) => norm(c.name) === dropped);
+      if (hit) return hit;
+    }
+    const last = parts.filter((x) => !["jr", "sr", "ii", "iii", "iv"].includes(x)).pop() ?? "";
+    if (last.length < 4) return null;
+    const byLast = cands.filter((c) => (norm(c.name).split(" ").pop() ?? "") === last);
+    return byLast.length === 1 ? byLast[0]! : null;
+  };
 
   const onPhotos = async (files: File[]) => {
     if (files.length === 0) return;
@@ -920,23 +941,12 @@ function SlipCheckView({ sport, soccerLeague }: { sport: Sport; soccerLeague: So
         const key = `${g.sport}:${g.league}:${g.away}@${g.home}`;
         try {
           const [ra, rb] = await Promise.all([
-            queryClient.fetchQuery({ queryKey: ["slip-roster", g.sport, g.league, g.away], queryFn: () => fetchSlipRoster(g.sport, g.away, g.league), staleTime: 15 * 60 * 1000, retry: 1 }),
-            queryClient.fetchQuery({ queryKey: ["slip-roster", g.sport, g.league, g.home], queryFn: () => fetchSlipRoster(g.sport, g.home, g.league), staleTime: 15 * 60 * 1000, retry: 1 }),
+            queryClient.fetchQuery({ queryKey: ["slip-roster", g.sport, g.league, g.away], queryFn: () => fetchSlipRoster(g.sport, g.away, g.league), staleTime: 15 * 60 * 1000, retry: 2 }),
+            queryClient.fetchQuery({ queryKey: ["slip-roster", g.sport, g.league, g.home], queryFn: () => fetchSlipRoster(g.sport, g.home, g.league), staleTime: 15 * 60 * 1000, retry: 2 }),
           ]);
           candidatesByGame.set(key, [...ra.map((p) => ({ id: p.id, name: p.name, team: g.away })), ...rb.map((p) => ({ id: p.id, name: p.name, team: g.home }))]);
         } catch { rosterFailed.add(key); }
       }
-      const matchPlayer = (cands: SlipCandidate[], rawName: string): SlipCandidate | null => {
-        const norm = (s: string) => s.toLowerCase().replace(/[.'’]/g, "").replace(/\s+/g, " ").trim();
-        const target = norm(rawName);
-        const exact = cands.find((c) => norm(c.name) === target);
-        if (exact) return exact;
-        const last = target.split(" ").filter((p) => !["jr", "sr", "ii", "iii", "iv"].includes(p)).pop() ?? "";
-        if (last.length < 4) return null;
-        const byLast = cands.filter((c) => (norm(c.name).split(" ").pop() ?? "") === last);
-        return byLast.length === 1 ? byLast[0]! : null;
-      };
-
       const newRows: SlipRow[] = [];
       const propKey = (sportK: string, away: string, home: string, pid: number, stat: string, th: number, cmp: string) => `${sportK}:${away}@${home}:${pid}:${stat}:${th}:${cmp}`;
       const seenProps = new Set<string>();
@@ -948,17 +958,18 @@ function SlipCheckView({ sport, soccerLeague }: { sport: Sport; soccerLeague: So
       };
       for (const d of merged) {
         if (d.kind === "winner" && d.away && d.home && d.team) {
-          newRows.push({ ...baseRow(), kind: "winner", sport: d.sport, league: d.league ?? "mls", away: d.away, home: d.home, winTeam: d.team, price: d.price !== null ? String(d.price) : "", label: d.label });
+          newRows.push({ ...baseRow(), kind: "winner", sport: d.sport, league: d.league ?? "mls", away: d.away, home: d.home, winTeam: d.team, price: d.price !== null ? String(d.price) : "", label: d.label.slice(0, 200) });
         } else if (d.kind === "total" && d.away && d.home && d.threshold !== undefined && d.comparator) {
-          newRows.push({ ...baseRow(), kind: "total", sport: d.sport, league: d.league ?? "mls", away: d.away, home: d.home, threshold: String(d.threshold), comparator: d.comparator === "lte" ? "lt" : d.comparator, price: d.price !== null ? String(d.price) : "", label: d.label });
+          newRows.push({ ...baseRow(), kind: "total", sport: d.sport, league: d.league ?? "mls", away: d.away, home: d.home, threshold: String(d.threshold), comparator: d.comparator === "lte" ? "lt" : d.comparator, price: d.price !== null ? String(d.price) : "", label: d.label.slice(0, 200) });
         } else if (d.kind === "market") {
-          newRows.push({ ...baseRow(), kind: "market", sport: d.sport, league: d.league ?? "mls", away: d.away ?? "", home: d.home ?? "", team: d.team ?? "", price: d.price !== null ? String(d.price) : "", label: d.label });
+          newRows.push({ ...baseRow(), kind: "market", sport: d.sport, league: d.league ?? "mls", away: d.away ?? "", home: d.home ?? "", team: d.team ?? "", price: d.price !== null ? String(d.price) : "", label: d.label.slice(0, 200) });
         } else if (d.kind === "prop" && d.away && d.home && d.stat && d.threshold !== undefined && d.comparator) {
           const key = `${d.sport}:${d.league ?? "mls"}:${d.away}@${d.home}`;
           const cands = candidatesByGame.get(key);
           const hit = cands && d.playerName ? matchPlayer(cands, d.playerName) : null;
           if (hit) pushProp(d.sport, d.league ?? "mls", d.away, d.home, hit, d.stat, d.threshold, d.comparator, d.price);
-          else newRows.push({ ...baseRow(), kind: "market", sport: d.sport, league: d.league ?? "mls", away: d.away, home: d.home, price: d.price !== null ? String(d.price) : "", label: `${d.playerName ?? "A player"} — ${statLabelOf(d.sport, d.stat)} · ${d.away} @ ${d.home} — ${rosterFailed.has(key) ? "the roster feed didn't answer, so this leg rides unchecked" : "the name couldn't be matched to a roster, so this leg rides unchecked; add the player by hand below to grade him"}` });
+          else if (rosterFailed.has(key)) newRows.push({ ...baseRow(), sport: d.sport, league: d.league ?? "mls", away: d.away, home: d.home, side: "away", playerId: null, playerName: d.playerName ?? "A player", stat: d.stat, threshold: String(d.threshold), comparator: d.comparator === "lte" ? "lt" : d.comparator, price: d.price !== null ? String(d.price) : "", unresolved: true });
+          else newRows.push({ ...baseRow(), kind: "market", sport: d.sport, league: d.league ?? "mls", away: d.away, home: d.home, price: d.price !== null ? String(d.price) : "", label: `${d.playerName ?? "A player"} — ${statLabelOf(d.sport, d.stat)} · ${d.away} @ ${d.home} (name didn't match a roster — rides unchecked)` });
         }
       }
       // Detailed prop-slip layout (name + line stacked per leg): one pass
@@ -976,11 +987,52 @@ function SlipCheckView({ sport, soccerLeague }: { sport: Sport; soccerLeague: So
       const allRows = [...manualRows, ...newRows];
       setRows(allRows);
       const gameCount = gameKeys.size;
-      setNotice(`Read ${newRows.length} leg${newRows.length === 1 ? "" : "s"} from your photo${files.length > 1 ? "s" : ""}${gameCount > 1 ? ` across ${gameCount} games` : ""}. Grading them now — if any row doesn't match your slip, fix it and run the check again.`);
+      const un = newRows.filter((r) => r.unresolved).length;
+      setNotice(`Read ${newRows.length} leg${newRows.length === 1 ? "" : "s"} from your photo${files.length > 1 ? "s" : ""}${gameCount > 1 ? ` across ${gameCount} games` : ""}.${un > 0 ? ` The roster feed didn't answer for ${un} player leg${un === 1 ? "" : "s"} — they're held as unmatched below; tap "Retry matching" in a minute and they'll grade.` : " Grading them now — if any row doesn't match your slip, fix it and run the check again."}`);
       gradeRows(allRows);
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "The photo read failed — build the slip by hand below.");
     } finally { setOcrBusy(false); }
+  };
+
+  const [manualOpen, setManualOpen] = useState(false);
+  const [matching, setMatching] = useState(false);
+  const unresolvedCount = rows.filter((r) => r.unresolved).length;
+  // The roster feed throttles in bursts; legs drafted while it was down
+  // wait as unmatched props instead of being demoted to unchecked
+  // market legs. One tap re-runs the matching when the feed recovers.
+  const retryMatching = async () => {
+    const pending = rows.filter((r) => r.unresolved);
+    if (pending.length === 0 || matching) return;
+    setMatching(true);
+    try {
+      const games = new Map<string, { sport: Sport; league: SoccerLeague; away: string; home: string }>();
+      for (const r of pending) games.set(`${r.sport}:${r.league}:${r.away}@${r.home}`, { sport: r.sport, league: r.league, away: r.away, home: r.home });
+      const candsByKey = new Map<string, SlipCandidate[]>();
+      const failed = new Set<string>();
+      for (const g of games.values()) {
+        const key = `${g.sport}:${g.league}:${g.away}@${g.home}`;
+        try {
+          const [ra, rb] = await Promise.all([
+            queryClient.fetchQuery({ queryKey: ["slip-roster", g.sport, g.league, g.away], queryFn: () => fetchSlipRoster(g.sport, g.away, g.league), staleTime: 15 * 60 * 1000, retry: 2 }),
+            queryClient.fetchQuery({ queryKey: ["slip-roster", g.sport, g.league, g.home], queryFn: () => fetchSlipRoster(g.sport, g.home, g.league), staleTime: 15 * 60 * 1000, retry: 2 }),
+          ]);
+          candsByKey.set(key, [...ra.map((x) => ({ id: x.id, name: x.name, team: g.away })), ...rb.map((x) => ({ id: x.id, name: x.name, team: g.home }))]);
+        } catch { failed.add(key); }
+      }
+      let resolved = 0;
+      const next = rows.map((r) => {
+        if (!r.unresolved) return r;
+        const cands = candsByKey.get(`${r.sport}:${r.league}:${r.away}@${r.home}`);
+        const hit = cands ? matchPlayer(cands, r.playerName) : null;
+        if (!hit) return r;
+        resolved++;
+        return { ...r, playerId: hit.id, playerName: hit.name, team: hit.team, side: (hit.team === r.home ? "home" : "away") as "away" | "home", unresolved: false };
+      });
+      setRows(next);
+      if (resolved > 0) { setNotice(`Matched ${resolved} player leg${resolved === 1 ? "" : "s"} — grading the slip now.`); gradeRows(next); }
+      else setNotice(failed.size > 0 ? "The roster feed still isn't answering — give it another minute and try once more. The legs stay saved here meanwhile." : "The rosters answered but none of the names matched — those legs may be written differently on your slip; you can fix them by hand.");
+    } finally { setMatching(false); }
   };
 
   const gradeableCount = rows.filter(rowGradeable).length;
@@ -990,6 +1042,7 @@ function SlipCheckView({ sport, soccerLeague }: { sport: Sport; soccerLeague: So
     <div className="roster-title"><div><p className="kicker">SLIP CHECK</p><h2>Check a slip you already built</h2><p className="roster-intro">Snap a photo of a parlay from any sportsbook — every leg gets a read: player props against the player's real game log, winner picks against the model's win estimate, game totals against the model's projection, and your price held up against the evidence on every one. Legs the app has no data for are shown and marked unchecked — never silently dropped, never fake-graded.</p></div><span>{rows.length} legs</span></div>
 
     <div className="slip-card">
+      {manualOpen && <>
       <div className="slip-head"><div><p className="kicker">ADD BY HAND</p><h3>Working game</h3></div></div>
       <form className="matchup-form" onSubmit={(e) => e.preventDefault()}>
         <label>Away team<select value={awayTeam} onChange={(e) => pickGame("away", e.target.value)}>{teamList.map((t) => <option key={t.code} value={t.code}>{t.name}</option>)}</select></label>
@@ -997,15 +1050,18 @@ function SlipCheckView({ sport, soccerLeague }: { sport: Sport; soccerLeague: So
         <label>Home team<select value={homeTeam} onChange={(e) => pickGame("home", e.target.value)}>{teamList.map((t) => <option key={t.code} value={t.code}>{t.name}</option>)}</select></label>
       </form>
       {awayTeam === homeTeam && <p className="calculator-note error" role="alert">Choose two different teams for hand-built legs.</p>}
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+        <button type="button" className="refresh" onClick={addPropRow}>+ Player prop</button>
+        <button type="button" className="refresh" onClick={addWinnerRow}>+ Winner pick</button>
+        <button type="button" className="refresh" onClick={addTotalRow}>+ Game total</button>
+      </div>
+      </>}
 
-      <div className="slip-head" style={{ marginTop: 14 }}><div><p className="kicker">THE SLIP</p><h3>Your legs</h3></div>
-        <div>
-          <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(e) => { const fs = Array.from(e.target.files ?? []); if (fs.length > 0) void onPhotos(fs); e.target.value = ""; }} />
-          <button type="button" className="refresh" disabled={ocrBusy} onClick={() => fileRef.current?.click()}>{ocrBusy ? "Reading photo…" : "📷 Read slip photos"}</button>{" "}
-          <button type="button" className="refresh" onClick={addPropRow}>+ Player prop</button>{" "}
-          <button type="button" className="refresh" onClick={addWinnerRow}>+ Winner pick</button>{" "}
-          <button type="button" className="refresh" onClick={addTotalRow}>+ Game total</button>
-        </div>
+      <div className="slip-head" style={{ marginTop: 6 }}><div><p className="kicker">THE SLIP</p><h3>Your legs</h3></div></div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "8px 0" }}>
+        <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(e) => { const fs = Array.from(e.target.files ?? []); if (fs.length > 0) void onPhotos(fs); e.target.value = ""; }} />
+        <button type="button" className="refresh" style={{ flex: "1 1 170px" }} disabled={ocrBusy} onClick={() => fileRef.current?.click()}>{ocrBusy ? "Reading photo…" : "📷 Read slip photos"}</button>
+        <button type="button" className="refresh" style={{ flex: "1 1 130px" }} onClick={() => setManualOpen((v) => !v)} aria-expanded={manualOpen}>{manualOpen ? "Hide hand-building" : "✋ Add legs by hand"}</button>
       </div>
       {photoUrls.length > 0 && <div style={{ display: "flex", gap: 8, overflowX: "auto", margin: "10px 0" }}>{photoUrls.map((u, i) => <img key={i} src={u} alt={`Slip photo ${i + 1}`} style={{ height: 120, borderRadius: 10 }} />)}</div>}
       {notice && <p className="calculator-note" role="status">{notice}</p>}
@@ -1014,7 +1070,14 @@ function SlipCheckView({ sport, soccerLeague }: { sport: Sport; soccerLeague: So
       <ul className="slip-legs">{rows.map((r) => <li key={r.rowId} style={{ alignItems: "flex-start" }}>
         <div style={{ flex: 1, display: "grid", gap: 6 }}>
           <small style={{ fontWeight: 700, letterSpacing: ".04em" }}>{r.kind === "winner" ? "🏆 WINNER" : r.kind === "total" ? "🎯 GAME TOTAL" : r.kind === "market" ? "❔ NO DATA READ" : "👤 PLAYER PROP"} · {rowGameTag(r)}</small>
-          {r.kind === "prop" && <>
+          {r.kind === "prop" && r.unresolved ? <>
+            <strong>{r.playerName}</strong>
+            <small>{statLabelOf(r.sport, r.stat)} · the roster feed didn't answer during the photo read, so this leg isn't matched yet.</small>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              <input inputMode="decimal" style={{ width: 84 }} value={r.threshold} onChange={(e) => patchRow(r.rowId, { threshold: e.target.value })} placeholder="Line" aria-label="Line" />
+              <input inputMode="text" style={{ width: 96 }} value={r.price} onChange={(e) => patchRow(r.rowId, { price: e.target.value })} placeholder="Price +140" aria-label="Price (optional)" />
+            </div>
+          </> : r.kind === "prop" && <>
             {r.playerId !== null ? <strong>{r.playerName} <small>({r.team})</small></strong> : <>
               <div className="segmented" role="group" aria-label="Team side">
                 <button type="button" className={r.side === "away" ? "active" : ""} onClick={() => patchRow(r.rowId, { side: "away", playerId: null, playerName: "" })}>{r.away}</button>
@@ -1051,14 +1114,15 @@ function SlipCheckView({ sport, soccerLeague }: { sport: Sport; soccerLeague: So
             <input inputMode="decimal" style={{ width: 84 }} value={r.threshold} onChange={(e) => patchRow(r.rowId, { threshold: e.target.value })} placeholder="Line 6.5" aria-label="Total line" />
             <input inputMode="text" style={{ width: 96 }} value={r.price} onChange={(e) => patchRow(r.rowId, { price: e.target.value })} placeholder="Price -110" aria-label="Price (optional)" />
           </div>}
-          {r.kind === "market" && <div style={{ display: "grid", gap: 6 }}>
-            <span>{r.label}</span>
-            <small>This market has no data feed in the app yet — the leg stays on your slip and is marked unchecked in the verdict instead of being graded on air.</small>
+          {r.kind === "market" && <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+            <span style={{ flex: "1 1 200px" }}>{r.label}</span>
             <input inputMode="text" style={{ width: 96 }} value={r.price} onChange={(e) => patchRow(r.rowId, { price: e.target.value })} placeholder="Price" aria-label="Price (optional)" />
           </div>}
         </div>
         <button type="button" className="slip-remove" onClick={() => removeRow(r.rowId)} aria-label="Remove leg">×</button>
       </li>)}</ul>}
+      {rows.length > 0 && (unresolvedCount > 0 || rows.some((r) => r.kind === "market")) && <p className="calculator-note">{unresolvedCount > 0 ? `${unresolvedCount} player leg${unresolvedCount === 1 ? "" : "s"} waiting on the roster feed to match names. ` : ""}{rows.some((r) => r.kind === "market") ? "Legs marked ❔ have no data feed in the app — they stay on the slip and show as unchecked in the verdict, never graded on air." : ""}</p>}
+      {unresolvedCount > 0 && <button type="button" className="refresh" style={{ marginBottom: 10 }} disabled={matching} onClick={() => void retryMatching()}>{matching ? "Matching names…" : `🔁 Retry matching (${unresolvedCount} leg${unresolvedCount === 1 ? "" : "s"})`}</button>}
       {rows.length > 0 && <>
         <button type="button" className="primary" disabled={gradeableCount === 0 || check.isPending} onClick={() => gradeRows(rows)}>{check.isPending ? "Checking every leg…" : `Run the check (${gradeableCount} leg${gradeableCount === 1 ? "" : "s"})`}</button>
         <button type="button" className="slip-clear" onClick={() => { setRows([]); setResult(null); photoListsRef.current = []; photoTextsRef.current = []; photoRowIdsRef.current = new Set(); setPhotoUrls([]); }}>Clear slip</button>

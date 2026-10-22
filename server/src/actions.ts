@@ -6109,7 +6109,7 @@ const slipLegSchema = z.object({
   price: z.number().int().min(-100000).max(100000).nullable().optional(),
   gameAway: z.string().min(1).max(12).optional(),
   gameHome: z.string().min(1).max(12).optional(),
-  label: z.string().max(140).optional(),
+  label: z.string().max(300).optional(),
 });
 type SlipLeg = z.infer<typeof slipLegSchema>;
 
@@ -6217,7 +6217,7 @@ async function analyzeSlipLeg(ctx: Ctx, leg: SlipLeg): Promise<z.infer<typeof sl
     // Winner/total legs are graded in analyzeSlip, where the game's model
     // environment is already loaded once (their notes need the env note
     // too). Market legs ride along honestly unread.
-    return { ...base, verdict: "nodata" as const, note: leg.kind === "market" ? "No data feed covers this market in the app yet — this leg rides unchecked, and that's said out loud rather than faked." : "Awaiting the game read." };
+    return { ...base, verdict: "nodata" as const, note: leg.kind === "market" ? "No data feed covers this market yet — this leg rides unchecked." : "Awaiting the game read." };
   }
   if (!leg.playerId || !SLIP_ALLOWED_STATS[leg.sport].includes(leg.stat)) {
     return { ...base, verdict: "nodata" as const, note: "That stat isn't tracked in this player's game log, so there's nothing honest to check this leg against." };
@@ -6275,7 +6275,7 @@ async function slipGameEnv(ctx: Ctx, sport: SlipSport, league: SoccerLeagueParam
     const homeWinPct = m.homeWinProbability ?? null;
     const projectedTotal = m.projectedTotal ?? null;
     const bookTotal = m.bookTotal ?? null;
-    let note = "The model's read on this game didn't come back — the leg reads above still stand on the game logs.";
+    let note = "Model read unavailable for this game right now.";
     if (awayWinPct !== null && homeWinPct !== null) {
       note = `Model estimate: ${away} ${slipPct(awayWinPct)} · ${home} ${slipPct(homeWinPct)}${m.drawProbability != null ? ` · draw ${slipPct(m.drawProbability)}` : ""}.`;
       if (projectedTotal !== null && bookTotal !== null) note += ` Projected total ${projectedTotal} vs the book's ${bookTotal} — the model leans ${projectedTotal < bookTotal ? "under" : projectedTotal > bookTotal ? "over" : "right at the number"}.`;
@@ -6427,8 +6427,8 @@ async function analyzeSlip(ctx: Ctx, legs: SlipLeg[]): Promise<z.infer<typeof ch
   }
   let strongestLeg: number | null = null; let weakestLeg: number | null = null;
   if (trusted.length > 0) {
-    strongestLeg = trusted.reduce((best, cur) => (cur.p > best.p ? cur : best), trusted[0]).i;
-    weakestLeg = trusted.reduce((worst, cur) => (cur.p < worst.p ? cur : worst), trusted[0]).i;
+    strongestLeg = trusted.reduce((best, cur) => (cur.p > best.p ? cur : best), trusted[0]!).i;
+    weakestLeg = trusted.reduce((worst, cur) => (cur.p < worst.p ? cur : worst), trusted[0]!).i;
   }
   return { legs: results, games, flags, combinedHitRate, combinedNote, strongestLeg, weakestLeg, fetchedAt: new Date().toISOString() };
 }
