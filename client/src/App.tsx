@@ -886,7 +886,7 @@ function SlipCheckView({ sport, soccerLeague }: { sport: Sport; soccerLeague: So
   });
   const check = useMutation({
     mutationFn: (legs: SlipLegsPayload) => api.checkSlip({ legs }),
-    onSuccess: (data) => setResult(data),
+    onSuccess: (data) => { setResult(data); setOpenLegs(new Set(data.weakestLeg !== null && data.legs.length > 1 ? [data.weakestLeg] : [])); },
     onError: (err) => setNotice(`The check didn't come back — ${err instanceof Error ? err.message : "unknown error"}. Give it a moment and run it again.`),
   });
   const gradeRows = (list: SlipRow[]) => { const legs = legsFromRows(list); if (legs.length > 0) check.mutate(legs); };
@@ -910,7 +910,9 @@ function SlipCheckView({ sport, soccerLeague }: { sport: Sport; soccerLeague: So
     const last = parts.filter((x) => !["jr", "sr", "ii", "iii", "iv"].includes(x)).pop() ?? "";
     if (last.length < 4) return null;
     const byLast = cands.filter((c) => (norm(c.name).split(" ").pop() ?? "") === last);
-    return byLast.length === 1 ? byLast[0]! : null;
+    if (byLast.length === 1) return byLast[0]!;
+    const byToken = cands.filter((c) => { const toks = norm(c.name).split(" "); return toks.includes(last) && (toks[0] ?? "").startsWith((target.split(" ")[0] ?? "").charAt(0)); });
+    return byToken.length === 1 ? byToken[0]! : null;
   };
 
   const onPhotos = async (files: File[]) => {
@@ -944,7 +946,8 @@ function SlipCheckView({ sport, soccerLeague }: { sport: Sport; soccerLeague: So
             queryClient.fetchQuery({ queryKey: ["slip-roster", g.sport, g.league, g.away], queryFn: () => fetchSlipRoster(g.sport, g.away, g.league), staleTime: 15 * 60 * 1000, retry: 2 }),
             queryClient.fetchQuery({ queryKey: ["slip-roster", g.sport, g.league, g.home], queryFn: () => fetchSlipRoster(g.sport, g.home, g.league), staleTime: 15 * 60 * 1000, retry: 2 }),
           ]);
-          candidatesByGame.set(key, [...ra.map((p) => ({ id: p.id, name: p.name, team: g.away })), ...rb.map((p) => ({ id: p.id, name: p.name, team: g.home }))]);
+          if (ra.length === 0 || rb.length === 0) rosterFailed.add(key);
+          else candidatesByGame.set(key, [...ra.map((p) => ({ id: p.id, name: p.name, team: g.away })), ...rb.map((p) => ({ id: p.id, name: p.name, team: g.home }))]);
         } catch { rosterFailed.add(key); }
       }
       const newRows: SlipRow[] = [];
@@ -996,6 +999,8 @@ function SlipCheckView({ sport, soccerLeague }: { sport: Sport; soccerLeague: So
   };
 
   const [manualOpen, setManualOpen] = useState(false);
+  const [openLegs, setOpenLegs] = useState<Set<number>>(new Set());
+  const [readsOpen, setReadsOpen] = useState(false);
   const [matching, setMatching] = useState(false);
   const unresolvedCount = rows.filter((r) => r.unresolved).length;
   // The roster feed throttles in bursts; legs drafted while it was down
@@ -1017,7 +1022,8 @@ function SlipCheckView({ sport, soccerLeague }: { sport: Sport; soccerLeague: So
             queryClient.fetchQuery({ queryKey: ["slip-roster", g.sport, g.league, g.away], queryFn: () => fetchSlipRoster(g.sport, g.away, g.league), staleTime: 15 * 60 * 1000, retry: 2 }),
             queryClient.fetchQuery({ queryKey: ["slip-roster", g.sport, g.league, g.home], queryFn: () => fetchSlipRoster(g.sport, g.home, g.league), staleTime: 15 * 60 * 1000, retry: 2 }),
           ]);
-          candsByKey.set(key, [...ra.map((x) => ({ id: x.id, name: x.name, team: g.away })), ...rb.map((x) => ({ id: x.id, name: x.name, team: g.home }))]);
+          if (ra.length === 0 || rb.length === 0) failed.add(key);
+          else candsByKey.set(key, [...ra.map((x) => ({ id: x.id, name: x.name, team: g.away })), ...rb.map((x) => ({ id: x.id, name: x.name, team: g.home }))]);
         } catch { failed.add(key); }
       }
       let resolved = 0;
@@ -1122,38 +1128,50 @@ function SlipCheckView({ sport, soccerLeague }: { sport: Sport; soccerLeague: So
         <button type="button" className="slip-remove" onClick={() => removeRow(r.rowId)} aria-label="Remove leg">×</button>
       </li>)}</ul>}
       {rows.length > 0 && (unresolvedCount > 0 || rows.some((r) => r.kind === "market")) && <p className="calculator-note">{unresolvedCount > 0 ? `${unresolvedCount} player leg${unresolvedCount === 1 ? "" : "s"} waiting on the roster feed to match names. ` : ""}{rows.some((r) => r.kind === "market") ? "Legs marked ❔ have no data feed in the app — they stay on the slip and show as unchecked in the verdict, never graded on air." : ""}</p>}
-      {unresolvedCount > 0 && <button type="button" className="refresh" style={{ marginBottom: 10 }} disabled={matching} onClick={() => void retryMatching()}>{matching ? "Matching names…" : `🔁 Retry matching (${unresolvedCount} leg${unresolvedCount === 1 ? "" : "s"})`}</button>}
-      {rows.length > 0 && <>
-        <button type="button" className="primary" disabled={gradeableCount === 0 || check.isPending} onClick={() => gradeRows(rows)}>{check.isPending ? "Checking every leg…" : `Run the check (${gradeableCount} leg${gradeableCount === 1 ? "" : "s"})`}</button>
-        <button type="button" className="slip-clear" onClick={() => { setRows([]); setResult(null); photoListsRef.current = []; photoTextsRef.current = []; photoRowIdsRef.current = new Set(); setPhotoUrls([]); }}>Clear slip</button>
-      </>}
+      {rows.length > 0 && <div className="slip-actionbar">
+        <button type="button" className="primary" style={{ flex: 1 }} disabled={gradeableCount === 0 || check.isPending} onClick={() => gradeRows(rows)}>{check.isPending ? "Checking every leg…" : `Run the check (${gradeableCount})`}</button>
+        {unresolvedCount > 0 && <button type="button" className="refresh" disabled={matching} onClick={() => void retryMatching()}>{matching ? "Matching…" : `🔁 Retry (${unresolvedCount})`}</button>}
+        <button type="button" className="slip-clear" onClick={() => { setRows([]); setResult(null); photoListsRef.current = []; photoTextsRef.current = []; photoRowIdsRef.current = new Set(); setPhotoUrls([]); }}>Clear</button>
+      </div>}
       <p className="slip-disclaimer">Prop reads come from official game logs; winner reads are the model's estimates; total reads compare the model's projection to your line. Slip Check never invents a sportsbook price — the only prices here are the ones on your slip. Slip photos are read on your device and never stored.</p>
     </div>
 
     {result && <div className="slip-card" aria-label="Slip check results">
       <div className="slip-head"><div><p className="kicker">THE VERDICT</p><h3>{result.combinedHitRate !== null ? `Combined hit-rate math: ${result.combinedHitRate < 0.01 ? "under 1%" : `${Math.round(result.combinedHitRate * 100)}%`}` : "Not enough data for combined math"}</h3></div></div>
       <p className="calculator-note">{result.combinedNote}</p>
-      {result.games.map((g) => <p key={`${g.sport}:${g.away}@${g.home}`} className="calculator-note">🏟️ <b>{g.away} @ {g.home}</b> — {g.note}</p>)}
-      {result.flags.length > 0 && <div>{result.flags.map((f, i) => <p key={i} className="calculator-note">⚑ {f.text}</p>)}</div>}
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{(["strong", "solid", "fair", "rich", "longshot", "thin", "nodata"] as const).map((v) => { const n = result.legs.filter((l) => l.verdict === v).length; if (n === 0) return null; const m = SLIP_VERDICTS[v]!; return <span key={v} style={{ background: m.bg, color: "#fff", borderRadius: 999, padding: "3px 10px", fontSize: 12, fontWeight: 700 }}>{n} {v === "nodata" ? "no data" : m.label.toLowerCase()}</span>; })}</div>
+      {(result.games.length > 0 || result.flags.length > 0) && <>
+        <button type="button" className="refresh" style={{ justifySelf: "start" }} onClick={() => setReadsOpen((v) => !v)} aria-expanded={readsOpen}>{readsOpen ? "▾" : "▸"} 🏟️ Game reads{result.flags.length > 0 ? ` & ${result.flags.length} flag${result.flags.length === 1 ? "" : "s"}` : ""}</button>
+        {readsOpen && <>
+          {result.games.map((g) => <p key={`${g.sport}:${g.away}@${g.home}`} className="calculator-note" style={{ margin: 0 }}>🏟️ <b>{g.away} @ {g.home}</b> — {g.note}</p>)}
+          {result.flags.map((f, i) => <p key={i} className="calculator-note" style={{ margin: 0 }}>⚑ {f.text}</p>)}
+        </>}
+      </>}
       <ul className="slip-legs">{result.legs.map((leg, i) => {
         const meta = (SLIP_VERDICTS[leg.verdict] ?? SLIP_VERDICTS.nodata)!;
         const title = leg.kind === "winner" ? (leg.label || `${leg.team} to win`) : leg.kind === "total" ? (leg.label || slipLineText(leg.threshold, leg.comparator, "total")) : leg.kind === "market" ? leg.label : leg.playerName;
         const barPct = leg.kind === "winner" ? leg.modelWinPct : leg.hitRate;
+        const open = openLegs.has(i);
+        const keyNum = leg.kind === "total" ? (leg.projectedTotal !== null ? `proj ${leg.projectedTotal}` : "—") : barPct !== null ? `${Math.round(barPct * 100)}%` : "—";
         return <li key={i} style={{ alignItems: "flex-start" }}>
-          <div style={{ flex: 1, display: "grid", gap: 6 }}>
-            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-              <strong>{title}</strong>
-              <span style={{ background: meta.bg, color: "#fff", borderRadius: 999, padding: "2px 9px", fontSize: 12, fontWeight: 700 }}>{leg.kind === "winner" && leg.verdict === "longshot" ? "Model likes the other side" : meta.label}</span>
-              {result.strongestLeg === i && <span aria-label="Strongest leg">⭐ strongest</span>}
-              {result.weakestLeg === i && result.legs.length > 1 && <span aria-label="Weakest leg">⚠ weakest</span>}
-            </div>
-            <small>{leg.kind === "prop" ? `${leg.team} · ${slipLineText(leg.threshold, leg.comparator, leg.statLabel)}` : leg.kind === "winner" ? `${leg.sport.toUpperCase()} winner pick` : leg.kind === "total" ? `${leg.sport.toUpperCase()} game total` : `${leg.sport.toUpperCase()} · no data feed`}{leg.price !== null ? ` · priced ${leg.price > 0 ? `+${leg.price}` : leg.price}` : ""}</small>
+          <div style={{ flex: 1, display: "grid", gap: 6, minWidth: 0 }}>
+            <button type="button" className="slip-leg-toggle" onClick={() => setOpenLegs((prev) => { const next = new Set(prev); if (next.has(i)) next.delete(i); else next.add(i); return next; })} aria-expanded={open}>
+              <span style={{ background: meta.bg, borderRadius: "50%", width: 11, height: 11, flex: "none" }} aria-hidden="true" />
+              <strong style={{ flex: 1, minWidth: 0 }}>{title}</strong>
+              {result.strongestLeg === i && <span aria-label="Strongest leg">⭐</span>}
+              {result.weakestLeg === i && result.legs.length > 1 && <span aria-label="Weakest leg">⚠</span>}
+              <b>{keyNum}</b>
+              <span aria-hidden="true">{open ? "▾" : "▸"}</span>
+            </button>
+            {open && <>
+            <small>{leg.kind === "prop" ? `${leg.team} · ${slipLineText(leg.threshold, leg.comparator, leg.statLabel)}` : leg.kind === "winner" ? `${leg.sport.toUpperCase()} winner pick` : leg.kind === "total" ? `${leg.sport.toUpperCase()} game total` : `${leg.sport.toUpperCase()} · no data feed`}{leg.price !== null ? ` · priced ${leg.price > 0 ? `+${leg.price}` : leg.price}` : ""} · {leg.kind === "winner" && leg.verdict === "longshot" ? "Model likes the other side" : meta.label}</small>
             {barPct !== null && <div className="winner-track" role="img" aria-label={`${leg.kind === "winner" ? "Model win estimate" : "Hit rate"} ${Math.round(barPct * 100)} percent`}><i style={{ width: `${Math.round(barPct * 100)}%` }} /></div>}
             <p className="calculator-note" style={{ margin: 0 }}>{leg.note}</p>
             {leg.values.length > 0 && <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>{leg.values.map((v, j) => {
               const hit = leg.comparator === "gte" ? v >= leg.threshold : leg.comparator === "gt" ? v > leg.threshold : leg.comparator === "lt" ? v < leg.threshold : v <= leg.threshold;
               return <span key={j} style={{ borderRadius: 8, padding: "2px 8px", fontSize: 12, fontWeight: 700, background: hit ? "rgba(46,125,50,.25)" : "rgba(120,120,120,.18)", border: `1px solid ${hit ? "#2e7d32" : "rgba(120,120,120,.4)"}` }}>{v}</span>;
             })}<small style={{ alignSelf: "center" }}>last {leg.values.length} games, newest first</small></div>}
+            </>}
           </div>
         </li>;
       })}</ul>
@@ -1312,8 +1330,9 @@ const TUTORIAL_SLIDES: { icon: string; kicker: string; title: string; points: st
     "Team cards open the full team file with the depth chart.",
   ]},
   { icon: "🔍", kicker: "SLIP CHECK", title: "Already built a slip?", points: [
-    "Snap photos of a parlay from any sportsbook — long slips can take two or three screenshots, add them all — or rebuild it by hand, leg by leg.",
+    "Snap photos of a parlay from any sportsbook — long slips can take two or three screenshots, add them all — and Slip Check reads the whole slip, not just the props. Or rebuild it by hand, leg by leg.",
     "Player props grade against the player's real game log; winner picks grade against the model's win estimate; game totals grade against the model's projection. Every read holds your own price up against the evidence.",
+    "The verdict is built for your phone: the combined number up top, a one-line summary per leg with its key stat, and a tap opens the full read. If the roster feed hiccups mid-read, player legs wait as unmatched with a Retry button instead of failing.",
     "It never invents a price: the only prices it uses are the ones on your slip. A market with no data behind it (kicker extra points, say) stays on the slip marked unchecked — never silently dropped, never graded on air.",
   ]},
   { icon: "🍽️", kicker: "HAM SELECTION", title: "Cody's picks", points: [

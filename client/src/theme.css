@@ -2183,3 +2183,17 @@ body[data-sport="soccer"] .app-shell {
 .disclosures-body h3 { margin: 16px 0 6px; }
 .disclosures-body p { margin: 0 0 8px; line-height: 1.55; }
 .disclosures-sheet { max-width: 560px; }
+
+/* Slip Check mobile viewing (2026-10-22): summary-first verdict with
+   tap-to-expand legs, and a sticky action bar that keeps the check
+   button under the thumb. */
+.slip-leg-toggle { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 42px; background: none; border: 0; padding: 2px 0; cursor: pointer; color: inherit; font: inherit; text-align: left; }
+.slip-leg-toggle strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.slip-leg-toggle b { font-size: 15px; white-space: nowrap; }
+.slip-actionbar { position: sticky; bottom: 10px; z-index: 6; display: flex; gap: 8px; align-items: stretch; background: var(--paper); border: 1px solid var(--border); border-radius: 14px; padding: 8px; box-shadow: 0 12px 28px -12px rgba(var(--shadow-warm), .65); }
+.slip-actionbar .primary { margin: 0; }
+@media (max-width: 560px) {
+  .slip-card { padding: 12px; gap: 10px; }
+  .slip-legs li { padding: 9px 10px; }
+  .slip-head h3 { font-size: 18px; }
+}
