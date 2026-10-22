@@ -691,14 +691,14 @@ function plateLeagueLabel(sport: string): string {
 
 const TUTORIAL_SLIDES: { icon: string; kicker: string; title: string; points: string[] }[] = [
   { icon: "🍖", kicker: "WELCOME", title: "Fresh cuts, daily.", points: [
-    "The Daily Ham serves NHL, NFL, NBA & soccer projections, real sportsbook prices, official league stats, and Cody's personal picks.",
+    "The Daily Ham serves NHL, NFL, college football, NBA & soccer projections, real sportsbook prices, official league stats, and Cody's personal picks.",
     "Anything the model calculates is labeled a model estimate — never confused with a sportsbook line.",
     "Swipe through this guide to learn the whole shop.",
   ]},
   { icon: "🏒", kicker: "PICK YOUR SIDE", title: "Hockey, football, basketball, soccer?", points: [
-    "Tap NHL / NFL / NBA / SOC at the top to switch leagues — each side is built to full depth.",
+    "Tap NHL / NFL / NCAAF / NBA / SOC at the top to switch leagues — each side is built to full depth.",
     "Hit My team on the welcome card and pick your squad: the whole app, background included, dresses in your team's colors. Each side shows only its own league's teams.",
-    "The tabs below are your cutting board: Board, Ham Selection, Parlay, Matchup, Players, Streaks, League, Watchlist, Settings.",
+    "The tabs below are your cutting board: Board, Record, Ham Selection, Parlay, Matchup, Players, Streaks, League, Watchlist, Settings.",
   ]},
   { icon: "🏒", kicker: "THE ICE", title: "Hockey, full depth.", points: [
     "The NHL side runs the full engine: the board, the matchup calculator, rosters, streaks, and league standings.",
@@ -709,6 +709,11 @@ const TUTORIAL_SLIDES: { icon: string; kicker: string; title: string; points: st
     "The NFL side runs the full engine: the board, the matchup calculator, rosters, streaks, and AFC/NFC standings.",
     "Player files track passing, rushing and receiving per game — tap any name for the full file.",
     "The matchup calculator covers the winner, first score, first-half and full-game scripts like a 14+ blowout or overtime.",
+  ]},
+  { icon: "🎓", kicker: "COLLEGE BALL", title: "College football, full depth.", points: [
+    "All 138 FBS teams run the same engine: the board, the matchup calculator, rosters, streaks, and standings.",
+    "Player files track passing, rushing and receiving per game — tap any name for the full file.",
+    "The matchup calculator covers the winner plus the model's full read, same as the pros.",
   ]},
   { icon: "🏀", kicker: "THE HARDWOOD", title: "Basketball, full depth.", points: [
     "The NBA side runs the same engine: the board, the matchup calculator, rosters, streaks, and East/West standings.",
@@ -723,7 +728,8 @@ const TUTORIAL_SLIDES: { icon: string; kicker: string; title: string; points: st
   { icon: "📋", kicker: "THE BOARD", title: "Every game, one card.", points: [
     "Each game card shows the matchup, start time, and the Flip % bar.",
     "Flip % is the model's win estimate from scoring margin, recent form and home/road splits — e.g. 58% vs 42%.",
-    "Under it sit the two likely scorers: season leaders by goals (NHL), TDs (NFL), points (NBA) or goals (soccer). A stat, not a prop.",
+    "Cards also carry the model's projected total beside the book's over/under line, with the lean — a model estimate, same honesty rules.",
+    "Under it sit the two likely scorers: season leaders by goals (NHL), TDs (NFL + college), points (NBA) or goals (soccer). A stat, not a prop.",
   ]},
   { icon: "⚠️", kicker: "INJURY WATCH", title: "Know who's out.", points: [
     "When a key player is officially ruled out — a starting QB, a top scorer, a number-one goalie — you'll see a ⚠ chip on that team's game card.",
@@ -796,11 +802,15 @@ const TUTORIAL_SLIDES: { icon: string; kicker: string; title: string; points: st
   ]},
   { icon: "📜", kicker: "TRACK RECORD", title: "The receipts.", points: [
     "The Record tab grades every pregame model pick against final scores — and against the books' own prices.",
-    "You'll see the model's win-loss record, how the book favorite did on the same games, and the model's ROI at real prices.",
+    "The Daily Count shows picks tracked and graded every day for the last two weeks. The count moves daily, or the record doesn't deserve your trust.",
+    "Calibration checks the model's honesty: when it says 65%, does it actually win 65% of the time?",
+    "And the model learns. A weekly Learning Log reviews its own graded picks, sport by sport, and shades future calls toward reality — every adjustment published here in plain language.",
     "Nothing hidden, nothing cherry-picked: when the model is cold, it says so right here.",
   ]},
   { icon: "🎯", kicker: "MATCHUP CALCULATOR", title: "Every angle, sliced.", points: [
     "Pick any game for the model's take: winner, first score, and situational calls — a 14+ blowout or overtime in football, first basket in hoops, home/draw/away in soccer.",
+    "Every matchup includes the projected total beside the book's over/under line.",
+    "The model's full read goes deeper: last-five form with scores, streaks, scoring splits, venue numbers and head-to-head history — a written take built strictly from the numbers.",
     "Every percentage is a model estimate from official game data — not a sportsbook price.",
     "Use it to sanity-check your own read before you bet.",
   ]},
@@ -809,14 +819,17 @@ const TUTORIAL_SLIDES: { icon: string; kicker: string; title: string; points: st
     "Glass probability bars: fuller means more likely. Same idea everywhere.",
     "Player trend graph: per-game stat over recent games — a rising line means heating up.",
     "Donut chart: how the books split their prices. Tendency bars: how often a team scores first.",
+    "Every team file has a Charts tab: the whole team's numbers graphed — scoring, form and trends at a glance.",
   ]},
   { icon: "🔥", kicker: "PLAYERS & STREAKS", title: "Form at a glance", points: [
     "Tap any player for the full file: trend graph, model projection, last five games, full game log.",
     "Tap ★ to watch a player or team — they land in your Watchlist.",
     "Streaks shows who's hot 🔥 and who's ice-cold 🧊 (The Cutting Board), from official box scores.",
+    "On the NHL side, goalies get their own hot and cold boards — a netminder on a heater reads as plainly as a sniper.",
   ]},
   { icon: "🧾", kicker: "PARLAY & WATCHLIST", title: "Build your slip", points: [
     "Prices you tap stack up in the Parlay tab — set a stake to see combined odds and payout.",
+    "When a sportsbook has approved this site, Bet on buttons appear on your slip and under each matchup's Book Read, carrying you straight to that book. The commission disclosure sits right under them — the site may earn a commission, and it never changes your price.",
     "Your Watchlist keeps every starred player and team one tap away.",
     "Team cards open the full team file with the depth chart.",
   ]},
@@ -828,6 +841,8 @@ const TUTORIAL_SLIDES: { icon: string; kicker: string; title: string; points: st
   { icon: "⚙️", kicker: "MAKE IT YOURS", title: "Settings", points: [
     "Brightness slider and scroll feel, saved per device.",
     "Install the app to your home screen for the full experience.",
+    "Send feedback straight to Cody from the card here — ideas, bugs, requests.",
+    "The fine print lives here too: disclosures and responsible-gaming info in plain language. The short version — model estimates, not betting advice, 21+ — sits in the footer on every screen.",
     "That's the whole tour — go slice up the board.",
   ]},
 ];
