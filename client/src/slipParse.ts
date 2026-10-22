@@ -137,6 +137,39 @@ const LEAGUE_HINTS: { re: RegExp; sport: SlipSportKey; league?: "mls" | "epl" }[
   { re: /\bepl\b|premier league/, sport: "soccer", league: "epl" },
 ];
 
+// DraftKings-style game bar: two team CODES with the start time between
+// them and no separator word — "NSH Today 7:10 PM BOS". Books abbreviate
+// codes differently from this directory (SJ for San Jose, LA for the
+// Kings), so a small alias map applies per sport, and only when the raw
+// token is not itself a code in that directory.
+const CODE_ALIASES: Partial<Record<SlipSportKey, Record<string, string>>> = {
+  nhl: { SJ: "SJS", LA: "LAK", TB: "TBL", NJ: "NJD" },
+  nba: { GS: "GSW", WAS: "WSH" },
+  nfl: { WAS: "WSH", JAC: "JAX", LA: "LAR" },
+};
+
+function parseCodeBar(line: string, dirs: SlipDirectory[]): SlipGameRef | null {
+  if (!/\b(today|tomorrow)\b|\d{1,2}:\d{2}/i.test(line)) return null;
+  if (/[+-]\d{2,4}\s*$/.test(line.trim())) return null; // a pick line, not a bar
+  const tokens = line.toUpperCase().split(/[^A-Z]+/).filter((t) => t.length >= 2 && t.length <= 4);
+  if (tokens.length < 2) return null;
+  for (const dir of dirs) {
+    const codes = new Set(dir.teams.map((t) => t.code));
+    const aliases = CODE_ALIASES[dir.sport] ?? {};
+    const resolved: string[] = [];
+    for (const tok of tokens) {
+      const alias = aliases[tok];
+      if (codes.has(tok)) resolved.push(tok);
+      else if (alias && codes.has(alias)) resolved.push(alias);
+    }
+    const distinct = [...new Set(resolved)];
+    if (distinct.length === 2 && resolved.length === 2) {
+      return { sport: dir.sport, league: dir.league, away: distinct[0]!, home: distinct[1]! };
+    }
+  }
+  return null;
+}
+
 function parseContextLine(line: string, dirs: SlipDirectory[]): SlipGameRef | null {
   const norm = normalize(line);
   const cut = (norm.split(/\b(today|tomorrow|mon|tue|wed|thu|fri|sat|sun)\b/)[0] ?? "").split(/\d{1,2}:\d{2}/)[0] ?? "";
@@ -198,7 +231,7 @@ export function parseParlayList(rawText: string, dirs: SlipDirectory[]): SlipDra
     if (!line) continue;
     const norm = normalize(line);
     if (/^\d+\s*leg\b/.test(norm) || /^leg\s/.test(norm)) { lastWasDescriptor = false; continue; }
-    const ctx = parseContextLine(line, dirs);
+    const ctx = parseContextLine(line, dirs) ?? parseCodeBar(line, dirs);
     if (ctx) {
       if (lastWasDescriptor && lastBlock && !lastBlock.game) lastBlock.game = ctx;
       else section = ctx;

@@ -2197,3 +2197,16 @@ body[data-sport="soccer"] .app-shell {
   .slip-legs li { padding: 9px 10px; }
   .slip-head h3 { font-size: 18px; }
 }
+
+/* Edge discipline (2026-10-22, Cody: nothing past the background edges —
+   anything too wide scrolls inside its own strip instead). overflow-x:
+   clip guards the page without breaking position: sticky descendants. */
+html, body { overflow-x: hidden; overflow-x: clip; }
+img, video, canvas { max-width: 100%; }
+pre { overflow-x: auto; }
+.slip-card > * { min-width: 0; }
+.calculator-note, .slip-disclaimer { overflow-wrap: anywhere; }
+.quote-books span { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.welcome-team-badge { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.learn-status { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.slip-legs b { flex: none; }
