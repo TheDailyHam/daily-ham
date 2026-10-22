@@ -171,6 +171,21 @@ export const api = {
   getPremiumBoard: (args: ActionArgs<"getPremiumBoard">) => callAction("getPremiumBoard", args),
   getTrackRecord: () => callAction("getTrackRecord", {}),
   getCalibration: () => callAction("getCalibration", {}),
+  // Wired 2026-10-22 after Cody's phone quoted the confession: these
+  // actions existed on the server and were CALLED in App.tsx, but were
+  // never added to this hand-kept map — every call threw "is not a
+  // function" and each feature's failure looked like an innocent
+  // empty state (Slip Check never graded; affiliate config read as
+  // "no books"; the Learning Log never loaded). The client build is
+  // vite-only, so run `npm run typecheck -w client` before deploys —
+  // it flags exactly this (TS2339) when a map entry goes missing.
+  checkSlip: (args: ActionArgs<"checkSlip">) => callAction("checkSlip", args),
+  ocrSlipPhoto: (args: ActionArgs<"ocrSlipPhoto">) => callAction("ocrSlipPhoto", args),
+  getLearningLog: () => callAction("getLearningLog", {}),
+  getAffiliateConfig: (args: ActionArgs<"getAffiliateConfig">) => callAction("getAffiliateConfig", args),
+  getAffiliateLinkStatus: (args: ActionArgs<"getAffiliateLinkStatus">) => callAction("getAffiliateLinkStatus", args),
+  saveAffiliateLink: (args: ActionArgs<"saveAffiliateLink">) => callAction("saveAffiliateLink", args),
+  removeAffiliateLink: (args: ActionArgs<"removeAffiliateLink">) => callAction("removeAffiliateLink", args),
   getTrackerStatus: (args: ActionArgs<"getTrackerStatus">) => callAction("getTrackerStatus", args),
   getAdminStatus: (args: ActionArgs<"getAdminStatus">) => callAction("getAdminStatus", args),
   refreshAllSportsbooks: (args: ActionArgs<"refreshAllSportsbooks">) => callAction("refreshAllSportsbooks", args),
