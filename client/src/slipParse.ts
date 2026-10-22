@@ -53,6 +53,31 @@ function normalize(text: string): string {
   return text.toLowerCase().replace(/[.'’]/g, "").replace(/\s+/g, " ");
 }
 
+// Spot the game on a slip photo: sportsbooks print "Away at Home" on every
+// leg, so the first two team names in the text identify the matchup. This
+// lets the reader switch the game picker to the slip's actual game instead
+// of failing silently against the wrong two rosters.
+export function detectSlipTeams(rawText: string, teamList: { code: string; name: string }[]): [string, string] | null {
+  const text = normalize(rawText);
+  const hits: { code: string; idx: number }[] = [];
+  for (const t of teamList) {
+    const idx = text.indexOf(normalize(t.name));
+    if (idx >= 0) hits.push({ code: t.code, idx });
+  }
+  if (hits.length < 2) {
+    for (const t of teamList) {
+      const nick = normalize(t.name).split(" ").pop() ?? "";
+      if (nick.length < 4) continue;
+      if (teamList.filter((o) => (normalize(o.name).split(" ").pop() ?? "") === nick).length > 1) continue;
+      const idx = text.search(new RegExp(`\\b${nick}\\b`));
+      if (idx >= 0 && !hits.some((h) => h.code === t.code)) hits.push({ code: t.code, idx });
+    }
+  }
+  if (hits.length < 2) return null;
+  hits.sort((a, b) => a.idx - b.idx);
+  return [hits[0].code, hits[1].code];
+}
+
 function lastNameOf(name: string): string {
   const parts = normalize(name).split(" ").filter((p) => !["jr", "sr", "ii", "iii", "iv"].includes(p));
   return parts[parts.length - 1] ?? "";

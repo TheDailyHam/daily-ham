@@ -11,7 +11,7 @@ import { api, type ApiRequest, type ApiResponse, type KeyInjuries, type KeyInjur
 import logo from "./assets/daily-ham-logo.jpg";
 import { EPL_TEAM_THEMES, LEAGUE_THEMES, MLS_TEAM_THEMES, NBA_TEAM_THEMES, SOCCER_LEAGUES, applyLeagueTheme, loadFavorites, saveFavorite, soccerLeagueForTeam, themeFor, type League, type LeagueFavorites } from "./teams";
 import { isWatchedPlayer, isWatchedTeam, loadWatchlist, removeWatchedEntry, toggleWatch, type WatchedEntry, type WatchedPlayer, type WatchedTeam } from "./watchlist";
-import { parseSlipText, type SlipCandidate } from "./slipParse";
+import { detectSlipTeams, parseSlipText, type SlipCandidate } from "./slipParse";
 
 type Sport = League;
 type Mode = "board" | "matchup" | "rosters" | "streaks" | "standings" | "watchlist" | "parlay" | "settings" | "jamon" | "record" | "slipcheck";
@@ -782,6 +782,8 @@ function SlipCheckView({ sport, soccerLeague }: { sport: Sport; soccerLeague: So
   const [ocrBusy, setOcrBusy] = useState(false);
   const [result, setResult] = useState<SlipResult | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const queryClient = useQueryClient();
 
   useEffect(() => {
     try { localStorage.setItem(SLIPCHECK_KEY, JSON.stringify({ sport, soccerLeague, away: awayTeam, home: homeTeam, rows })); } catch { /* private mode */ }
@@ -811,43 +813,60 @@ function SlipCheckView({ sport, soccerLeague }: { sport: Sport; soccerLeague: So
   const removeRow = (rowId: number) => setRows((prev) => prev.filter((r) => r.rowId !== rowId));
 
   const onPhoto = async (file: File) => {
-    if (!rostersReady) { setNotice("Pick the game above and give the rosters a second to load — the reader matches names against those two teams."); return; }
+    setPhotoUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return URL.createObjectURL(file); });
     setOcrBusy(true); setNotice("Reading your slip photo on this device…");
     try {
       const text = await runSlipOcr(file);
-      const drafts = parseSlipText(text, candidates, sport);
-      if (drafts.length === 0) { setNotice("The reader couldn't match any legs on that photo. A tighter crop on the legs helps — or build the slip by hand below."); return; }
-      setRows((prev) => [...prev, ...drafts.map((d) => ({
+      // The slip names its own game ("New England Patriots at Chicago
+      // Bears" on every leg) — believe the photo, not the picker. Fetch
+      // those two rosters fresh, then match the legs against them.
+      let away = awayTeam; let home = homeTeam;
+      const detected = detectSlipTeams(text, teamList);
+      const gameSwitched = detected !== null && (detected[0] !== awayTeam || detected[1] !== homeTeam);
+      if (detected) { away = detected[0]; home = detected[1]; if (gameSwitched) { setAwayTeam(away); setHomeTeam(home); setResult(null); } }
+      const [ra, rb] = await Promise.all([
+        queryClient.fetchQuery({ queryKey: ["slip-roster", sport, soccerLeague, away], queryFn: () => fetchSlipRoster(sport, away, soccerLeague), staleTime: 15 * 60 * 1000 }),
+        queryClient.fetchQuery({ queryKey: ["slip-roster", sport, soccerLeague, home], queryFn: () => fetchSlipRoster(sport, home, soccerLeague), staleTime: 15 * 60 * 1000 }),
+      ]);
+      const cands: SlipCandidate[] = [...ra.map((p) => ({ id: p.id, name: p.name, team: away })), ...rb.map((p) => ({ id: p.id, name: p.name, team: home }))];
+      const drafts = parseSlipText(text, cands, sport);
+      if (drafts.length === 0) { setNotice("The reader couldn't match any legs on that photo. A tighter crop on just the legs helps — or add the legs by hand below."); return; }
+      const draftRows: SlipRow[] = drafts.map((d) => ({
         rowId: slipRowSeq++,
-        side: (d.team === homeTeam ? "home" : "away") as "away" | "home",
+        side: (d.team === home ? "home" : "away") as "away" | "home",
         playerId: d.playerId, stat: d.stat, threshold: String(d.threshold),
         comparator: (d.comparator === "lte" ? "lt" : d.comparator) as SlipRowComparator,
         price: d.price !== null ? String(d.price) : "",
-      }))]);
-      setResult(null);
-      setNotice(`Read ${drafts.length} leg${drafts.length === 1 ? "" : "s"} from your photo. Check every row against your slip and fix anything that's off — then run the check.`);
+      }));
+      setRows((prev) => (gameSwitched ? draftRows : [...prev, ...draftRows]));
+      setNotice(`Read ${drafts.length} leg${drafts.length === 1 ? "" : "s"} from your photo${gameSwitched ? ` — and spotted the game: ${away} @ ${home}` : ""}. Grading them now. If any row below doesn't match your slip, fix it and run the check again.`);
+      check.mutate(drafts.map((d) => ({
+        sport, ...(sport === "soccer" ? { league: soccerLeague } : {}),
+        team: d.team, playerId: d.playerId, playerName: d.playerName,
+        stat: d.stat, threshold: d.threshold, comparator: d.comparator, price: d.price,
+        gameAway: away, gameHome: home,
+      })));
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "The photo read failed — build the slip by hand below.");
     } finally { setOcrBusy(false); }
   };
 
   const validRows = rows.filter((r) => r.playerId !== null && r.threshold.trim() !== "" && Number.isFinite(Number(r.threshold)));
+  type SlipLegsPayload = ApiRequest<typeof api, "checkSlip">["legs"];
+  const buildLegsFromRows = (): SlipLegsPayload => validRows.map((r) => {
+    const player = candidates.find((c) => c.id === r.playerId);
+    const priceNum = r.price.trim() === "" ? null : Number(r.price.replace("+", ""));
+    return {
+      sport, ...(sport === "soccer" ? { league: soccerLeague } : {}),
+      team: player?.team ?? (r.side === "away" ? awayTeam : homeTeam),
+      playerId: r.playerId!, playerName: player?.name ?? "Unknown player",
+      stat: r.stat, threshold: Number(r.threshold), comparator: r.comparator,
+      price: priceNum !== null && Number.isFinite(priceNum) ? Math.trunc(priceNum) : null,
+      gameAway: awayTeam, gameHome: homeTeam,
+    };
+  });
   const check = useMutation({
-    mutationFn: () => {
-      const legs = validRows.map((r) => {
-        const player = candidates.find((c) => c.id === r.playerId);
-        const priceNum = r.price.trim() === "" ? null : Number(r.price.replace("+", ""));
-        return {
-          sport, ...(sport === "soccer" ? { league: soccerLeague } : {}),
-          team: player?.team ?? (r.side === "away" ? awayTeam : homeTeam),
-          playerId: r.playerId!, playerName: player?.name ?? "Unknown player",
-          stat: r.stat, threshold: Number(r.threshold), comparator: r.comparator,
-          price: priceNum !== null && Number.isFinite(priceNum) ? Math.trunc(priceNum) : null,
-          gameAway: awayTeam, gameHome: homeTeam,
-        };
-      });
-      return api.checkSlip({ legs });
-    },
+    mutationFn: (legs: SlipLegsPayload) => api.checkSlip({ legs }),
     onSuccess: (data) => setResult(data),
     onError: () => setNotice("The check didn't come back — the data feed may be busy. Give it a moment and run it again."),
   });
@@ -873,6 +892,7 @@ function SlipCheckView({ sport, soccerLeague }: { sport: Sport; soccerLeague: So
           <button type="button" className="refresh" onClick={addRow}>+ Add a leg by hand</button>
         </div>
       </div>
+      {photoUrl && <figure style={{ margin: "10px 0" }}><img src={photoUrl} alt="The slip photo you added" style={{ width: "100%", borderRadius: 12, display: "block" }} /><figcaption className="calculator-note">Your slip photo — the legs below were drafted from it.</figcaption></figure>}
       {notice && <p className="calculator-note" role="status">{notice}</p>}
       {!rostersReady && <p className="calculator-note">Loading the two rosters…</p>}
       {rows.length === 0 ? <div className="history-empty"><strong>No legs yet.</strong><span>Read a photo of your slip or add legs by hand. The check runs on official game logs — the same raw data behind everything else here — never on invented prop prices.</span></div> :
@@ -900,7 +920,7 @@ function SlipCheckView({ sport, soccerLeague }: { sport: Sport; soccerLeague: So
         <button type="button" className="slip-remove" onClick={() => removeRow(r.rowId)} aria-label="Remove leg">×</button>
       </li>)}</ul>}
       {rows.length > 0 && <>
-        <button type="button" className="primary" disabled={validRows.length === 0 || check.isPending || awayTeam === homeTeam} onClick={() => check.mutate()}>{check.isPending ? "Checking every leg…" : `Run the check (${validRows.length} leg${validRows.length === 1 ? "" : "s"})`}</button>
+        <button type="button" className="primary" disabled={validRows.length === 0 || check.isPending || awayTeam === homeTeam} onClick={() => { const legs = buildLegsFromRows(); if (legs.length > 0) check.mutate(legs); }}>{check.isPending ? "Checking every leg…" : `Run the check (${validRows.length} leg${validRows.length === 1 ? "" : "s"})`}</button>
         <button type="button" className="slip-clear" onClick={() => { setRows([]); setResult(null); }}>Clear slip</button>
       </>}
       <p className="slip-disclaimer">Every read comes from the player's official game log this season. Slip Check never invents a sportsbook prop price — the only prices here are the ones on your slip.</p>
