@@ -6064,6 +6064,261 @@ async function loadTrackRecord(ctx: Ctx): Promise<z.infer<typeof trackRecordResp
   };
 }
 
+// ---------------------------------------------------------------------------
+// Slip Check — honest analysis of a user's pre-made parlay, built entirely
+// from raw game logs (the same free data rivers as everything else; zero
+// odds-provider credits). For each leg it computes the player's actual hit
+// rate at the exact line from his game log, holds the user's price up
+// against that evidence, scans the slip's structure (concentration,
+// conflicts, scoring environment), and pulls the model's game read. It
+// NEVER invents a prop price or a projection: when the log has no data,
+// the leg says so. Hit rates are backward-looking season facts, labeled
+// as such — not predictions.
+// ---------------------------------------------------------------------------
+
+const slipSports = ["nhl", "nfl", "nba", "soccer", "ncaaf"] as const;
+type SlipSport = (typeof slipSports)[number];
+const slipComparators = ["gte", "gt", "lt", "lte"] as const;
+type SlipComparator = (typeof slipComparators)[number];
+
+const slipLegSchema = z.object({
+  sport: z.enum(slipSports),
+  league: z.enum(soccerLeagues).optional(),
+  team: z.string().min(1).max(12),
+  playerId: z.number().int().positive(),
+  playerName: z.string().min(1).max(80),
+  stat: z.string().min(1).max(24),
+  threshold: z.number().min(0).max(1000),
+  comparator: z.enum(slipComparators),
+  price: z.number().int().min(-100000).max(100000).nullable().optional(),
+  gameAway: z.string().min(1).max(12).optional(),
+  gameHome: z.string().min(1).max(12).optional(),
+});
+type SlipLeg = z.infer<typeof slipLegSchema>;
+
+const slipLegResultSchema = z.object({
+  playerName: z.string(), team: z.string(), sport: z.enum(slipSports),
+  stat: z.string(), statLabel: z.string(), threshold: z.number(), comparator: z.enum(slipComparators),
+  price: z.number().nullable(),
+  games: z.number(), hits: z.number(), hitRate: z.number().nullable(),
+  last5Hits: z.number(), last5Games: z.number(),
+  median: z.number().nullable(), average: z.number().nullable(),
+  values: z.array(z.number()),
+  impliedPct: z.number().nullable(), edge: z.number().nullable(),
+  verdict: z.enum(["strong", "solid", "fair", "rich", "longshot", "thin", "nodata"]),
+  note: z.string(),
+});
+const slipGameEnvSchema = z.object({
+  sport: z.enum(slipSports), away: z.string(), home: z.string(),
+  awayWinPct: z.number().nullable(), homeWinPct: z.number().nullable(), drawPct: z.number().nullable(),
+  projectedTotal: z.number().nullable(), bookTotal: z.number().nullable(),
+  note: z.string(),
+});
+const checkSlipResponse = z.object({
+  legs: z.array(slipLegResultSchema),
+  games: z.array(slipGameEnvSchema),
+  flags: z.array(z.object({ kind: z.string(), text: z.string() })),
+  combinedHitRate: z.number().nullable(),
+  combinedNote: z.string(),
+  strongestLeg: z.number().nullable(), weakestLeg: z.number().nullable(),
+  fetchedAt: z.string(),
+});
+
+const SLIP_STAT_LABELS: Record<string, string> = {
+  passYards: "passing yards", passTds: "passing TDs", rushYards: "rushing yards", rushTds: "rushing TDs",
+  receptions: "receptions", recYards: "receiving yards", recTds: "receiving TDs", anytimeTd: "anytime TD",
+  interceptions: "interceptions",
+  points: "points", rebounds: "rebounds", assists: "assists", steals: "steals", blocks: "blocks",
+  threePointMade: "3-pointers made",
+  goals: "goals", shots: "shots on goal", anytimeGoal: "anytime goal", saves: "saves",
+};
+const SLIP_ALLOWED_STATS: Record<SlipSport, string[]> = {
+  nfl: ["passYards", "passTds", "rushYards", "rushTds", "receptions", "recYards", "recTds", "anytimeTd", "interceptions"],
+  ncaaf: ["passYards", "passTds", "rushYards", "rushTds", "receptions", "recYards", "recTds", "anytimeTd", "interceptions"],
+  nba: ["points", "rebounds", "assists", "steals", "blocks", "threePointMade"],
+  nhl: ["goals", "assists", "points", "shots", "anytimeGoal", "saves"],
+  soccer: ["goals", "assists", "anytimeGoal"],
+};
+const SLIP_SCORING_STATS = new Set(["anytimeTd", "anytimeGoal", "rushTds", "recTds", "passTds", "goals"]);
+const SLIP_LOW_TOTAL: Record<SlipSport, number> = { nfl: 42, ncaaf: 42, nba: 205, nhl: 5.5, soccer: 2.4 };
+
+function slipStatValue(sport: SlipSport, stat: string, g: Record<string, unknown>): number | null {
+  const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+  if (sport === "nfl" || sport === "ncaaf") {
+    if (stat === "anytimeTd") { const a = num(g.rushTds); const b = num(g.recTds); return a === null && b === null ? null : (a ?? 0) + (b ?? 0); }
+    return num(g[stat]);
+  }
+  if (sport === "nba") return num(g[stat]);
+  if (sport === "soccer") { if (stat === "anytimeGoal") return num(g.goals); return num(g[stat]); }
+  if (stat === "anytimeGoal") return num(g.goals);
+  if (stat === "saves") { const sa = num(g.shotsAgainst); const ga = num(g.goalsAgainst); return sa === null || ga === null ? null : sa - ga; }
+  return num(g[stat]);
+}
+
+async function slipLogValues(ctx: Ctx, leg: SlipLeg): Promise<number[]> {
+  let rows: Record<string, unknown>[] = [];
+  if (leg.sport === "nfl") rows = (await loadNflPlayerGameLog(ctx, leg.team as (typeof nflTeamCodes)[number], leg.playerId)).games as unknown as Record<string, unknown>[];
+  else if (leg.sport === "ncaaf") rows = (await loadNcaafPlayerGameLog(ctx, leg.team as (typeof ncaafTeamCodes)[number], leg.playerId)).games as unknown as Record<string, unknown>[];
+  else if (leg.sport === "nba") rows = (await loadNbaPlayerGameLog(ctx, leg.team as (typeof nbaTeamCodes)[number], leg.playerId)).games as unknown as Record<string, unknown>[];
+  else if (leg.sport === "soccer") rows = (await loadSoccerPlayerGameLog(ctx, leg.league ?? "mls", leg.team, leg.playerId)).games as unknown as Record<string, unknown>[];
+  else rows = (await loadNhlPlayerGameLog(leg.playerId)).games as unknown as Record<string, unknown>[];
+  const dated = rows.map((g) => ({ date: typeof g.gameDate === "string" ? g.gameDate : "", value: slipStatValue(leg.sport, leg.stat, g) })).filter((r) => r.value !== null) as { date: string; value: number }[];
+  dated.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+  return dated.map((r) => r.value);
+}
+
+function slipIsHit(value: number, threshold: number, comparator: SlipComparator): boolean {
+  return comparator === "gte" ? value >= threshold : comparator === "gt" ? value > threshold : comparator === "lt" ? value < threshold : value <= threshold;
+}
+function slipImplied(price: number): number {
+  return price < 0 ? Math.abs(price) / (Math.abs(price) + 100) : 100 / (price + 100);
+}
+function slipMedian(values: number[]): number | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+function slipPct(x: number): string { return `${Math.round(x * 100)}%`; }
+function slipPriceStr(price: number): string { return price > 0 ? `+${price}` : `${price}`; }
+
+async function analyzeSlipLeg(ctx: Ctx, leg: SlipLeg): Promise<z.infer<typeof slipLegResultSchema>> {
+  const statLabel = SLIP_STAT_LABELS[leg.stat] ?? leg.stat;
+  const base = {
+    playerName: leg.playerName, team: leg.team, sport: leg.sport, stat: leg.stat, statLabel,
+    threshold: leg.threshold, comparator: leg.comparator, price: leg.price ?? null,
+    games: 0, hits: 0, hitRate: null, last5Hits: 0, last5Games: 0, median: null, average: null,
+    values: [] as number[], impliedPct: leg.price != null ? slipImplied(leg.price) : null, edge: null,
+  };
+  if (!SLIP_ALLOWED_STATS[leg.sport].includes(leg.stat)) {
+    return { ...base, verdict: "nodata" as const, note: "That stat isn't tracked in this player's game log, so there's nothing honest to check this leg against." };
+  }
+  let values: number[];
+  try { values = await slipLogValues(ctx, leg); }
+  catch { return { ...base, verdict: "nodata" as const, note: "His game log didn't answer just now — no read is better than a guessed one. Try again in a bit." }; }
+  const games = values.length;
+  if (games === 0) {
+    return { ...base, verdict: "nodata" as const, note: "No games in his log yet this season — there is no evidence behind this leg either way." };
+  }
+  const hits = values.filter((v) => slipIsHit(v, leg.threshold, leg.comparator)).length;
+  const hitRate = hits / games;
+  const last5 = values.slice(0, 5);
+  const last5Hits = last5.filter((v) => slipIsHit(v, leg.threshold, leg.comparator)).length;
+  const median = slipMedian(values);
+  const average = Math.round((values.reduce((a, b) => a + b, 0) / games) * 10) / 10;
+  const impliedPct = base.impliedPct;
+  const edge = impliedPct !== null ? Math.round((hitRate - impliedPct) * 1000) / 1000 : null;
+  const scoring = SLIP_SCORING_STATS.has(leg.stat) && leg.threshold <= 1;
+  const lineText = leg.comparator === "gte" ? `${leg.threshold}+` : leg.comparator === "gt" ? `over ${leg.threshold}` : leg.comparator === "lt" ? `under ${leg.threshold}` : `${leg.threshold} or fewer`;
+  const core = scoring
+    ? `Scored in ${hits} of ${games} games (${slipPct(hitRate)}) · last 5: ${last5Hits} of ${last5.length}`
+    : `Cleared ${lineText} ${statLabel} in ${hits} of ${games} games (${slipPct(hitRate)}) · median ${median ?? "—"} · last 5: ${last5Hits} of ${last5.length}`;
+  let verdict: z.infer<typeof slipLegResultSchema>["verdict"];
+  let priceNote = "";
+  if (games < 3) {
+    verdict = "thin";
+    priceNote = ` Only ${games} game${games === 1 ? "" : "s"} logged — treat this leg as an unknown, not an anchor.`;
+  } else if (impliedPct !== null && edge !== null) {
+    verdict = edge >= 0.08 ? "strong" : edge >= 0.02 ? "solid" : edge >= -0.05 ? "fair" : "rich";
+    priceNote = edge >= 0.05
+      ? ` Priced ${slipPriceStr(leg.price!)} (≈${slipPct(impliedPct)}) — his actual hit rate runs above the price.`
+      : edge <= -0.05
+        ? ` Priced ${slipPriceStr(leg.price!)} (≈${slipPct(impliedPct)}) — the price assumes more than his log shows.`
+        : ` Priced ${slipPriceStr(leg.price!)} (≈${slipPct(impliedPct)}) — roughly in line with his log.`;
+  } else {
+    verdict = hitRate >= 0.75 ? "strong" : hitRate >= 0.6 ? "solid" : hitRate >= 0.45 ? "fair" : "longshot";
+  }
+  return {
+    ...base, games, hits, hitRate, last5Hits, last5Games: last5.length, median, average,
+    values: values.slice(0, 8), edge, verdict, note: core + priceNote,
+  };
+}
+
+async function slipGameEnv(ctx: Ctx, sport: SlipSport, league: SoccerLeagueParam | undefined, away: string, home: string): Promise<z.infer<typeof slipGameEnvSchema> | null> {
+  try {
+    let m: { awayWinProbability?: number | null; homeWinProbability?: number | null; drawProbability?: number | null; projectedTotal?: number | null; bookTotal?: number | null };
+    if (sport === "nfl") m = await loadNflMatchup(ctx, away as (typeof nflTeamCodes)[number], home as (typeof nflTeamCodes)[number], false);
+    else if (sport === "ncaaf") m = await loadNcaafMatchup(ctx, away as (typeof ncaafTeamCodes)[number], home as (typeof ncaafTeamCodes)[number], false);
+    else if (sport === "nba") m = await loadNbaMatchup(ctx, away as (typeof nbaTeamCodes)[number], home as (typeof nbaTeamCodes)[number], false);
+    else if (sport === "soccer") m = await loadSoccerMatchup(ctx, league ?? "mls", away, home, false);
+    else m = await loadFirstGoalMatchup(ctx, away as (typeof teamCodes)[number], home as (typeof teamCodes)[number], false);
+    const awayWinPct = m.awayWinProbability ?? null;
+    const homeWinPct = m.homeWinProbability ?? null;
+    const projectedTotal = m.projectedTotal ?? null;
+    const bookTotal = m.bookTotal ?? null;
+    let note = "The model's read on this game didn't come back — the leg reads above still stand on the game logs.";
+    if (awayWinPct !== null && homeWinPct !== null) {
+      note = `Model estimate: ${away} ${slipPct(awayWinPct)} · ${home} ${slipPct(homeWinPct)}${m.drawProbability != null ? ` · draw ${slipPct(m.drawProbability)}` : ""}.`;
+      if (projectedTotal !== null && bookTotal !== null) note += ` Projected total ${projectedTotal} vs the book's ${bookTotal} — the model leans ${projectedTotal < bookTotal ? "under" : projectedTotal > bookTotal ? "over" : "right at the number"}.`;
+      else if (projectedTotal !== null) note += ` Projected total ${projectedTotal} (model estimate).`;
+    }
+    return { sport, away, home, awayWinPct, homeWinPct, drawPct: m.drawProbability ?? null, projectedTotal, bookTotal, note };
+  } catch { return null; }
+}
+
+async function analyzeSlip(ctx: Ctx, legs: SlipLeg[]): Promise<z.infer<typeof checkSlipResponse>> {
+  const results = await Promise.all(legs.map((leg) => analyzeSlipLeg(ctx, leg)));
+  const gameKeys = new Map<string, { sport: SlipSport; league?: SoccerLeagueParam; away: string; home: string }>();
+  for (const leg of legs) {
+    if (leg.gameAway && leg.gameHome) gameKeys.set(`${leg.sport}:${leg.gameAway}@${leg.gameHome}`, { sport: leg.sport, league: leg.league, away: leg.gameAway, home: leg.gameHome });
+  }
+  const games = (await Promise.all([...gameKeys.values()].map((g) => slipGameEnv(ctx, g.sport, g.league, g.away, g.home)))).filter((g): g is z.infer<typeof slipGameEnvSchema> => g !== null);
+  const envByKey = new Map(games.map((g) => [`${g.sport}:${g.away}@${g.home}`, g]));
+
+  const flags: { kind: string; text: string }[] = [];
+  const byPlayer = new Map<string, number[]>();
+  legs.forEach((leg, i) => { const key = `${leg.sport}:${leg.playerId}`; byPlayer.set(key, [...(byPlayer.get(key) ?? []), i]); });
+  for (const idxs of byPlayer.values()) {
+    if (idxs.length >= 2) flags.push({ kind: "concentration", text: `${legs[idxs[0]].playerName} carries ${idxs.length} legs of this slip — one quiet night from him ends the whole ticket.` });
+  }
+  for (let i = 0; i < legs.length; i++) for (let j = i + 1; j < legs.length; j++) {
+    const a = legs[i]; const b = legs[j];
+    if (a.sport === b.sport && a.playerId === b.playerId && a.stat === b.stat) {
+      const aOver = a.comparator === "gte" || a.comparator === "gt";
+      const bOver = b.comparator === "gte" || b.comparator === "gt";
+      if (aOver !== bOver) flags.push({ kind: "conflict", text: `${a.playerName} has both sides of ${SLIP_STAT_LABELS[a.stat] ?? a.stat} — those two legs can't both cash.` });
+    }
+    if (a.sport === b.sport && a.team === b.team && a.playerId !== b.playerId && a.gameAway === b.gameAway && a.gameHome === b.gameHome) {
+      const passUnder = (x: SlipLeg, y: SlipLeg) => x.stat === "passYards" && (x.comparator === "lt" || x.comparator === "lte") && (y.stat === "recYards" || y.stat === "receptions") && (y.comparator === "gte" || y.comparator === "gt");
+      if (passUnder(a, b) || passUnder(b, a)) {
+        const qb = passUnder(a, b) ? a : b; const wr = passUnder(a, b) ? b : a;
+        flags.push({ kind: "tension", text: `The under on ${qb.playerName}'s passing fights ${wr.playerName}'s receiving line — the second leg needs the first one to throw it.` });
+      }
+    }
+  }
+  const scoringByGame = new Map<string, number>();
+  for (const leg of legs) {
+    if (SLIP_SCORING_STATS.has(leg.stat) && leg.gameAway && leg.gameHome) {
+      const key = `${leg.sport}:${leg.gameAway}@${leg.gameHome}`;
+      scoringByGame.set(key, (scoringByGame.get(key) ?? 0) + 1);
+    }
+  }
+  for (const [key, count] of scoringByGame) {
+    const env = envByKey.get(key);
+    if (count >= 2 && env && env.projectedTotal !== null && env.projectedTotal < SLIP_LOW_TOTAL[env.sport]) {
+      flags.push({ kind: "environment", text: `The model projects ${env.projectedTotal} total points in ${env.away} @ ${env.home} — a low-scoring script for a slip carrying ${count} scoring legs in that game.` });
+    }
+  }
+  const thinNames = results.filter((r) => r.verdict === "thin").map((r) => r.playerName);
+  if (thinNames.length > 0) flags.push({ kind: "thin", text: `Thin samples: ${thinNames.join(", ")} — fewer than 3 games logged. Unknowns, not anchors.` });
+
+  const trusted = results.map((r, i) => ({ r, i })).filter(({ r }) => r.hitRate !== null && r.games >= 3);
+  let combinedHitRate: number | null = null;
+  let combinedNote = "Not enough logged games on this slip to run the combined math honestly.";
+  if (trusted.length > 0) {
+    combinedHitRate = Math.round(trusted.reduce((acc, { r }) => acc * (r.hitRate ?? 1), 1) * 1000) / 1000;
+    const skipped = results.length - trusted.length;
+    combinedNote = `Multiplying the season hit rates of the ${trusted.length} well-logged leg${trusted.length === 1 ? "" : "s"} together gives about ${slipPct(combinedHitRate)} — as if the legs were independent, which they're not. Treat it as a ceiling, not a promise.${skipped > 0 ? ` ${skipped} leg${skipped === 1 ? "" : "s"} left out (sample too thin or no data).` : ""}`;
+  }
+  let strongestLeg: number | null = null; let weakestLeg: number | null = null;
+  const rated = results.map((r, i) => ({ r, i })).filter(({ r }) => r.hitRate !== null && r.games >= 1);
+  if (rated.length > 0) {
+    strongestLeg = rated.reduce((best, cur) => ((cur.r.hitRate ?? 0) > (best.r.hitRate ?? 0) ? cur : best), rated[0]).i;
+    weakestLeg = rated.reduce((worst, cur) => ((cur.r.hitRate ?? 0) < (worst.r.hitRate ?? 0) ? cur : worst), rated[0]).i;
+  }
+  return { legs: results, games, flags, combinedHitRate, combinedNote, strongestLeg, weakestLeg, fetchedAt: new Date().toISOString() };
+}
+
 export const Actions = {
   getDashboard: defineAction({ request: z.object({ sport: z.enum(sports).default("nhl") }), response: dashboardResponse, async handler(ctx, args) { return loadDashboard(ctx, args.sport); } }),
   refreshDaily: defineAction({ request: z.object({}), response: z.object({ status: z.enum(["success", "partial", "failed"]), message: z.string(), rowCount: z.number(), snapshotDate: z.string() }), async handler(ctx) { const result = await refresh(ctx); try { await ensureCalibrationLoaded(); } catch { /* learning cache warms opportunistically; identity is the safe default */ } try { const tr = await snapshotTrackRecord(ctx); console.log(`[track-record] daily refresh: snapshotted=${tr.snapshotted} graded=${tr.graded}`); } catch (e) { console.error("[track-record] snapshotTrackRecord failed in daily refresh:", e instanceof Error ? e.message : e); } try { const lc = await runLearningCycle(); if (lc.ran) console.log("[learning] weekly learning cycle ran in daily refresh"); } catch (e) { console.error("[learning] cycle failed in daily refresh:", e instanceof Error ? e.message : e); } try { await fetchHotStreaks(ctx, true); } catch { /* Keep odds refresh independent of free NHL insight refresh. */ } try { await fetchNflHotStreaks(ctx, true); } catch { /* Same for the NFL leg. */ } try { await fetchColdStreaks(ctx, true); } catch { /* Cold streaks refresh with the same daily job. */ } try { await fetchNflColdStreaks(ctx, true); } catch { /* Same for the NFL leg. */ } try { await fetchNcaafHotStreaks(ctx, true); } catch { /* Same for the NCAAF leg. */ } try { await fetchNcaafColdStreaks(ctx, true); } catch { /* Same for the NCAAF leg. */ } try { await fetchNbaHotStreaks(ctx, true); } catch { /* Same for the NBA leg. */ } try { await fetchNbaColdStreaks(ctx, true); } catch { /* Same for the NBA leg. */ } try { await fetchLikelyScorers(ctx, "nhl", true); } catch { /* Likely scorers warm with the same daily job. */ } try { await fetchLikelyScorers(ctx, "nfl", true); } catch { /* Same for the NFL leg. */ } try { await fetchLikelyScorers(ctx, "ncaaf", true); } catch { /* Same for the NCAAF leg. */ } try { await fetchLikelyScorers(ctx, "nba", true); } catch { /* Same for the NBA leg. */ } try { await warmNflForm(ctx); } catch { /* Flip % v2 form warms with the same daily job. */ } try { await warmNcaafForm(ctx); } catch { /* Same for the NCAAF leg. */ } try { await warmNbaForm(ctx); } catch { /* Same for the NBA leg. */ } try { await fetchKeyInjuries(ctx, "nfl", true); } catch { /* Injury warnings warm with the same daily job. */ } try { await fetchKeyInjuries(ctx, "ncaaf", true); } catch { /* Same for the NCAAF leg. */ } try { await fetchKeyInjuries(ctx, "nba", true); } catch { /* Same for the NBA leg. */ } try { await fetchKeyInjuries(ctx, "nhl", true); } catch { /* Same for the NHL leg. */ } try { await fetchKeyInjuries(ctx, "soccer", true, "mls"); } catch { /* Same for the MLS leg. */ } try { await fetchKeyInjuries(ctx, "soccer", true, "epl"); } catch { /* Same for the EPL leg. */ } try { await fetchLikelyScorers(ctx, "soccer", true, "mls"); } catch { /* Same for the MLS leg. */ } try { await fetchLikelyScorers(ctx, "soccer", true, "epl"); } catch { /* Same for the EPL leg. */ } try { await fetchSoccerHotStreaks(ctx, "mls", true); } catch { /* Same for the MLS leg. */ } try { await fetchSoccerHotStreaks(ctx, "epl", true); } catch { /* Same for the EPL leg. */ } try { await fetchSoccerColdStreaks(ctx, "mls", true); } catch { /* Same for the MLS leg. */ } try { await fetchSoccerColdStreaks(ctx, "epl", true); } catch { /* Same for the EPL leg. */ } try { await loadSoccerStandings(ctx, "mls"); } catch { /* Standings warm with the same daily job. */ } try { await loadSoccerStandings(ctx, "epl"); } catch { /* Same for the EPL leg. */ } return result; } }),
@@ -6153,6 +6408,7 @@ export const Actions = {
   getPremiumBoard: defineAction({ request: z.object({ sport: z.enum(sports) }), response: premiumResponse, async handler(ctx, args) { return loadPremium(ctx, args.sport); } }),
   getTrackRecord: defineAction({ request: z.object({}), response: trackRecordResponse, async handler(ctx) { return loadTrackRecord(ctx); } }),
   getLearningLog: defineAction({ request: z.object({}), response: learningLogResponse, async handler() { return getLearningLogData(); } }),
+  checkSlip: defineAction({ request: z.object({ legs: z.array(slipLegSchema).min(1).max(20) }), response: checkSlipResponse, async handler(ctx, args) { return analyzeSlip(ctx, args.legs); } }),
   getCalibration: defineAction({ request: z.object({}), response: calibrationResponse, async handler(ctx) { return loadCalibration(ctx); } }),
   getTrackerStatus: defineAction({ request: z.object({ adminToken: adminTokenSchema }), response: trackerStatusResponse, async handler(ctx, args) { requireAdmin(args); return loadTrackerStatus(ctx); } }),
   getAdminStatus: defineAction({ request: z.object({}), response: z.object({ configured: z.boolean() }), async handler() { return { configured: !!process.env.ADMIN_TOKEN?.trim() }; } }),

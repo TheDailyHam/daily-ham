@@ -11,9 +11,10 @@ import { api, type ApiRequest, type ApiResponse, type KeyInjuries, type KeyInjur
 import logo from "./assets/daily-ham-logo.jpg";
 import { EPL_TEAM_THEMES, LEAGUE_THEMES, MLS_TEAM_THEMES, NBA_TEAM_THEMES, SOCCER_LEAGUES, applyLeagueTheme, loadFavorites, saveFavorite, soccerLeagueForTeam, themeFor, type League, type LeagueFavorites } from "./teams";
 import { isWatchedPlayer, isWatchedTeam, loadWatchlist, removeWatchedEntry, toggleWatch, type WatchedEntry, type WatchedPlayer, type WatchedTeam } from "./watchlist";
+import { parseSlipText, type SlipCandidate } from "./slipParse";
 
 type Sport = League;
-type Mode = "board" | "matchup" | "rosters" | "streaks" | "standings" | "watchlist" | "parlay" | "settings" | "jamon" | "record";
+type Mode = "board" | "matchup" | "rosters" | "streaks" | "standings" | "watchlist" | "parlay" | "settings" | "jamon" | "record" | "slipcheck";
 const SPORT_KEY = "dh-sport";
 function loadSport(): Sport {
   try {
@@ -679,6 +680,258 @@ function ParlayView({ parlay, setParlay, sport, onGoBoard }: { parlay: ParlayPic
       <button className="slip-clear" onClick={()=>setParlay([])}>Clear slip</button>
       <p className="slip-disclaimer">Planning tool only. Every leg must be offered by the selected sportsbook; unavailable legs are never substituted.</p>
       <BetButtons />
+    </div>}
+  </section>;
+}
+
+// ---------------------------------------------------------------------------
+// Slip Check — the user brings a pre-made parlay (photo or by hand), the app
+// checks every leg against the player's real game log: hit rate at the exact
+// line, price vs evidence, structure flags, and the model's read on the
+// game. The photo reader only drafts legs — the user confirms every row
+// against the real rosters before analysis, so a misread can never become
+// a fake insight. No prop prices are ever invented: the only prices shown
+// are the ones from the user's own slip.
+// ---------------------------------------------------------------------------
+
+const SLIP_STATS: Record<Sport, { key: string; label: string }[]> = {
+  nfl: [
+    { key: "rushYards", label: "Rushing yards" }, { key: "recYards", label: "Receiving yards" },
+    { key: "receptions", label: "Receptions" }, { key: "passYards", label: "Passing yards" },
+    { key: "anytimeTd", label: "Anytime TD" }, { key: "passTds", label: "Passing TDs" },
+    { key: "rushTds", label: "Rushing TDs" }, { key: "recTds", label: "Receiving TDs" },
+    { key: "interceptions", label: "Interceptions" },
+  ],
+  ncaaf: [
+    { key: "rushYards", label: "Rushing yards" }, { key: "recYards", label: "Receiving yards" },
+    { key: "receptions", label: "Receptions" }, { key: "passYards", label: "Passing yards" },
+    { key: "anytimeTd", label: "Anytime TD" }, { key: "passTds", label: "Passing TDs" },
+    { key: "rushTds", label: "Rushing TDs" }, { key: "recTds", label: "Receiving TDs" },
+    { key: "interceptions", label: "Interceptions" },
+  ],
+  nba: [
+    { key: "points", label: "Points" }, { key: "rebounds", label: "Rebounds" }, { key: "assists", label: "Assists" },
+    { key: "threePointMade", label: "3-pointers made" }, { key: "steals", label: "Steals" }, { key: "blocks", label: "Blocks" },
+  ],
+  nhl: [
+    { key: "goals", label: "Goals" }, { key: "assists", label: "Assists" }, { key: "points", label: "Points" },
+    { key: "shots", label: "Shots on goal" }, { key: "anytimeGoal", label: "Anytime goal" }, { key: "saves", label: "Saves (goalie)" },
+  ],
+  soccer: [
+    { key: "goals", label: "Goals" }, { key: "assists", label: "Assists" }, { key: "anytimeGoal", label: "Anytime goal" },
+  ],
+};
+
+const SLIP_VERDICTS: Record<string, { label: string; bg: string }> = {
+  strong: { label: "Evidence strong", bg: "#2e7d32" },
+  solid: { label: "Evidence solid", bg: "#558b2f" },
+  fair: { label: "Fair fight", bg: "#8d6e00" },
+  rich: { label: "Priced rich", bg: "#b3541e" },
+  longshot: { label: "Longshot by his log", bg: "#7b1fa2" },
+  thin: { label: "Thin sample", bg: "#546e7a" },
+  nodata: { label: "No data", bg: "#616161" },
+};
+
+type SlipRowComparator = "gte" | "gt" | "lt";
+interface SlipRow { rowId: number; side: "away" | "home"; playerId: number | null; stat: string; threshold: string; comparator: SlipRowComparator; price: string }
+type SlipResult = Awaited<ReturnType<typeof api.checkSlip>>;
+const SLIPCHECK_KEY = "dh-slipcheck-v1";
+let slipRowSeq = 1;
+
+async function fetchSlipRoster(sport: Sport, team: string, league: SoccerLeague): Promise<{ id: number; name: string; position: string }[]> {
+  if (sport === "ncaaf") { const r = await api.getNcaafRoster({ team: team as NcaafTeamCode }); return r.players.map((p) => ({ id: p.id, name: p.name, position: p.position })); }
+  const r = await fetchMatchupRoster(sport, team, league);
+  return (r.players as { id: number; name: string; position?: string }[]).map((p) => ({ id: p.id, name: p.name, position: p.position ?? "" }));
+}
+
+async function runSlipOcr(file: File): Promise<string> {
+  const w = window as unknown as { Tesseract?: { createWorker: (lang: string) => Promise<{ recognize: (f: File) => Promise<{ data: { text: string } }>; terminate: () => Promise<void> }> } };
+  if (!w.Tesseract) {
+    await new Promise<void>((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5.0.5/dist/tesseract.min.js";
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error("The photo reader couldn't load — check your connection, or build the slip by hand below."));
+      document.head.appendChild(s);
+    });
+  }
+  if (!w.Tesseract) throw new Error("The photo reader didn't start — build the slip by hand below.");
+  const worker = await w.Tesseract.createWorker("eng");
+  try {
+    const { data } = await worker.recognize(file);
+    return data.text;
+  } finally { await worker.terminate(); }
+}
+
+function slipLineText(threshold: number, comparator: string, statLabel: string): string {
+  return comparator === "gte" ? `${threshold}+ ${statLabel}` : comparator === "gt" ? `Over ${threshold} ${statLabel}` : comparator === "lt" ? `Under ${threshold} ${statLabel}` : `${threshold} or fewer ${statLabel}`;
+}
+
+function SlipCheckView({ sport, soccerLeague }: { sport: Sport; soccerLeague: SoccerLeague }) {
+  const teamList: { code: string; name: string }[] = sport === "nhl" ? teams : sport === "nfl" ? nflTeams : sport === "nba" ? nbaTeams : sport === "ncaaf" ? ncaafTeams : soccerLeague === "mls" ? MLS_TEAM_THEMES : EPL_TEAM_THEMES;
+  const fallbackA = sport === "nhl" ? "WSH" : sport === "nfl" ? "NE" : teamList[0]?.code ?? "";
+  const fallbackB = sport === "nhl" ? "PIT" : sport === "nfl" ? "CHI" : teamList[1]?.code ?? "";
+  const [saved] = useState(() => {
+    try { const raw = localStorage.getItem(SLIPCHECK_KEY); if (raw) { const p = JSON.parse(raw) as { sport?: string; soccerLeague?: string; away?: string; home?: string; rows?: SlipRow[] }; if (p.sport === sport && p.soccerLeague === soccerLeague) return p; } } catch { /* fresh start */ }
+    return null;
+  });
+  const [awayTeam, setAwayTeam] = useState<string>(saved?.away ?? fallbackA);
+  const [homeTeam, setHomeTeam] = useState<string>(saved?.home ?? fallbackB);
+  const [rows, setRows] = useState<SlipRow[]>(saved?.rows ?? []);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [ocrBusy, setOcrBusy] = useState(false);
+  const [result, setResult] = useState<SlipResult | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    try { localStorage.setItem(SLIPCHECK_KEY, JSON.stringify({ sport, soccerLeague, away: awayTeam, home: homeTeam, rows })); } catch { /* private mode */ }
+  }, [sport, soccerLeague, awayTeam, homeTeam, rows]);
+
+  const rosters = useQueries({
+    queries: [awayTeam, homeTeam].map((team) => ({
+      queryKey: ["slip-roster", sport, soccerLeague, team],
+      queryFn: () => fetchSlipRoster(sport, team, soccerLeague),
+      staleTime: 15 * 60 * 1000, retry: 1, enabled: team !== "",
+    })),
+  });
+  const rosterFor = (side: "away" | "home") => (side === "away" ? rosters[0].data : rosters[1].data) ?? [];
+  const candidates: SlipCandidate[] = [
+    ...(rosters[0].data ?? []).map((p) => ({ id: p.id, name: p.name, team: awayTeam })),
+    ...(rosters[1].data ?? []).map((p) => ({ id: p.id, name: p.name, team: homeTeam })),
+  ];
+  const rostersReady = candidates.length > 0;
+
+  const pickGame = (side: "away" | "home", team: string) => {
+    if (side === "away") setAwayTeam(team); else setHomeTeam(team);
+    if (rows.length > 0) { setRows([]); setResult(null); setNotice("Game changed — the slip was cleared so every leg matches the new matchup."); }
+  };
+
+  const addRow = () => setRows((prev) => [...prev, { rowId: slipRowSeq++, side: "away", playerId: null, stat: SLIP_STATS[sport][0].key, threshold: "", comparator: "gte", price: "" }]);
+  const patchRow = (rowId: number, patch: Partial<SlipRow>) => setRows((prev) => prev.map((r) => (r.rowId === rowId ? { ...r, ...patch } : r)));
+  const removeRow = (rowId: number) => setRows((prev) => prev.filter((r) => r.rowId !== rowId));
+
+  const onPhoto = async (file: File) => {
+    if (!rostersReady) { setNotice("Pick the game above and give the rosters a second to load — the reader matches names against those two teams."); return; }
+    setOcrBusy(true); setNotice("Reading your slip photo on this device…");
+    try {
+      const text = await runSlipOcr(file);
+      const drafts = parseSlipText(text, candidates, sport);
+      if (drafts.length === 0) { setNotice("The reader couldn't match any legs on that photo. A tighter crop on the legs helps — or build the slip by hand below."); return; }
+      setRows((prev) => [...prev, ...drafts.map((d) => ({
+        rowId: slipRowSeq++,
+        side: (d.team === homeTeam ? "home" : "away") as "away" | "home",
+        playerId: d.playerId, stat: d.stat, threshold: String(d.threshold),
+        comparator: (d.comparator === "lte" ? "lt" : d.comparator) as SlipRowComparator,
+        price: d.price !== null ? String(d.price) : "",
+      }))]);
+      setResult(null);
+      setNotice(`Read ${drafts.length} leg${drafts.length === 1 ? "" : "s"} from your photo. Check every row against your slip and fix anything that's off — then run the check.`);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "The photo read failed — build the slip by hand below.");
+    } finally { setOcrBusy(false); }
+  };
+
+  const validRows = rows.filter((r) => r.playerId !== null && r.threshold.trim() !== "" && Number.isFinite(Number(r.threshold)));
+  const check = useMutation({
+    mutationFn: () => {
+      const legs = validRows.map((r) => {
+        const player = candidates.find((c) => c.id === r.playerId);
+        const priceNum = r.price.trim() === "" ? null : Number(r.price.replace("+", ""));
+        return {
+          sport, ...(sport === "soccer" ? { league: soccerLeague } : {}),
+          team: player?.team ?? (r.side === "away" ? awayTeam : homeTeam),
+          playerId: r.playerId!, playerName: player?.name ?? "Unknown player",
+          stat: r.stat, threshold: Number(r.threshold), comparator: r.comparator,
+          price: priceNum !== null && Number.isFinite(priceNum) ? Math.trunc(priceNum) : null,
+          gameAway: awayTeam, gameHome: homeTeam,
+        };
+      });
+      return api.checkSlip({ legs });
+    },
+    onSuccess: (data) => setResult(data),
+    onError: () => setNotice("The check didn't come back — the data feed may be busy. Give it a moment and run it again."),
+  });
+
+  const statLabelOf = (key: string) => SLIP_STATS[sport].find((s) => s.key === key)?.label ?? key;
+
+  return <section className="parlay-section">
+    <div className="roster-title"><div><p className="kicker">SLIP CHECK</p><h2>Check a slip you already built</h2><p className="roster-intro">Snap a photo of a parlay from any sportsbook — or build it by hand — and every leg gets checked against the player's real game log: his hit rate at your exact line, your price held up against the evidence, and the model's read on the game. Nothing is invented: no data, no read.</p></div><span>{rows.length} legs</span></div>
+
+    <div className="slip-card">
+      <div className="slip-head"><div><p className="kicker">THE GAME</p><h3>Who's playing?</h3></div></div>
+      <form className="matchup-form" onSubmit={(e) => e.preventDefault()}>
+        <label>Away team<select value={awayTeam} onChange={(e) => pickGame("away", e.target.value)}>{teamList.map((t) => <option key={t.code} value={t.code}>{t.name}</option>)}</select></label>
+        <span aria-hidden="true">@</span>
+        <label>Home team<select value={homeTeam} onChange={(e) => pickGame("home", e.target.value)}>{teamList.map((t) => <option key={t.code} value={t.code}>{t.name}</option>)}</select></label>
+      </form>
+      {awayTeam === homeTeam && <p className="calculator-note error" role="alert">Choose two different teams.</p>}
+
+      <div className="slip-head" style={{ marginTop: 14 }}><div><p className="kicker">THE SLIP</p><h3>Your legs</h3></div>
+        <div>
+          <input ref={fileRef} type="file" accept="image/*" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) void onPhoto(f); e.target.value = ""; }} />
+          <button type="button" className="refresh" disabled={ocrBusy} onClick={() => fileRef.current?.click()}>{ocrBusy ? "Reading photo…" : "📷 Read a slip photo"}</button>{" "}
+          <button type="button" className="refresh" onClick={addRow}>+ Add a leg by hand</button>
+        </div>
+      </div>
+      {notice && <p className="calculator-note" role="status">{notice}</p>}
+      {!rostersReady && <p className="calculator-note">Loading the two rosters…</p>}
+      {rows.length === 0 ? <div className="history-empty"><strong>No legs yet.</strong><span>Read a photo of your slip or add legs by hand. The check runs on official game logs — the same raw data behind everything else here — never on invented prop prices.</span></div> :
+      <ul className="slip-legs">{rows.map((r) => <li key={r.rowId} style={{ alignItems: "flex-start" }}>
+        <div style={{ flex: 1, display: "grid", gap: 6 }}>
+          <div className="segmented" role="group" aria-label="Team side">
+            <button type="button" className={r.side === "away" ? "active" : ""} onClick={() => patchRow(r.rowId, { side: "away", playerId: null })}>{awayTeam}</button>
+            <button type="button" className={r.side === "home" ? "active" : ""} onClick={() => patchRow(r.rowId, { side: "home", playerId: null })}>{homeTeam}</button>
+          </div>
+          <select value={r.playerId ?? ""} onChange={(e) => patchRow(r.rowId, { playerId: e.target.value === "" ? null : Number(e.target.value) })} aria-label="Player">
+            <option value="">Pick the player…</option>
+            {rosterFor(r.side).map((p) => <option key={p.id} value={p.id}>{p.name}{p.position ? ` (${p.position})` : ""}</option>)}
+          </select>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <select value={r.stat} onChange={(e) => patchRow(r.rowId, { stat: e.target.value })} aria-label="Stat">{SLIP_STATS[sport].map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}</select>
+            <div className="segmented" role="group" aria-label="Line type">
+              <button type="button" className={r.comparator === "gte" ? "active" : ""} onClick={() => patchRow(r.rowId, { comparator: "gte" })}>40+</button>
+              <button type="button" className={r.comparator === "gt" ? "active" : ""} onClick={() => patchRow(r.rowId, { comparator: "gt" })}>Over</button>
+              <button type="button" className={r.comparator === "lt" ? "active" : ""} onClick={() => patchRow(r.rowId, { comparator: "lt" })}>Under</button>
+            </div>
+            <input inputMode="decimal" style={{ width: 84 }} value={r.threshold} onChange={(e) => patchRow(r.rowId, { threshold: e.target.value })} placeholder="Line" aria-label="Line" />
+            <input inputMode="text" style={{ width: 96 }} value={r.price} onChange={(e) => patchRow(r.rowId, { price: e.target.value })} placeholder="Price -135" aria-label="Price (optional)" />
+          </div>
+        </div>
+        <button type="button" className="slip-remove" onClick={() => removeRow(r.rowId)} aria-label="Remove leg">×</button>
+      </li>)}</ul>}
+      {rows.length > 0 && <>
+        <button type="button" className="primary" disabled={validRows.length === 0 || check.isPending || awayTeam === homeTeam} onClick={() => check.mutate()}>{check.isPending ? "Checking every leg…" : `Run the check (${validRows.length} leg${validRows.length === 1 ? "" : "s"})`}</button>
+        <button type="button" className="slip-clear" onClick={() => { setRows([]); setResult(null); }}>Clear slip</button>
+      </>}
+      <p className="slip-disclaimer">Every read comes from the player's official game log this season. Slip Check never invents a sportsbook prop price — the only prices here are the ones on your slip.</p>
+    </div>
+
+    {result && <div className="slip-card" aria-label="Slip check results">
+      <div className="slip-head"><div><p className="kicker">THE VERDICT</p><h3>{result.combinedHitRate !== null ? `Combined hit-rate math: ${Math.round(result.combinedHitRate * 100)}%` : "Not enough data for combined math"}</h3></div></div>
+      <p className="calculator-note">{result.combinedNote}</p>
+      {result.games.map((g) => <p key={`${g.away}@${g.home}`} className="calculator-note">🏟️ <b>{g.away} @ {g.home}</b> — {g.note}</p>)}
+      {result.flags.length > 0 && <div>{result.flags.map((f, i) => <p key={i} className="calculator-note">⚑ {f.text}</p>)}</div>}
+      <ul className="slip-legs">{result.legs.map((leg, i) => {
+        const meta = SLIP_VERDICTS[leg.verdict] ?? SLIP_VERDICTS.nodata;
+        return <li key={i} style={{ alignItems: "flex-start" }}>
+          <div style={{ flex: 1, display: "grid", gap: 6 }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <strong>{leg.playerName}</strong>
+              <span style={{ background: meta.bg, color: "#fff", borderRadius: 999, padding: "2px 9px", fontSize: 12, fontWeight: 700 }}>{meta.label}</span>
+              {result.strongestLeg === i && <span aria-label="Strongest leg">⭐ strongest</span>}
+              {result.weakestLeg === i && result.legs.length > 1 && <span aria-label="Weakest leg">⚠ weakest</span>}
+            </div>
+            <small>{leg.team} · {slipLineText(leg.threshold, leg.comparator, leg.statLabel)}{leg.price !== null ? ` · priced ${formatAmerican(leg.price)}` : ""}</small>
+            {leg.hitRate !== null && <div className="winner-track" role="img" aria-label={`Hit rate ${Math.round(leg.hitRate * 100)} percent`}><i style={{ width: `${Math.round(leg.hitRate * 100)}%` }} /></div>}
+            <p className="calculator-note" style={{ margin: 0 }}>{leg.note}</p>
+            {leg.values.length > 0 && <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>{leg.values.map((v, j) => {
+              const hit = leg.comparator === "gte" ? v >= leg.threshold : leg.comparator === "gt" ? v > leg.threshold : leg.comparator === "lt" ? v < leg.threshold : v <= leg.threshold;
+              return <span key={j} style={{ borderRadius: 8, padding: "2px 8px", fontSize: 12, fontWeight: 700, background: hit ? "rgba(46,125,50,.25)" : "rgba(120,120,120,.18)", border: `1px solid ${hit ? "#2e7d32" : "rgba(120,120,120,.4)"}` }}>{v}</span>;
+            })}<small style={{ alignSelf: "center" }}>last {leg.values.length} games, newest first</small></div>}
+          </div>
+        </li>;
+      })}</ul>
+      <p className="slip-disclaimer">Hit rates describe this season's past games — they are not a prediction of the next one. Model estimates, not betting advice. 21+. Gambling problem? Call or text 1-800-GAMBLER.</p>
     </div>}
   </section>;
 }
@@ -3324,13 +3577,14 @@ export function App(){
         ["record", "Record"],
         ["jamon", "Ham Selection"],
         ["parlay", parlay.length > 0 ? `Parlay (${parlay.length})` : "Parlay"],
+        ["slipcheck", "Slip Check"],
         ["matchup", "Matchup"],
         ["rosters", "Players"],
         ["streaks", "Streaks"],
         ["standings", "League"],
         ["watchlist", "Watchlist"],
         ["settings", "Settings"],
-      ] as [Mode, string][]).map(([key, label]) => <button key={key} type="button" className={"mode-shape" + (mode === key ? " active" : "")} onClick={() => setMode(key)} aria-pressed={mode === key} aria-label={label}><span className={"rink " + (key === "jamon" ? "platter" : sport === "nhl" ? "ice" : sport === "nfl" || sport === "ncaaf" ? "turf" : sport === "nba" ? "court" : "pitch")} aria-hidden="true"><span className={"shape " + (key === "jamon" ? "plate" : sport === "nhl" ? "puck" : sport === "nfl" || sport === "ncaaf" ? "ball" : sport === "nba" ? "hoop" : "soccerball")} /></span>{mode === key && <i className="mode-glow" aria-hidden="true" />}<em>{label}</em></button>)}</nav></div>{mode==="board"&&<ProView parlay={parlay} setParlay={setParlay} home sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="record"&&<RecordView/>} {mode==="jamon"&&<HamSelectionView/>} {mode==="parlay"&&<ParlayView parlay={parlay} setParlay={setParlay} sport={sport} onGoBoard={()=>setMode("board")}/>} {mode==="matchup"&&<MatchupView sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="rosters"&&<RosterView parlay={parlay} setParlay={setParlay} sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague} teamFocus={teamFocus}/>} {mode==="streaks"&&<StreaksView sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="standings"&&<LeagueView sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="watchlist"&&<WatchlistView onViewTeam={viewTeam}/>} {mode==="settings"&&<SiteSettings/>}<AppFooter onOpenDisclosures={() => setDisclosuresOpen(true)}/>{tutorialOpen&&<TutorialSheet onClose={() => setTutorialOpen(false)}/>}{disclosuresOpen&&<DisclosuresSheet onClose={() => setDisclosuresOpen(false)}/>}</main></div>;
+      ] as [Mode, string][]).map(([key, label]) => <button key={key} type="button" className={"mode-shape" + (mode === key ? " active" : "")} onClick={() => setMode(key)} aria-pressed={mode === key} aria-label={label}><span className={"rink " + (key === "jamon" ? "platter" : sport === "nhl" ? "ice" : sport === "nfl" || sport === "ncaaf" ? "turf" : sport === "nba" ? "court" : "pitch")} aria-hidden="true"><span className={"shape " + (key === "jamon" ? "plate" : sport === "nhl" ? "puck" : sport === "nfl" || sport === "ncaaf" ? "ball" : sport === "nba" ? "hoop" : "soccerball")} /></span>{mode === key && <i className="mode-glow" aria-hidden="true" />}<em>{label}</em></button>)}</nav></div>{mode==="board"&&<ProView parlay={parlay} setParlay={setParlay} home sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="record"&&<RecordView/>} {mode==="jamon"&&<HamSelectionView/>} {mode==="parlay"&&<ParlayView parlay={parlay} setParlay={setParlay} sport={sport} onGoBoard={()=>setMode("board")}/>} {mode==="slipcheck"&&<SlipCheckView key={sport + ":" + soccerLeague} sport={sport} soccerLeague={soccerLeague}/>} {mode==="matchup"&&<MatchupView sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="rosters"&&<RosterView parlay={parlay} setParlay={setParlay} sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague} teamFocus={teamFocus}/>} {mode==="streaks"&&<StreaksView sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="standings"&&<LeagueView sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="watchlist"&&<WatchlistView onViewTeam={viewTeam}/>} {mode==="settings"&&<SiteSettings/>}<AppFooter onOpenDisclosures={() => setDisclosuresOpen(true)}/>{tutorialOpen&&<TutorialSheet onClose={() => setTutorialOpen(false)}/>}{disclosuresOpen&&<DisclosuresSheet onClose={() => setDisclosuresOpen(false)}/>}</main></div>;
 }
 
 // NBA views. Mirror the NFL sections: schedule strip, league, matchup
