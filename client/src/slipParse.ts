@@ -78,6 +78,239 @@ export function detectSlipTeams(rawText: string, teamList: { code: string; name:
   return [hits[0].code, hits[1].code];
 }
 
+// ---- Multi-game parlay-list parsing (Slip Check v2) ----
+// A sportsbook betslip list prints one block per leg:
+//   <icon junk> Boston Bruins -155
+//   Winner (Incl. Overtime and Penalties)
+//   NHL • Nashville Predators at Boston Bruins Today 7:05pm
+// SGP groups print a header carrying the game, then legs with no context
+// of their own. Ownership rule: a context line belongs to the block above
+// it when it directly follows that block's descriptor line; otherwise it
+// sets the "section game" that following context-less blocks inherit.
+// Every leg in the picture becomes a draft — markets the app can't grade
+// (kicker extra points, tackles, ...) come through as "market" drafts and
+// are shown honestly as unchecked instead of vanishing.
+
+export interface SlipDirectory { sport: SlipSportKey; league?: "mls" | "epl"; teams: { code: string; name: string }[] }
+export interface SlipDraftV2 {
+  kind: "prop" | "winner" | "total" | "market";
+  sport: SlipSportKey;
+  league?: "mls" | "epl";
+  away?: string;
+  home?: string;
+  team?: string;
+  playerName?: string;
+  stat?: string;
+  threshold?: number;
+  comparator?: SlipComparator;
+  price: number | null;
+  label: string;
+}
+
+interface SlipGameRef { sport: SlipSportKey; league?: "mls" | "epl"; away: string; home: string }
+
+function matchTeamInDir(text: string, dir: SlipDirectory): { code: string; idx: number } | null {
+  const t = normalize(text);
+  let best: { code: string; idx: number } | null = null;
+  for (const team of dir.teams) {
+    const idx = t.indexOf(normalize(team.name));
+    if (idx >= 0 && (!best || idx < best.idx)) best = { code: team.code, idx };
+  }
+  if (best) return best;
+  // Nickname fallback (unique last token), e.g. OCR loses the city.
+  for (const team of dir.teams) {
+    const nick = normalize(team.name).split(" ").pop() ?? "";
+    if (nick.length < 4) continue;
+    if (dir.teams.filter((o) => (normalize(o.name).split(" ").pop() ?? "") === nick).length > 1) continue;
+    const m = t.match(new RegExp(`\\b${nick}\\b`));
+    if (m && m.index !== undefined) return { code: team.code, idx: m.index };
+  }
+  return null;
+}
+
+const LEAGUE_HINTS: { re: RegExp; sport: SlipSportKey; league?: "mls" | "epl" }[] = [
+  { re: /\bnhl\b/, sport: "nhl" },
+  { re: /\bnfl\b/, sport: "nfl" },
+  { re: /\bnba\b/, sport: "nba" },
+  { re: /\bncaaf\b|\bcfb\b|college football/, sport: "ncaaf" },
+  { re: /\bmls\b/, sport: "soccer", league: "mls" },
+  { re: /\bepl\b|premier league/, sport: "soccer", league: "epl" },
+];
+
+function parseContextLine(line: string, dirs: SlipDirectory[]): SlipGameRef | null {
+  const norm = normalize(line);
+  const cut = (norm.split(/\b(today|tomorrow|mon|tue|wed|thu|fri|sat|sun)\b/)[0] ?? "").split(/\d{1,2}:\d{2}/)[0] ?? "";
+  const sep = cut.match(/\s+(?:at|vs|v)\s+/);
+  if (!sep || sep.index === undefined) return null;
+  const left = cut.slice(0, sep.index);
+  const right = cut.slice(sep.index + sep[0].length);
+  const hint = LEAGUE_HINTS.find((h) => h.re.test(norm));
+  const ordered = hint ? [...dirs.filter((d) => d.sport === hint.sport && d.league === hint.league), ...dirs.filter((d) => !(d.sport === hint.sport && d.league === hint.league))] : dirs;
+  for (const dir of ordered) {
+    const a = matchTeamInDir(left, dir);
+    const b = matchTeamInDir(right, dir);
+    if (a && b && a.code !== b.code) return { sport: dir.sport, league: dir.league, away: a.code, home: b.code };
+  }
+  return null;
+}
+
+function cleanName(raw: string): string {
+  let s = raw.replace(/^[^a-zA-Z]+/, "").trim();
+  // Drop short OCR icon junk tokens ("ij", "iw", "ti") ahead of the name.
+  const parts = s.split(/\s+/);
+  while (parts.length > 2 && (parts[0] ?? "").length <= 2 && !/[.']/.test(parts[0] ?? "")) parts.shift();
+  return parts.join(" ").replace(/\s+/g, " ").trim();
+}
+
+function priceIn(text: string): number | null {
+  const m = text.match(/([+-])\s?(\d{2,4})\b(?!\+)/);
+  if (!m) return null;
+  const v = parseInt(m[2] ?? "0", 10);
+  if (v < 50 || v > 100000) return null;
+  return m[1] === "-" ? -v : v;
+}
+
+function ouIn(text: string): { threshold: number; comparator: SlipComparator } | null {
+  const over = text.match(/over\s+(\d+(?:\.\d+)?)/);
+  if (over) return { threshold: parseFloat(over[1] ?? "0"), comparator: "gt" };
+  const under = text.match(/under\s+(\d+(?:\.\d+)?)/);
+  if (under) return { threshold: parseFloat(under[1] ?? "0"), comparator: "lt" };
+  const o = text.match(/\bo\s?(\d+(?:\.\d+)?)\b/);
+  if (o) return { threshold: parseFloat(o[1] ?? "0"), comparator: "gt" };
+  const u = text.match(/\bu\s?(\d+(?:\.\d+)?)\b/);
+  if (u) return { threshold: parseFloat(u[1] ?? "0"), comparator: "lt" };
+  return null;
+}
+
+interface RawBlock { headline: string; price: number | null; descriptor: string; subs: string[]; game: SlipGameRef | null; section: SlipGameRef | null }
+
+const NOISE_RE = /betslip|remove all|straights|parlays|squads|wager|to win|place bet|total payout|deposit|not enough funds|odds\/lines changed|review betslip|accept and|includes:\s*\d+\s*sgp|\bsgp\b.*boost|opt in|boost/i;
+
+export function parseParlayList(rawText: string, dirs: SlipDirectory[]): SlipDraftV2[] {
+  const rawLines = rawText.split(/\r?\n/);
+  const blocks: RawBlock[] = [];
+  let section: SlipGameRef | null = null;
+  let lastWasDescriptor = false;
+  let lastBlock: RawBlock | null = null;
+
+  for (const rawLine of rawLines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const norm = normalize(line);
+    if (/^\d+\s*leg\b/.test(norm) || /^leg\s/.test(norm)) { lastWasDescriptor = false; continue; }
+    const ctx = parseContextLine(line, dirs);
+    if (ctx) {
+      if (lastWasDescriptor && lastBlock && !lastBlock.game) lastBlock.game = ctx;
+      else section = ctx;
+      lastWasDescriptor = false;
+      continue;
+    }
+    if (NOISE_RE.test(norm)) { lastWasDescriptor = false; continue; }
+    // Pick line: trailing price, or a bare Over/Under headline.
+    const priceMatch = line.match(/^(.+?)\s+([+-]\d{2,4})\s*$/);
+    const ouHead = norm.match(/^(over|under)\s+(\d+(?:\.\d+)?)/);
+    if (priceMatch || ouHead) {
+      const headline = ouHead ? `${ouHead[1] ?? "over"} ${ouHead[2] ?? ""}` : cleanName(priceMatch![1]!);
+      lastBlock = { headline, price: priceMatch ? priceIn(line) : priceIn(norm), descriptor: "", subs: [], game: null, section };
+      blocks.push(lastBlock);
+      lastWasDescriptor = false;
+      continue;
+    }
+    if (lastBlock && !lastBlock.descriptor && line.length > 2 && !/^\d/.test(line)) {
+      lastBlock.descriptor = line;
+      lastWasDescriptor = true;
+      continue;
+    }
+    if (lastBlock) { lastBlock.subs.push(line); lastWasDescriptor = false; }
+  }
+
+  const drafts: SlipDraftV2[] = [];
+  const statLabel = (s: string) => s.replace(/\s+/g, " ").trim();
+  for (const b of blocks) {
+    const game = b.game ?? b.section;
+    const descNorm = normalize(`${b.descriptor} ${b.subs.join(" ")}`);
+    const headNorm = normalize(b.headline);
+    const price = b.price ?? priceIn(descNorm) ?? priceIn(b.subs.join(" "));
+    const gameFields = game ? { sport: game.sport, league: game.league, away: game.away, home: game.home } : null;
+    // Winner / moneyline: the headline is one of the two teams.
+    if (/\bwinner\b|\bmoneyline\b/.test(descNorm) && game && gameFields) {
+      const dir = dirs.find((d) => d.sport === game.sport && d.league === game.league);
+      const picked = dir ? matchTeamInDir(b.headline, { ...dir, teams: dir.teams.filter((t) => t.code === game.away || t.code === game.home) }) : null;
+      if (picked) {
+        const canonical = dir?.teams.find((t) => t.code === picked.code)?.name ?? b.headline;
+        drafts.push({ kind: "winner", ...gameFields, team: picked.code, price, label: `${canonical} to win` });
+        continue;
+      }
+    }
+    // Player props: a known stat phrase anywhere in the block.
+    const keyword = STAT_KEYWORDS.find((k) => (!game || k.sports.includes(game.sport)) && k.pattern.test(`${headNorm} ${descNorm}`));
+    if (keyword && game && gameFields) {
+      const stat = keyword.stat;
+      let threshold: number | null = null;
+      let comparator: SlipComparator = "gte";
+      if (stat === "anytimeTd" || stat === "anytimeGoal") { threshold = 1; comparator = "gte"; }
+      else {
+        const plus = `${headNorm} ${descNorm}`.match(/(\d+(?:\.\d+)?)\s*\+/);
+        const ou = ouIn(`${headNorm} ${descNorm}`);
+        if (plus) { threshold = parseFloat(plus[1] ?? "0"); comparator = "gte"; }
+        else if (ou) { threshold = ou.threshold; comparator = ou.comparator; }
+      }
+      if (threshold !== null) { drafts.push({ kind: "prop", ...gameFields, playerName: b.headline, stat, threshold, comparator, price, label: b.headline }); continue; }
+    }
+    // Game total: an over/under with a totals descriptor, or a bare
+    // over/under headline in a known game.
+    const ou = ouIn(headNorm) ?? ouIn(descNorm);
+    if (ou && game && gameFields && (/\btotal/.test(descNorm) || /^(over|under)/.test(headNorm))) {
+      drafts.push({ kind: "total", ...gameFields, team: game.away, threshold: ou.threshold, comparator: ou.comparator, price, label: `${ou.comparator === "gt" ? "Over" : "Under"} ${ou.threshold} — ${game.away} @ ${game.home}` });
+      continue;
+    }
+    // Anything else with a headline: an honestly-unchecked market leg.
+    if (b.headline && b.headline.length > 2) {
+      const marketSport = game?.sport ?? "nfl";
+      drafts.push({ kind: "market", sport: marketSport, league: game?.league, away: game?.away, home: game?.home, team: game?.home, price, label: statLabel(`${b.headline}${b.descriptor ? ` — ${b.descriptor}` : ""}`) });
+    }
+  }
+
+  const seen = new Set<string>();
+  return drafts.filter((d) => {
+    const key = slipDraftKey(d);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+// Structural identity of a draft — never the label, because OCR junk
+// tokens ("Tir", "ij") vary between photos of the same slip.
+export function slipDraftKey(d: SlipDraftV2): string {
+  if (d.kind === "market") return `market|${d.sport}|${normalize(d.label)}`;
+  return `${d.kind}|${d.sport}|${d.league ?? ""}|${d.away ?? ""}@${d.home ?? ""}|${d.team ?? ""}|${normalize(d.playerName ?? "")}|${d.stat ?? ""}|${d.threshold ?? ""}|${d.comparator ?? ""}`;
+}
+
+// Merge the drafts from several photos of one slip: structural dedupe,
+// then drop market fragments that a clean leg already covers (a garbled
+// duplicate of a winner pick must not ride along as an unchecked leg).
+export function mergeSlipDrafts(lists: SlipDraftV2[][], dirs: SlipDirectory[]): SlipDraftV2[] {
+  const all = lists.flat();
+  const seen = new Set<string>();
+  const merged = all.filter((d) => {
+    const key = slipDraftKey(d);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  const coveredNames: string[] = [];
+  for (const d of merged) {
+    if (d.kind === "winner" && d.team) {
+      const dir = dirs.find((x) => x.sport === d.sport && x.league === d.league);
+      const name = dir?.teams.find((t) => t.code === d.team)?.name;
+      if (name) coveredNames.push(normalize(name));
+    }
+    if (d.kind === "prop" && d.playerName) coveredNames.push(normalize(d.playerName));
+  }
+  return merged.filter((d) => d.kind !== "market" || !coveredNames.some((n) => n.length > 3 && normalize(d.label).includes(n)));
+}
+
 function lastNameOf(name: string): string {
   const parts = normalize(name).split(" ").filter((p) => !["jr", "sr", "ii", "iii", "iv"].includes(p));
   return parts[parts.length - 1] ?? "";

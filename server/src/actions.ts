@@ -6086,22 +6086,35 @@ type SlipSport = (typeof slipSports)[number];
 const slipComparators = ["gte", "gt", "lt", "lte"] as const;
 type SlipComparator = (typeof slipComparators)[number];
 
+// Slip Check v2 leg kinds (2026-10-22, Cody: "pretty much everything
+// selected in the picture needs to be able to get a read on it"):
+// - "prop": a player stat line, graded from the player's game log.
+// - "winner": a team moneyline/winner pick, graded by the model's win
+//   probability for that team against the price's implied probability.
+// - "total": a game over/under, graded by the model's projected total
+//   against the line.
+// - "market": anything the app has no data for (kicker extra points,
+//   tackles, ...): carried on the slip, shown, and honestly marked
+//   nodata — never silently dropped, never fake-graded.
 const slipLegSchema = z.object({
+  kind: z.enum(["prop", "winner", "total", "market"]).default("prop"),
   sport: z.enum(slipSports),
   league: z.enum(soccerLeagues).optional(),
   team: z.string().min(1).max(12),
-  playerId: z.number().int().positive(),
-  playerName: z.string().min(1).max(80),
-  stat: z.string().min(1).max(24),
-  threshold: z.number().min(0).max(1000),
-  comparator: z.enum(slipComparators),
+  playerId: z.number().int().positive().optional(),
+  playerName: z.string().max(80).default(""),
+  stat: z.string().max(24).default(""),
+  threshold: z.number().min(0).max(1000).default(0),
+  comparator: z.enum(slipComparators).default("gte"),
   price: z.number().int().min(-100000).max(100000).nullable().optional(),
   gameAway: z.string().min(1).max(12).optional(),
   gameHome: z.string().min(1).max(12).optional(),
+  label: z.string().max(140).optional(),
 });
 type SlipLeg = z.infer<typeof slipLegSchema>;
 
 const slipLegResultSchema = z.object({
+  kind: z.enum(["prop", "winner", "total", "market"]),
   playerName: z.string(), team: z.string(), sport: z.enum(slipSports),
   stat: z.string(), statLabel: z.string(), threshold: z.number(), comparator: z.enum(slipComparators),
   price: z.number().nullable(),
@@ -6110,6 +6123,8 @@ const slipLegResultSchema = z.object({
   median: z.number().nullable(), average: z.number().nullable(),
   values: z.array(z.number()),
   impliedPct: z.number().nullable(), edge: z.number().nullable(),
+  modelWinPct: z.number().nullable(), projectedTotal: z.number().nullable(), lineGap: z.number().nullable(),
+  label: z.string(),
   verdict: z.enum(["strong", "solid", "fair", "rich", "longshot", "thin", "nodata"]),
   note: z.string(),
 });
@@ -6162,11 +6177,12 @@ function slipStatValue(sport: SlipSport, stat: string, g: Record<string, unknown
 
 async function slipLogValues(ctx: Ctx, leg: SlipLeg): Promise<number[]> {
   let rows: Record<string, unknown>[] = [];
-  if (leg.sport === "nfl") rows = (await loadNflPlayerGameLog(ctx, leg.team as (typeof nflTeamCodes)[number], leg.playerId)).games as unknown as Record<string, unknown>[];
-  else if (leg.sport === "ncaaf") rows = (await loadNcaafPlayerGameLog(ctx, leg.team as (typeof ncaafTeamCodes)[number], leg.playerId)).games as unknown as Record<string, unknown>[];
-  else if (leg.sport === "nba") rows = (await loadNbaPlayerGameLog(ctx, leg.team as (typeof nbaTeamCodes)[number], leg.playerId)).games as unknown as Record<string, unknown>[];
-  else if (leg.sport === "soccer") rows = (await loadSoccerPlayerGameLog(ctx, leg.league ?? "mls", leg.team, leg.playerId)).games as unknown as Record<string, unknown>[];
-  else rows = (await loadNhlPlayerGameLog(leg.playerId)).games as unknown as Record<string, unknown>[];
+  const playerId = leg.playerId ?? 0;
+  if (leg.sport === "nfl") rows = (await loadNflPlayerGameLog(ctx, leg.team as (typeof nflTeamCodes)[number], playerId)).games as unknown as Record<string, unknown>[];
+  else if (leg.sport === "ncaaf") rows = (await loadNcaafPlayerGameLog(ctx, leg.team as (typeof ncaafTeamCodes)[number], playerId)).games as unknown as Record<string, unknown>[];
+  else if (leg.sport === "nba") rows = (await loadNbaPlayerGameLog(ctx, leg.team as (typeof nbaTeamCodes)[number], playerId)).games as unknown as Record<string, unknown>[];
+  else if (leg.sport === "soccer") rows = (await loadSoccerPlayerGameLog(ctx, leg.league ?? "mls", leg.team, playerId)).games as unknown as Record<string, unknown>[];
+  else rows = (await loadNhlPlayerGameLog(playerId)).games as unknown as Record<string, unknown>[];
   const dated = rows.map((g) => ({ date: typeof g.gameDate === "string" ? g.gameDate : "", value: slipStatValue(leg.sport, leg.stat, g) })).filter((r) => r.value !== null) as { date: string; value: number }[];
   dated.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
   return dated.map((r) => r.value);
@@ -6190,12 +6206,20 @@ function slipPriceStr(price: number): string { return price > 0 ? `+${price}` : 
 async function analyzeSlipLeg(ctx: Ctx, leg: SlipLeg): Promise<z.infer<typeof slipLegResultSchema>> {
   const statLabel = SLIP_STAT_LABELS[leg.stat] ?? leg.stat;
   const base = {
-    playerName: leg.playerName, team: leg.team, sport: leg.sport, stat: leg.stat, statLabel,
+    kind: leg.kind, playerName: leg.playerName, team: leg.team, sport: leg.sport, stat: leg.stat, statLabel,
     threshold: leg.threshold, comparator: leg.comparator, price: leg.price ?? null,
     games: 0, hits: 0, hitRate: null, last5Hits: 0, last5Games: 0, median: null, average: null,
     values: [] as number[], impliedPct: leg.price != null ? slipImplied(leg.price) : null, edge: null,
+    modelWinPct: null as number | null, projectedTotal: null as number | null, lineGap: null as number | null,
+    label: leg.label ?? "",
   };
-  if (!SLIP_ALLOWED_STATS[leg.sport].includes(leg.stat)) {
+  if (leg.kind !== "prop") {
+    // Winner/total legs are graded in analyzeSlip, where the game's model
+    // environment is already loaded once (their notes need the env note
+    // too). Market legs ride along honestly unread.
+    return { ...base, verdict: "nodata" as const, note: leg.kind === "market" ? "No data feed covers this market in the app yet — this leg rides unchecked, and that's said out loud rather than faked." : "Awaiting the game read." };
+  }
+  if (!leg.playerId || !SLIP_ALLOWED_STATS[leg.sport].includes(leg.stat)) {
     return { ...base, verdict: "nodata" as const, note: "That stat isn't tracked in this player's game log, so there's nothing honest to check this leg against." };
   }
   let values: number[];
@@ -6261,6 +6285,54 @@ async function slipGameEnv(ctx: Ctx, sport: SlipSport, league: SoccerLeagueParam
   } catch { return null; }
 }
 
+type SlipLegResult = z.infer<typeof slipLegResultSchema>;
+
+// Winner legs: the model's win probability for the picked team, held
+// against the price's implied probability — the same edge scale the
+// props use, so a "rich" moneyline means the same thing as a rich prop.
+function gradeWinnerLeg(leg: SlipLeg, base: SlipLegResult, env: z.infer<typeof slipGameEnvSchema> | undefined): SlipLegResult {
+  if (!env) return { ...base, note: "The model's read on this game didn't come back, so this winner pick rides unchecked — no read beats a guessed one." };
+  const pct = leg.team === env.away ? env.awayWinPct : leg.team === env.home ? env.homeWinPct : null;
+  const opp = leg.team === env.away ? env.home : env.away;
+  if (pct === null) return { ...base, note: "The model has no win estimate for this matchup yet — this leg rides unchecked." };
+  const impliedPct = base.impliedPct;
+  const edge = impliedPct !== null ? Math.round((pct - impliedPct) * 1000) / 1000 : null;
+  let verdict: SlipLegResult["verdict"];
+  let priceNote = "";
+  if (impliedPct !== null && edge !== null) {
+    verdict = edge >= 0.08 ? "strong" : edge >= 0.02 ? "solid" : edge >= -0.05 ? "fair" : "rich";
+    priceNote = edge >= 0.05
+      ? ` Your price ${slipPriceStr(leg.price!)} needs ≈${slipPct(impliedPct)} — the model gives them more than that.`
+      : edge <= -0.05
+        ? ` Your price ${slipPriceStr(leg.price!)} needs ≈${slipPct(impliedPct)} — the model gives them less. The price is rich for this read.`
+        : ` Your price ${slipPriceStr(leg.price!)} needs ≈${slipPct(impliedPct)} — right around the model's read.`;
+  } else {
+    verdict = pct >= 0.7 ? "strong" : pct >= 0.58 ? "solid" : pct >= 0.48 ? "fair" : "longshot";
+  }
+  const drawNote = env.drawPct !== null && leg.sport === "soccer" ? ` Careful: this is a three-way market — the model puts another ${slipPct(env.drawPct)} on the draw, and a tie kills a winner bet.` : "";
+  return { ...base, modelWinPct: pct, edge, verdict, label: base.label || `${leg.team} to win`, note: `Model estimate: ${leg.team} wins this one ${slipPct(pct)} of the time against ${opp}.${drawNote}${priceNote}` };
+}
+
+// Total legs: the model's projected total against the line. The verdict
+// keys off the gap IN THE BET'S FAVOR, on a per-sport scale (a 1.5-goal
+// gap is a chasm in hockey and a rounding error in basketball).
+const SLIP_TOTAL_GAPS: Record<SlipSport, [number, number, number]> = { nfl: [7, 4, 1.5], ncaaf: [8, 5, 2], nba: [11, 6.5, 2.5], nhl: [1.6, 1.0, 0.4], soccer: [1.0, 0.6, 0.25] };
+const SLIP_TOTAL_UNIT: Record<SlipSport, string> = { nfl: "points", ncaaf: "points", nba: "points", nhl: "goals", soccer: "goals" };
+function gradeTotalLeg(leg: SlipLeg, base: SlipLegResult, env: z.infer<typeof slipGameEnvSchema> | undefined): SlipLegResult {
+  if (!env || env.projectedTotal === null) return { ...base, note: "The model has no projected total for this game yet — this leg rides unchecked." };
+  const proj = env.projectedTotal;
+  const over = leg.comparator === "gt" || leg.comparator === "gte";
+  const signed = Math.round((over ? proj - leg.threshold : leg.threshold - proj) * 10) / 10;
+  const [gStrong, gSolid, gFair] = SLIP_TOTAL_GAPS[leg.sport];
+  const verdict: SlipLegResult["verdict"] = signed >= gStrong ? "strong" : signed >= gSolid ? "solid" : signed >= gFair ? "fair" : signed <= -gSolid ? "longshot" : "rich";
+  const unit = SLIP_TOTAL_UNIT[leg.sport];
+  const bookNote = env.bookTotal !== null ? ` The book's posted total is ${env.bookTotal}.` : "";
+  const note = signed >= 0
+    ? `The model projects ${proj} total ${unit} here — ${Math.abs(signed)} ${unit} ${over ? "above" : "below"} your ${leg.threshold} line, on your side of it.${bookNote}`
+    : `The model projects ${proj} total ${unit} here — ${Math.abs(signed)} ${unit} on the wrong side of your ${over ? "over" : "under"} ${leg.threshold}.${bookNote}`;
+  return { ...base, projectedTotal: proj, lineGap: signed, verdict, label: base.label || `${over ? "Over" : "Under"} ${leg.threshold}`, note };
+}
+
 async function analyzeSlip(ctx: Ctx, legs: SlipLeg[]): Promise<z.infer<typeof checkSlipResponse>> {
   const results = await Promise.all(legs.map((leg) => analyzeSlipLeg(ctx, leg)));
   const gameKeys = new Map<string, { sport: SlipSport; league?: SoccerLeagueParam; away: string; home: string }>();
@@ -6270,20 +6342,29 @@ async function analyzeSlip(ctx: Ctx, legs: SlipLeg[]): Promise<z.infer<typeof ch
   const games = (await Promise.all([...gameKeys.values()].map((g) => slipGameEnv(ctx, g.sport, g.league, g.away, g.home)))).filter((g): g is z.infer<typeof slipGameEnvSchema> => g !== null);
   const envByKey = new Map(games.map((g) => [`${g.sport}:${g.away}@${g.home}`, g]));
 
+  // Winner and total legs grade against their game's model environment.
+  legs.forEach((leg, i) => {
+    if (leg.kind !== "winner" && leg.kind !== "total") return;
+    const env = leg.gameAway && leg.gameHome ? envByKey.get(`${leg.sport}:${leg.gameAway}@${leg.gameHome}`) : undefined;
+    const current = results[i];
+    if (!current) return;
+    results[i] = leg.kind === "winner" ? gradeWinnerLeg(leg, current, env) : gradeTotalLeg(leg, current, env);
+  });
+
   const flags: { kind: string; text: string }[] = [];
   const byPlayer = new Map<string, number[]>();
-  legs.forEach((leg, i) => { const key = `${leg.sport}:${leg.playerId}`; byPlayer.set(key, [...(byPlayer.get(key) ?? []), i]); });
+  legs.forEach((leg, i) => { if (!leg.playerId) return; const key = `${leg.sport}:${leg.playerId}`; byPlayer.set(key, [...(byPlayer.get(key) ?? []), i]); });
   for (const idxs of byPlayer.values()) {
-    if (idxs.length >= 2) flags.push({ kind: "concentration", text: `${legs[idxs[0]].playerName} carries ${idxs.length} legs of this slip — one quiet night from him ends the whole ticket.` });
+    if (idxs.length >= 2) flags.push({ kind: "concentration", text: `${legs[idxs[0] ?? 0]!.playerName} carries ${idxs.length} legs of this slip — one quiet night from him ends the whole ticket.` });
   }
   for (let i = 0; i < legs.length; i++) for (let j = i + 1; j < legs.length; j++) {
-    const a = legs[i]; const b = legs[j];
-    if (a.sport === b.sport && a.playerId === b.playerId && a.stat === b.stat) {
+    const a = legs[i]!; const b = legs[j]!;
+    if (a.kind === "prop" && b.kind === "prop" && a.sport === b.sport && a.playerId === b.playerId && a.stat === b.stat) {
       const aOver = a.comparator === "gte" || a.comparator === "gt";
       const bOver = b.comparator === "gte" || b.comparator === "gt";
       if (aOver !== bOver) flags.push({ kind: "conflict", text: `${a.playerName} has both sides of ${SLIP_STAT_LABELS[a.stat] ?? a.stat} — those two legs can't both cash.` });
     }
-    if (a.sport === b.sport && a.team === b.team && a.playerId !== b.playerId && a.gameAway === b.gameAway && a.gameHome === b.gameHome) {
+    if (a.kind === "prop" && b.kind === "prop" && a.sport === b.sport && a.team === b.team && a.playerId !== b.playerId && a.gameAway === b.gameAway && a.gameHome === b.gameHome) {
       const passUnder = (x: SlipLeg, y: SlipLeg) => x.stat === "passYards" && (x.comparator === "lt" || x.comparator === "lte") && (y.stat === "recYards" || y.stat === "receptions") && (y.comparator === "gte" || y.comparator === "gt");
       if (passUnder(a, b) || passUnder(b, a)) {
         const qb = passUnder(a, b) ? a : b; const wr = passUnder(a, b) ? b : a;
@@ -6304,22 +6385,50 @@ async function analyzeSlip(ctx: Ctx, legs: SlipLeg[]): Promise<z.infer<typeof ch
       flags.push({ kind: "environment", text: `The model projects ${env.projectedTotal} total points in ${env.away} @ ${env.home} — a low-scoring script for a slip carrying ${count} scoring legs in that game.` });
     }
   }
+  // Winner legs fighting each other, and winner legs fighting the slip's
+  // own scorer props on the other team.
+  const winnersByGame = new Map<string, SlipLeg[]>();
+  for (const leg of legs) {
+    if (leg.kind !== "winner" || !leg.gameAway || !leg.gameHome) continue;
+    const key = `${leg.sport}:${leg.gameAway}@${leg.gameHome}`;
+    winnersByGame.set(key, [...(winnersByGame.get(key) ?? []), leg]);
+  }
+  for (const [key, ws] of winnersByGame) {
+    const teams = new Set(ws.map((w) => w.team));
+    if (teams.size >= 2) {
+      const env = envByKey.get(key);
+      flags.push({ kind: "conflict", text: `Both sides of ${env ? `${env.away} @ ${env.home}` : "the same game"} are on this slip — one of those winner legs loses no matter what happens.` });
+    }
+    for (const w of ws) {
+      const oppScorers = legs.filter((l) => l.kind === "prop" && (l.stat === "anytimeGoal" || l.stat === "anytimeTd") && l.team !== w.team && l.gameAway === w.gameAway && l.gameHome === w.gameHome && l.sport === w.sport);
+      if (oppScorers.length >= 2) flags.push({ kind: "tension", text: `Your ${w.team} winner pick wants a quiet night from the other side, but ${oppScorers.length} scorer legs on this slip need its players to score.` });
+    }
+  }
+  const unchecked = results.filter((r) => r.kind === "market").length;
+  if (unchecked > 0) flags.push({ kind: "unchecked", text: `${unchecked} leg${unchecked === 1 ? "" : "s"} on this slip ${unchecked === 1 ? "has" : "have"} no data read (a market the app doesn't track yet) — ${unchecked === 1 ? "it rides" : "they ride"} completely unchecked.` });
+
   const thinNames = results.filter((r) => r.verdict === "thin").map((r) => r.playerName);
   if (thinNames.length > 0) flags.push({ kind: "thin", text: `Thin samples: ${thinNames.join(", ")} — fewer than 3 games logged. Unknowns, not anchors.` });
 
-  const trusted = results.map((r, i) => ({ r, i })).filter(({ r }) => r.hitRate !== null && r.games >= 3);
+  // Combined math: props count at their season hit rate (3+ games only);
+  // winner legs count at the model's win estimate. Totals ride on a point
+  // gap, not a probability, so they stay out — and the note says so.
+  const probOf = (r: SlipLegResult): number | null => r.kind === "prop" ? (r.games >= 3 ? r.hitRate : null) : r.kind === "winner" ? r.modelWinPct : null;
+  const trusted = results.map((r, i) => ({ r, i, p: probOf(r) })).filter((x): x is { r: SlipLegResult; i: number; p: number } => x.p !== null);
   let combinedHitRate: number | null = null;
-  let combinedNote = "Not enough logged games on this slip to run the combined math honestly.";
+  let combinedNote = "Not enough evidence on this slip to run the combined math honestly — too many legs are thin, unchecked, or totals (which grade on a point gap, not a probability).";
   if (trusted.length > 0) {
-    combinedHitRate = Math.round(trusted.reduce((acc, { r }) => acc * (r.hitRate ?? 1), 1) * 1000) / 1000;
+    combinedHitRate = Math.round(trusted.reduce((acc, x) => acc * x.p, 1) * 1000) / 1000;
+    const propCount = trusted.filter((x) => x.r.kind === "prop").length;
+    const winCount = trusted.filter((x) => x.r.kind === "winner").length;
+    const parts = [propCount > 0 ? `${propCount} prop${propCount === 1 ? "" : "s"} at their season hit rates` : "", winCount > 0 ? `${winCount} winner pick${winCount === 1 ? "" : "s"} at the model's win estimates` : ""].filter(Boolean).join(" and ");
     const skipped = results.length - trusted.length;
-    combinedNote = `Multiplying the season hit rates of the ${trusted.length} well-logged leg${trusted.length === 1 ? "" : "s"} together gives about ${slipPct(combinedHitRate)} — as if the legs were independent, which they're not. Treat it as a ceiling, not a promise.${skipped > 0 ? ` ${skipped} leg${skipped === 1 ? "" : "s"} left out (sample too thin or no data).` : ""}`;
+    combinedNote = `Multiplying ${parts} together gives about ${combinedHitRate < 0.01 ? "under 1%" : slipPct(combinedHitRate)} — as if the legs were independent, which they're not. Treat it as a ceiling, not a promise.${skipped > 0 ? ` ${skipped} leg${skipped === 1 ? "" : "s"} left out (thin sample, no data, or a totals leg).` : ""}`;
   }
   let strongestLeg: number | null = null; let weakestLeg: number | null = null;
-  const rated = results.map((r, i) => ({ r, i })).filter(({ r }) => r.hitRate !== null && r.games >= 1);
-  if (rated.length > 0) {
-    strongestLeg = rated.reduce((best, cur) => ((cur.r.hitRate ?? 0) > (best.r.hitRate ?? 0) ? cur : best), rated[0]).i;
-    weakestLeg = rated.reduce((worst, cur) => ((cur.r.hitRate ?? 0) < (worst.r.hitRate ?? 0) ? cur : worst), rated[0]).i;
+  if (trusted.length > 0) {
+    strongestLeg = trusted.reduce((best, cur) => (cur.p > best.p ? cur : best), trusted[0]).i;
+    weakestLeg = trusted.reduce((worst, cur) => (cur.p < worst.p ? cur : worst), trusted[0]).i;
   }
   return { legs: results, games, flags, combinedHitRate, combinedNote, strongestLeg, weakestLeg, fetchedAt: new Date().toISOString() };
 }
