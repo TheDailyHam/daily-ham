@@ -959,7 +959,11 @@ function nhlStandingRow(value: unknown): z.infer<typeof standingSchema> | null {
     conference: textValue(row.conferenceName) ?? "", division: textValue(row.divisionName) ?? "",
     gamesPlayed: n(row.gamesPlayed), wins: n(row.wins), losses: n(row.losses), otLosses: n(row.otLosses),
     points: n(row.points), pointPct: n(row.pointPctg), goalsFor: n(row.goalFor), goalsAgainst: n(row.goalAgainst),
-    streak: textValue(row.streakCode),
+    // streakCode alone is just the last result ("W"/"L"/"OT") — the run
+    // length lives in streakCount. Combine them ("L3") or consumers that
+    // parse a counted streak (the Cutting Board's Teams row) can never
+    // match, which is exactly why that row was always empty.
+    streak: (() => { const code = textValue(row.streakCode); const count = n(row.streakCount); return code ? (count > 1 ? `${code}${count}` : code) : null; })(),
     ...nhlModelPcts({
       wins: n(row.wins), losses: n(row.losses), otLosses: n(row.otLosses),
       goalsFor: n(row.goalFor), goalsAgainst: n(row.goalAgainst),
@@ -4365,21 +4369,33 @@ async function fetchSoccerColdStreaks(ctx: Ctx, league: SoccerLeagueParam, force
     .sort((a, b) => (a.d - b.d) || (a.gf - a.ga) - (b.gf - b.ga))
     .slice(0, 8)
     .map((r) => ({ team: r.team, name: r.name, streak: `${r.l}L-${r.d}D winless in window`, points: r.d }));
-  // The 7-day window rarely holds 2+ games for a weekly-cadence club, so
-  // the window table alone leaves this list permanently empty (bug audit
-  // 2026-10-21, D5). Merge in standings losing streaks (L2+) — the same
-  // signal the NHL Cutting Board reads from its standings.
+  // The 7-day window rarely holds 2+ games for a weekly-cadence club, and
+  // soccer standings carry no usable streak — both left this list
+  // permanently empty (bug audit 2026-10-21, D5). Build it from each club's
+  // own recent results instead: winless across their last 3+ completed
+  // matches with at least 2 losses.
   try {
-    const { standings } = await loadSoccerStandings(ctx, league);
+    const logRows = await pool(soccerTeams(league), 5, async (club) => {
+      try {
+        const { games } = await fetchSoccerTeamGames(league, club.abbr, 12);
+        const recent = [...games].sort((a, b) => b.date.localeCompare(a.date));
+        let run = 0, losses = 0, draws = 0;
+        for (const g of recent) {
+          if (g.result === "W") break;
+          run += 1;
+          if (g.result === "L") losses += 1; else draws += 1;
+        }
+        if (run < 3 || losses < 2) return null;
+        return { team: club.abbr, name: club.name, streak: `${losses}L-${draws}D in last ${run}`, points: draws };
+      } catch { return null; }
+    });
     const have = new Set(coldTeams.map((t) => t.team));
-    for (const row of standings) {
-      if (have.has(row.team) || coldTeams.length >= 8) continue;
-      const match = /^L(\d+)$/.exec(row.streak ?? "");
-      if (!match || Number(match[1]) < 2) continue;
-      coldTeams.push({ team: row.team, name: row.name, streak: row.streak ?? `L${match[1]}`, points: row.points });
-      have.add(row.team);
+    for (const r of logRows) {
+      if (!r || have.has(r.team) || coldTeams.length >= 8) continue;
+      coldTeams.push(r);
+      have.add(r.team);
     }
-  } catch { /* standings merge is best-effort */ }
+  } catch { /* cold teams from game logs are best-effort */ }
   const response: z.infer<typeof soccerColdStreaksResponse> = {
     league, fetchedAt: new Date().toISOString(), sourceUrl: siteBasePublic(league),
     windowStart, windowEnd, players, teams: coldTeams,
