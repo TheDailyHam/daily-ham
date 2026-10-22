@@ -1557,11 +1557,27 @@ async function collectNhlRecentGames(ctx?: Ctx, force = false): Promise<{ byPlay
     }
   }
   // Degraded = a chunk of club-stat calls failed, or a real share of the
-  // player logs never arrived. Callers cache degraded computes only
-  // briefly so a degraded board self-heals on the next view.
-  const degraded = failedClubs >= 4 || (universe.length > 0 && failedLogs > universe.length * 0.1);
+  // player logs never arrived — or the sweep came back EMPTY, which from
+  // this host means the feed silently blanked (the league has ~700 active
+  // players; zero collected is a feed failure, never a real result).
+  // Callers cache degraded computes only briefly so a degraded board
+  // self-heals on the next view.
+  const degraded = failedClubs >= 4 || (universe.length > 0 && failedLogs > universe.length * 0.1) || byPlayer.size === 0;
   if (ctx) {
     try {
+      // An empty sweep must never overwrite the last good one: if the
+      // shared cache still holds real players, serve those (stale beats
+      // blank) and leave the good payload in place.
+      if (byPlayer.size === 0) {
+        const priorRows = await ctx.db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey)).limit(1);
+        const priorRow = priorRows[0];
+        if (priorRow) {
+          const prior = JSON.parse(priorRow.payloadJson) as { players: NhlPlayerAcc[]; degraded: boolean };
+          if (prior.players.length > 0) {
+            return { byPlayer: new Map(prior.players.map((player) => [player.playerId, player])), dates, start, now, degraded: true };
+          }
+        }
+      }
       await ctx.db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, cacheKey));
       await ctx.db.insert(schema.nhlInsightCache).values({ key: cacheKey, payloadJson: JSON.stringify({ players: Array.from(byPlayer.values()), degraded }), fetchedAt: new Date(), expiresAt: new Date(Date.now() + (degraded ? 15 * 60 * 1000 : 6 * 60 * 60 * 1000)) });
     } catch { /* sharing the sweep is best-effort */ }
@@ -1599,6 +1615,15 @@ async function fetchHotStreaks(ctx: Ctx, force: boolean): Promise<z.infer<typeof
     return [{ ...player, games: recent, pointStreak, goalStreak, lastFivePoints, lastFiveGoals, lastFiveSavePct, tier, lastFiveSaves, lastFiveShotsAgainst, goalieScore, heatScore }];
   }).sort((a, b) => b.heatScore - a.heatScore || b.lastFivePoints - a.lastFivePoints);
   const response: z.infer<typeof hotStreaksResponse> = { fetchedAt: new Date().toISOString(), sourceUrl: `${NHL_API}/schedule/${dates[0] ?? nyDate(now)}`, windowStart: nyDate(start), windowEnd: nyDate(now), players };
+  // Never let an empty compute replace the last good board: during a feed
+  // outage the sweep comes back empty, and caching that would blank the
+  // board for a day. Serve the previous board until a real one lands.
+  if (players.length === 0 && cached) {
+    try {
+      const prior = hotStreaksResponse.parse(JSON.parse(cached.payloadJson));
+      if (prior.players.length > 0) return prior;
+    } catch { /* fall through and cache the fresh compute briefly */ }
+  }
   await db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, "hot-streaks-v2"));
   await db.insert(schema.nhlInsightCache).values({ key: "hot-streaks-v2", payloadJson: JSON.stringify(response), fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(Date.now() + (degraded ? 15 * 60 * 1000 : 24 * 60 * 60 * 1000)) });
   return response;
@@ -1647,6 +1672,14 @@ async function fetchColdStreaks(ctx: Ctx, force: boolean): Promise<z.infer<typeo
     }).sort((a, b) => b.losses - a.losses);
   } catch { /* team slumps are best-effort */ }
   const response: z.infer<typeof coldStreaksResponse> = { fetchedAt: new Date().toISOString(), sourceUrl: `${NHL_API}/schedule/${dates[0] ?? nyDate(now)}`, windowStart: nyDate(start), windowEnd: nyDate(now), players, teams };
+  // Same last-good guard as the hot board: an empty compute during a feed
+  // outage must not blank the Cutting Board for a day.
+  if (players.length === 0 && cached) {
+    try {
+      const prior = coldStreaksResponse.parse(JSON.parse(cached.payloadJson));
+      if (prior.players.length > 0) return prior;
+    } catch { /* fall through and cache the fresh compute briefly */ }
+  }
   await db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, "cold-streaks-v2"));
   await db.insert(schema.nhlInsightCache).values({ key: "cold-streaks-v2", payloadJson: JSON.stringify(response), fetchedAt: new Date(response.fetchedAt), expiresAt: new Date(Date.now() + (degraded ? 15 * 60 * 1000 : 24 * 60 * 60 * 1000)) });
   return response;
@@ -1658,7 +1691,15 @@ const removedResponse = z.object({ configured: z.literal(false), updatedAt: z.nu
 async function getProviderStatus(ctx: Ctx, provider: string): Promise<z.infer<typeof providerStatusResponse>> {
   const rows = await ctx.db.select({ updatedAt: schema.providerCredentials.updatedAt }).from(schema.providerCredentials).where(eq(schema.providerCredentials.provider, provider)).limit(1);
   const credential = rows[0];
-  return { configured: credential !== undefined, updatedAt: credential?.updatedAt.toISOString() ?? null };
+  if (credential) return { configured: true, updatedAt: credential.updatedAt.toISOString() };
+  // Environment-variable keys take precedence over the DB store in the key
+  // resolvers, and production runs on env keys — the status must say so, or
+  // the owner console reports "not configured" while the boards are live
+  // (bug audit 2026-10-21, C1).
+  const envKey = provider === "sportsgameodds" ? process.env.SPORTSGAMEODDS_KEY?.trim()
+    : provider === "theoddsapi" ? process.env.ODDS_API_KEY?.trim()
+    : undefined;
+  return { configured: Boolean(envKey), updatedAt: null };
 }
 
 async function upsertProviderKey(ctx: Ctx, provider: string, apiKey: string): Promise<z.infer<typeof providerStatusResponse>> {
@@ -3793,7 +3834,35 @@ function soccerBlendedProbabilities(
 }
 
 async function loadSoccerOverview(ctx: Ctx, league: SoccerLeagueParam, dateStr?: string): Promise<z.infer<typeof soccerOverviewResponse>> {
-  const board = await fetchSoccerScoreboard(league, dateStr);
+  // Public overview (no explicit date): ESPN's bare scoreboard carries only
+  // today's slate — a single game on a midweek night while the matchweek
+  // spans days (bug audit 2026-10-21, D1). Merge a window — yesterday
+  // through +6 days, deduped — the way the streak windows already do. A
+  // dated call (the tracker) keeps its exact single day.
+  let board: Awaited<ReturnType<typeof fetchSoccerScoreboard>>;
+  if (dateStr) {
+    board = await fetchSoccerScoreboard(league, dateStr);
+  } else {
+    const nowMs = Date.now();
+    const dayMs = 24 * 60 * 60 * 1000;
+    const boards = await pool([-1, 0, 1, 2, 3, 4, 5, 6], 4, async (offset) => {
+      try { return await fetchSoccerScoreboard(league, yyyymmdd(nowMs + offset * dayMs)); }
+      catch { return null; }
+    });
+    const seen = new Set<number>();
+    const merged: Awaited<ReturnType<typeof fetchSoccerScoreboard>>["games"] = [];
+    for (const b of boards) {
+      if (!b) continue;
+      for (const g of b.games) {
+        if (seen.has(g.id)) continue;
+        seen.add(g.id);
+        merged.push(g);
+      }
+    }
+    merged.sort((a, b) => a.date.localeCompare(b.date));
+    const first = boards.find((b) => b !== null);
+    board = { season: first?.season ?? new Date().getFullYear(), games: merged, sourceUrl: first?.sourceUrl ?? "" };
+  }
   let standings: SoccerStanding[] = [];
   try {
     const data = await loadSoccerStandings(ctx, league);
@@ -3812,7 +3881,11 @@ async function loadSoccerOverview(ctx: Ctx, league: SoccerLeagueParam, dateStr?:
   const standingByTeam = new Map(standings.map((s) => [s.team, s]));
   const venueStats = new Map<string, { goalsFor: number; goalsAgainst: number; games: number }>();
   if (standings.length >= 10) {
-    const slateTeams = [...new Set(board.games.flatMap((g) => [g.away.abbr, g.home.abbr]))];
+    // Venue enrichment is one uncached request per club, so only enrich
+    // the near slate (games starting within ~3 days); later fixtures still
+    // get their season-ratings model read, just without the venue blend.
+    const enrichHorizon = Date.now() + 3 * 24 * 60 * 60 * 1000;
+    const slateTeams = [...new Set(board.games.filter((g) => new Date(g.date).getTime() <= enrichHorizon).flatMap((g) => [g.away.abbr, g.home.abbr]))];
     await pool(slateTeams, 4, async (team) => {
       const row = standingByTeam.get(team);
       if (!row || row.played < 2) return;
@@ -4292,6 +4365,21 @@ async function fetchSoccerColdStreaks(ctx: Ctx, league: SoccerLeagueParam, force
     .sort((a, b) => (a.d - b.d) || (a.gf - a.ga) - (b.gf - b.ga))
     .slice(0, 8)
     .map((r) => ({ team: r.team, name: r.name, streak: `${r.l}L-${r.d}D winless in window`, points: r.d }));
+  // The 7-day window rarely holds 2+ games for a weekly-cadence club, so
+  // the window table alone leaves this list permanently empty (bug audit
+  // 2026-10-21, D5). Merge in standings losing streaks (L2+) — the same
+  // signal the NHL Cutting Board reads from its standings.
+  try {
+    const { standings } = await loadSoccerStandings(ctx, league);
+    const have = new Set(coldTeams.map((t) => t.team));
+    for (const row of standings) {
+      if (have.has(row.team) || coldTeams.length >= 8) continue;
+      const match = /^L(\d+)$/.exec(row.streak ?? "");
+      if (!match || Number(match[1]) < 2) continue;
+      coldTeams.push({ team: row.team, name: row.name, streak: row.streak ?? `L${match[1]}`, points: row.points });
+      have.add(row.team);
+    }
+  } catch { /* standings merge is best-effort */ }
   const response: z.infer<typeof soccerColdStreaksResponse> = {
     league, fetchedAt: new Date().toISOString(), sourceUrl: siteBasePublic(league),
     windowStart, windowEnd, players, teams: coldTeams,
@@ -4767,6 +4855,29 @@ async function fetchLikelyScorers(ctx: Ctx, sport: (typeof sports)[number], forc
       }));
       for (const row of rows) if (row && row.ranked.length > 0) teams[row.team] = row.ranked;
     }
+  } else if (sport === "ncaaf") {
+    // NCAAF: top TD scorers (rush + receiving) per game, min 2 GP, from the
+    // same per-team game logs that power rosters and player files. This
+    // branch was missing entirely — the collector cached an empty map for
+    // the whole sport (bug audit 2026-10-21, B5).
+    const codes = [...ncaafTeamCodes];
+    for (let index = 0; index < codes.length; index += 4) {
+      const batch = codes.slice(index, index + 4);
+      const rows = await Promise.all(batch.map(async (team) => {
+        try {
+          const logs = await ncaafTeamPlayerLogs(ctx, team);
+          const ranked = logs.players.flatMap((player) => {
+            let touchdowns = 0;
+            for (const game of player.games) touchdowns += (game.stats.rushTds ?? 0) + (game.stats.recTds ?? 0);
+            const games = player.games.length;
+            if (touchdowns <= 0 || games < 2 || !player.name) return [];
+            return [{ name: player.name, team, stat: touchdowns, games, rate: touchdowns / games }];
+          }).sort((a, b) => b.rate - a.rate || b.stat - a.stat || a.name.localeCompare(b.name)).slice(0, 4);
+          return { team, ranked };
+        } catch { return null; }
+      }));
+      for (const row of rows) if (row && row.ranked.length > 0) teams[row.team] = row.ranked;
+    }
   }
   if (sport === "soccer") {
     // Soccer: top scorers by goals per game (min 2 apps) from the official
@@ -4964,6 +5075,7 @@ function bookReadTeamName(sport: string, code: string): string {
   if (sport === "nhl") return NHL_TEAM_NAMES[c] ?? c;
   if (sport === "nfl") return nflTeamMeta(c)?.name ?? c;
   if (sport === "nba") return nbaTeamMeta(c)?.name ?? c;
+  if (sport === "ncaaf") return ncaafTeamMeta(c)?.name ?? c;
   if (sport === "soccer") {
     for (const l of ["mls", "epl"] as const) {
       const m = soccerTeamMeta(l, c);
@@ -5061,6 +5173,12 @@ async function loadBookRead(
       h2hGames = m.headToHead.games; h2hAwayWins = m.headToHead.awayWins; h2hHomeWins = m.headToHead.homeWins;
     } else if (sport === "nba") {
       const m = await loadNbaMatchup(ctx, awayTeam as (typeof nbaTeamCodes)[number], homeTeam as (typeof nbaTeamCodes)[number], false);
+      modelAway = m.awayWinProbability; modelHome = m.homeWinProbability;
+      awayStats = { wins: m.away.wins, games: m.away.games, winPct: m.away.winPct, venueWins: m.away.venueWins, venueGames: m.away.venueGames, venueWinPct: m.away.venueWinPct, avgFor: m.away.avgPointsFor, avgAgainst: m.away.avgPointsAgainst };
+      homeStats = { wins: m.home.wins, games: m.home.games, winPct: m.home.winPct, venueWins: m.home.venueWins, venueGames: m.home.venueGames, venueWinPct: m.home.venueWinPct, avgFor: m.home.avgPointsFor, avgAgainst: m.home.avgPointsAgainst };
+      h2hGames = m.headToHead.games; h2hAwayWins = m.headToHead.awayWins; h2hHomeWins = m.headToHead.homeWins;
+    } else if (sport === "ncaaf") {
+      const m = await loadNcaafMatchup(ctx, awayTeam as (typeof ncaafTeamCodes)[number], homeTeam as (typeof ncaafTeamCodes)[number], false);
       modelAway = m.awayWinProbability; modelHome = m.homeWinProbability;
       awayStats = { wins: m.away.wins, games: m.away.games, winPct: m.away.winPct, venueWins: m.away.venueWins, venueGames: m.away.venueGames, venueWinPct: m.away.venueWinPct, avgFor: m.away.avgPointsFor, avgAgainst: m.away.avgPointsAgainst };
       homeStats = { wins: m.home.wins, games: m.home.games, winPct: m.home.winPct, venueWins: m.home.venueWins, venueGames: m.home.venueGames, venueWinPct: m.home.venueWinPct, avgFor: m.home.avgPointsFor, avgAgainst: m.home.avgPointsAgainst };
@@ -5331,6 +5449,7 @@ async function nhlEspnIdMap(ctx: Ctx): Promise<Record<string, number>> {
 function espnTeamId(sport: Sport, abbr: string, nhlIds: Record<string, number>, league?: SoccerLeagueParam): number | null {
   if (sport === "nfl") return nflTeamMeta(abbr)?.id ?? null;
   if (sport === "nba") return nbaTeamMeta(abbr)?.id ?? null;
+  if (sport === "ncaaf") return ncaafTeamMeta(abbr)?.id ?? null;
   if (sport === "soccer") return soccerTeamMeta(league ?? "mls", abbr)?.id ?? null;
   return nhlIds[abbr] ?? null;
 }
@@ -5399,6 +5518,30 @@ async function upcomingInjuryTeams(sport: Sport, league?: SoccerLeagueParam): Pr
         seen.add(g.away.abbr); seen.add(g.home.abbr);
       }
     }
+  } else if (sport === "ncaaf") {
+    // College football is a weekly sport: a 48h window would leave the
+    // injury report dark until Thursday. Use the current + next scoreboard
+    // weeks and a 7-day horizon so Saturday's slate is covered all week.
+    // (This branch was missing — NCAAF fell into the NHL schedule fetch and
+    // the NHL team-code filter, so its injuries could never populate.)
+    const startsWithin7d = (iso: string): boolean => {
+      const t = Date.parse(iso);
+      if (!Number.isFinite(t)) return false;
+      const now = Date.now();
+      return t >= now - 12 * 60 * 60 * 1000 && t <= now + 7 * 24 * 60 * 60 * 1000;
+    };
+    try {
+      const board = await fetchNcaafScoreboard();
+      for (const g of board.games) {
+        if (!startsWithin7d(g.date)) continue;
+        seen.add(g.away.abbr); seen.add(g.home.abbr);
+      }
+      const next = await fetchNcaafScoreboard(board.week + 1);
+      for (const g of next.games) {
+        if (!startsWithin7d(g.date)) continue;
+        seen.add(g.away.abbr); seen.add(g.home.abbr);
+      }
+    } catch { /* no slate, no injury report */ }
   } else {
     const today = new Date();
     const dates = [0, 1, 2].map((offset) => {
@@ -5421,7 +5564,7 @@ async function upcomingInjuryTeams(sport: Sport, league?: SoccerLeagueParam): Pr
       }
     }
   }
-  const valid = sport === "nfl" ? new Set(nflTeamCodes as readonly string[]) : sport === "nba" ? new Set(nbaTeamCodes as readonly string[]) : new Set(teamCodes as readonly string[]);
+  const valid = sport === "nfl" ? new Set(nflTeamCodes as readonly string[]) : sport === "nba" ? new Set(nbaTeamCodes as readonly string[]) : sport === "ncaaf" ? new Set(ncaafTeamCodes as readonly string[]) : new Set(teamCodes as readonly string[]);
   return [...seen].filter((abbr) => valid.has(abbr));
 }
 
