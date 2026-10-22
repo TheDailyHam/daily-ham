@@ -1377,6 +1377,18 @@ function ProView({ parlay, setParlay, home = false, sport, soccerLeague, onSocce
   const nbaOverview = useQuery({ queryKey: ["nba-overview", "current"], queryFn: () => api.getNbaOverview({}), staleTime:  90 * 1000, refetchInterval: 90 * 1000, retry: 1, enabled: sport === "nba" });
   const scorers = useQuery({ queryKey: ["likely-scorers", sport], queryFn: () => api.getLikelyScorers({ sport }), staleTime: 12 * 60 * 60 * 1000, retry: 1 });
   const injuries = useKeyInjuries(sport);
+  // Signal the splash that the board is ready: both the odds board and the
+  // active sport's overview have settled (data or error — either way the
+  // board is showing its real face, not a loading state).
+  const activeOverview = sport === "nfl" ? nflOverview : sport === "ncaaf" ? ncaafOverview : sport === "nba" ? nbaOverview : overview;
+  const readyFired = useRef(false);
+  useEffect(() => {
+    if (readyFired.current) return;
+    if ((board.isSuccess || board.isError) && (activeOverview.isSuccess || activeOverview.isError)) {
+      readyFired.current = true;
+      window.dispatchEvent(new Event("dh-ready"));
+    }
+  }, [board.isSuccess, board.isError, activeOverview.isSuccess, activeOverview.isError]);
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("All");
   const [selectedMarket, setSelectedMarket] = useState<MarketGroup | null>(null);
@@ -3555,19 +3567,33 @@ export function App(){
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
   useEffect(() => {
-    // Dismiss the branded startup splash once the app has painted, keeping it
-    // up long enough for the branding to register.
+    // Dismiss the branded startup splash when the app is actually READY —
+    // the board's first data has settled — never on a blind timer. The old
+    // fixed ~1s dismissal faded onto a half-loaded board (spinners and raw
+    // layout, "the coding") whenever data took longer than the timer.
+    // Floor: ~1s so the branding registers. Cap: 6s so a dead feed can
+    // never trap anyone on the splash. The owner console counts as ready
+    // immediately (private tool, no public board to wait for).
     const splash = document.getElementById("dh-splash");
     if (!splash) return;
     const t0 = performance.now();
-    const dismiss = () => {
-      const wait = 1050 - (performance.now() - t0);
-      if (wait > 0) { setTimeout(dismiss, wait); return; }
-      splash.style.opacity = "0";
-      setTimeout(() => splash.remove(), 400);
+    let ready = isOwner;
+    let gone = false;
+    const tryDismiss = () => {
+      if (gone) return;
+      const elapsed = performance.now() - t0;
+      if ((ready && elapsed >= 1050) || elapsed >= 6000) {
+        gone = true;
+        splash.style.opacity = "0";
+        setTimeout(() => splash.remove(), 400);
+      }
     };
-    dismiss();
-  }, []);
+    const onReady = () => { ready = true; tryDismiss(); };
+    window.addEventListener("dh-ready", onReady);
+    const iv = setInterval(tryDismiss, 150);
+    tryDismiss();
+    return () => { window.removeEventListener("dh-ready", onReady); clearInterval(iv); };
+  }, [isOwner]);
   const [mode, setMode] = useState<Mode>("board");
   const [tutorialOpen, setTutorialOpen] = useState(false);
   const [disclosuresOpen, setDisclosuresOpen] = useState(false);
@@ -4127,6 +4153,15 @@ function SoccerBoardView({ league, onLeagueChange, parlay, setParlay, home = fal
   const overview = useQuery({ queryKey: ["soccer-overview", league], queryFn: () => api.getSoccerOverview({ league }), staleTime:  90 * 1000, refetchInterval: 90 * 1000, retry: 1 });
   const scorers = useQuery({ queryKey: ["soccer-likely-scorers", league], queryFn: () => api.getSoccerLikelyScorers({ league }), staleTime: 12 * 60 * 60 * 1000, retry: 1 });
   const injuries = useSoccerKeyInjuries(league);
+  // Same splash-ready signal as the other boards.
+  const readyFired = useRef(false);
+  useEffect(() => {
+    if (readyFired.current) return;
+    if ((board.isSuccess || board.isError) && (overview.isSuccess || overview.isError)) {
+      readyFired.current = true;
+      window.dispatchEvent(new Event("dh-ready"));
+    }
+  }, [board.isSuccess, board.isError, overview.isSuccess, overview.isError]);
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("All");
   const [selectedMarket, setSelectedMarket] = useState<MarketGroup | null>(null);

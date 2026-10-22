@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="light dark" />
+    <style>html { background: #14100b; }</style>
     <meta name="description" content="The Daily Ham — Fresh Cuts Daily. NHL, NFL, NBA & soccer odds boards, matchup calculators, hot streaks, rosters and standings." />
     <link rel="icon" href="/logo.jpg" />
     <link rel="manifest" href="/manifest.json" />
@@ -44,12 +45,15 @@
         <div class="splash-dots"><i></i><i></i><i></i></div>
       </div>
     <script>
-      // Splash safety net: the app normally dismisses the splash itself at
-      // ~1s, but if the bundle is slow or fails, never trap the user on it.
+      // Splash safety net: the app dismisses the splash itself once the
+      // board's first data settles (floor ~1s, cap 6s). This net is only
+      // for a bundle that never loads at all — at 4s it used to kill the
+      // splash mid-download on slow connections and flash the unloaded
+      // page, so it now waits well past the app's own cap.
       setTimeout(function () {
         var s = document.getElementById("dh-splash");
         if (s) { s.style.opacity = "0"; setTimeout(function () { s.remove(); }, 400); }
-      }, 4000);
+      }, 10000);
     </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
