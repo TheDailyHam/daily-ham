@@ -744,20 +744,39 @@ async function fetchSlipRoster(sport: Sport, team: string, league: SoccerLeague)
   return (r.players as { id: number; name: string; position?: string }[]).map((p) => ({ id: p.id, name: p.name, position: p.position ?? "" }));
 }
 
-async function runSlipOcr(file: File): Promise<string> {
-  // The photo is read by the server (the in-browser reader's CDN chain
-  // stalled silently in the installed app). The image goes up once, the
-  // text comes back, and the photo itself is never stored.
-  const dataUrl = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(new Error("Couldn't read that photo file — try picking it again."));
-    reader.readAsDataURL(file);
+async function runSlipOcr(file: File, onProgress?: (pct: number) => void): Promise<string> {
+  // The photo is read on the device by a reader hosted on this app's own
+  // origin (/ocr/*). Two earlier attempts failed silently in the wild:
+  // a CDN-hosted reader whose multi-file download chain stalled in the
+  // installed app, and a server-side reader whose memory footprint
+  // crashed the app's host on real photos. Self-hosted assets + a loud
+  // timeout + live progress remove both failure modes: the photo never
+  // leaves the phone, and a stall surfaces as an error, not a freeze.
+  const w = window as unknown as { Tesseract?: { createWorker: (lang: string, oem?: string, opts?: Record<string, unknown>) => Promise<{ recognize: (f: File) => Promise<{ data: { text: string } }>; terminate: () => Promise<void> }> } };
+  if (!w.Tesseract) {
+    await new Promise<void>((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = "/ocr/tesseract.min.js";
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error("The photo reader couldn't load — check your connection, or add the legs by hand below."));
+      document.head.appendChild(s);
+    });
+  }
+  if (!w.Tesseract) throw new Error("The photo reader didn't start — add the legs by hand below.");
+  const worker = await w.Tesseract.createWorker("eng", undefined, {
+    workerPath: "/ocr/worker.min.js",
+    corePath: "/ocr",
+    langPath: "/ocr",
+    gzip: true,
+    logger: (m: { status?: string; progress?: number }) => {
+      if (m.status === "recognizing text" && typeof m.progress === "number") onProgress?.(Math.round(m.progress * 100));
+    },
   });
-  const base64 = dataUrl.split(",")[1] ?? "";
-  if (!base64) throw new Error("Couldn't read that photo file — try picking it again.");
-  const { text } = await api.ocrSlipPhoto({ imageBase64: base64 });
-  return text;
+  try {
+    const timed = new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error("The reader timed out on this photo — try a tighter crop on just the legs, or add them by hand below.")), 120000));
+    const { data } = await Promise.race([worker.recognize(file), timed]);
+    return data.text;
+  } finally { await worker.terminate(); }
 }
 
 function slipLineText(threshold: number, comparator: string, statLabel: string): string {
@@ -813,7 +832,7 @@ function SlipCheckView({ sport, soccerLeague }: { sport: Sport; soccerLeague: So
     setPhotoUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return URL.createObjectURL(file); });
     setOcrBusy(true); setNotice("Reading your slip photo — a few seconds…");
     try {
-      const text = await runSlipOcr(file);
+      const text = await runSlipOcr(file, (pct) => setNotice(`Reading your slip photo — ${pct}%`));
       // The slip names its own game ("New England Patriots at Chicago
       // Bears" on every leg) — believe the photo, not the picker. Fetch
       // those two rosters fresh, then match the legs against them.

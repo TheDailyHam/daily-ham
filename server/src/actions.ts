@@ -3,7 +3,7 @@ import { timingSafeEqual } from "node:crypto";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { dbSource, dbNote } from "./db.js";
 import { applyCalibration, ensureCalibrationLoaded, runLearningCycle, getLearningLogData } from "./learning.js";
-import { recognizeSlipText } from "./ocr.js";
+
 
 // Admin gate: key management and manual sportsbook refreshes require the
 // ADMIN_TOKEN environment variable. This keeps public visitors from
