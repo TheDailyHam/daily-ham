@@ -20,7 +20,13 @@ async function callAction<N extends ActionName>(action: N, args: ActionArgs<N>):
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ action, args }),
   });
-  if (!response.ok) throw new Error(`Request failed (${response.status})`);
+  if (!response.ok) {
+    // Carry the body's first bytes in the error: a proxy error page, a
+    // validation payload and a handler error read completely different,
+    // and callers (Slip Check especially) show this text to the user.
+    const body = await response.text().catch(() => "");
+    throw new Error(`Request failed (${response.status})${body ? `: ${body.replace(/\s+/g, " ").slice(0, 200)}` : ""}`);
+  }
   const payload = (await response.json()) as { ok: boolean; data?: unknown; error?: string };
   if (!payload.ok) {
     throw new Error(typeof payload.error === "string" && payload.error ? payload.error : "The request could not be completed.");

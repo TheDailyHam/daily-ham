@@ -927,7 +927,7 @@ function SlipCheckView({ sport, soccerLeague, onSportDetected }: { sport: Sport;
   const check = useMutation({
     mutationFn: (legs: SlipLegsPayload) => api.checkSlip({ legs }),
     onSuccess: (data) => setResult(data),
-    onError: () => setNotice("The check didn't come back — the data feed may be busy. Give it a moment and run it again."),
+    onError: (err) => setNotice(`The check didn't come back — ${err instanceof Error ? err.message : "unknown error"}. Give it a moment and run it again.`),
   });
 
   // Legs handed across a sport switch grade themselves once the new
