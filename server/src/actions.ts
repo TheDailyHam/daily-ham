@@ -1130,6 +1130,15 @@ async function loadNhlOverview(dateStr?: string, ctx?: Ctx): Promise<z.infer<typ
   const standings = arrayValue(objectValue(standingsPayload)?.standings)
     .flatMap((value) => { const row = nhlStandingRow(value); return row ? [row] : []; })
     .sort((a, b) => b.points - a.points || b.pointPct - a.pointPct);
+  // Lite standings snapshot for consumers that must not fetch standings in
+  // the sweep's throttle shadow (the Cutting Board's Teams row reads this).
+  if (ctx && standings.length > 0) {
+    try {
+      const lite = standings.map((r) => ({ team: r.team, name: r.name, streak: r.streak, gamesPlayed: r.gamesPlayed }));
+      await ctx.db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, "nhl-standings-lite-v1"));
+      await ctx.db.insert(schema.nhlInsightCache).values({ key: "nhl-standings-lite-v1", payloadJson: JSON.stringify(lite), fetchedAt: new Date(), expiresAt: new Date(Date.now() + 6 * 60 * 60 * 1000) });
+    } catch { /* lite snapshot is best-effort */ }
+  }
   return { date, fetchedAt: new Date().toISOString(), scheduleSourceUrl: scheduleResponse.url, standingsSourceUrl: standingsResponse.ok ? standingsResponse.url : standingsUrl, games, standings };
 }
 
@@ -1667,8 +1676,17 @@ async function fetchColdStreaks(ctx: Ctx, force: boolean): Promise<z.infer<typeo
   }).sort((a, b) => b.coldScore - a.coldScore || a.lastFivePoints - b.lastFivePoints);
   let teams: z.infer<typeof coldTeamSchema>[] = [];
   try {
-    const overview = await loadNhlOverview();
-    teams = overview.standings.flatMap((row) => {
+    // Standings source: the lite snapshot loadNhlOverview caches whenever
+    // it succeeds. Fetching the overview live here ran right after the
+    // player sweep, when the league feed throttles this host — the
+    // standings leg silently degraded to empty and the Teams row blanked.
+    let liteRows: { team: string; name: string; streak: string | null; gamesPlayed: number }[] | null = null;
+    try {
+      const lite = await db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, "nhl-standings-lite-v1")).limit(1);
+      if (lite[0] && lite[0].expiresAt.getTime() > Date.now()) liteRows = JSON.parse(lite[0].payloadJson) as typeof liteRows;
+    } catch { /* fall through to a live overview */ }
+    const standingRows = liteRows ?? (await loadNhlOverview(undefined, ctx)).standings;
+    teams = standingRows.flatMap((row) => {
       const match = /^L(\d+)$/.exec(row.streak ?? "");
       const losses = match ? Number(match[1]) : 0;
       if (losses < 3) return [];
