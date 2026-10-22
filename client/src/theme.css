@@ -2170,3 +2170,16 @@ body[data-sport="soccer"] .app-shell {
 /* Learning log (Track Record): weekly self-review entries + status chip. */
 .learn-status { font-style: normal; font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; padding: 2px 7px; border-radius: 999px; background: color-mix(in srgb, var(--gold) 18%, transparent); white-space: nowrap; }
 .learn-status.adjusting { background: color-mix(in srgb, var(--green) 28%, transparent); }
+
+/* Compliance surface: app footer, affiliate bet buttons, disclosures. */
+.app-footer { margin: 28px auto 8px; padding: 16px 12px 4px; text-align: center; border-top: 1px solid color-mix(in srgb, var(--gold) 25%, transparent); display: grid; gap: 4px; justify-items: center; }
+.app-footer p { margin: 0; font-size: 12px; opacity: .85; }
+.app-footer a { color: inherit; }
+.footer-link { background: none; border: none; padding: 4px; font: inherit; font-size: 12px; text-decoration: underline; cursor: pointer; color: inherit; opacity: .85; }
+.bet-buttons { margin-top: 14px; display: grid; gap: 8px; }
+.bet-buttons-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.bet-button { display: inline-flex; align-items: center; padding: 10px 14px; border-radius: 999px; font-weight: 700; font-size: 14px; text-decoration: none; color: #14100b; background: linear-gradient(180deg, #f4dfae, #d9a441); box-shadow: 0 4px 14px rgba(0,0,0,.35); }
+.bet-disclosure { margin: 0; font-size: 11px; line-height: 1.5; opacity: .75; }
+.disclosures-body h3 { margin: 16px 0 6px; }
+.disclosures-body p { margin: 0 0 8px; line-height: 1.55; }
+.disclosures-sheet { max-width: 560px; }

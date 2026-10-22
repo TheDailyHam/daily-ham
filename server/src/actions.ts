@@ -1745,6 +1745,44 @@ async function removeProviderKey(ctx: Ctx, provider: string): Promise<z.infer<ty
 }
 
 // ---------------------------------------------------------------------------
+// Affiliate links — the launch monetization surface. The owner pastes each
+// book's APPROVED tracked URL in the owner console (stored in the provider
+// credentials table under affiliate-<book>); the public config exposes only
+// books with a link saved. Nothing renders for a book until then — no
+// invented offers, no placeholder links, ever.
+// ---------------------------------------------------------------------------
+
+const AFFILIATE_BOOKS = [
+  { book: "draftkings", label: "DraftKings" },
+  { book: "fanduel", label: "FanDuel" },
+  { book: "betmgm", label: "BetMGM" },
+] as const;
+
+const affiliateConfigResponse = z.object({
+  books: z.array(z.object({ book: z.string(), label: z.string(), url: z.string() })),
+});
+
+async function loadAffiliateConfig(ctx: Ctx): Promise<z.infer<typeof affiliateConfigResponse>> {
+  const books: z.infer<typeof affiliateConfigResponse>["books"] = [];
+  for (const { book, label } of AFFILIATE_BOOKS) {
+    const rows = await ctx.db.select({ secretValue: schema.providerCredentials.secretValue }).from(schema.providerCredentials).where(eq(schema.providerCredentials.provider, `affiliate-${book}`)).limit(1);
+    const url = rows[0]?.secretValue?.trim();
+    if (url) books.push({ book, label, url });
+  }
+  return { books };
+}
+
+async function saveAffiliateLink(ctx: Ctx, book: string, url: string): Promise<z.infer<typeof providerStatusResponse>> {
+  const db = ctx.db;
+  const provider = `affiliate-${book}`;
+  const existing = await db.select({ createdAt: schema.providerCredentials.createdAt }).from(schema.providerCredentials).where(eq(schema.providerCredentials.provider, provider)).limit(1);
+  const now = new Date();
+  await db.delete(schema.providerCredentials).where(eq(schema.providerCredentials.provider, provider));
+  await db.insert(schema.providerCredentials).values({ provider, secretValue: url, createdAt: existing[0]?.createdAt ?? now, updatedAt: now });
+  return { configured: true, updatedAt: now.toISOString() };
+}
+
+// ---------------------------------------------------------------------------
 // NFL (ESPN keyless feeds). Mirrors the NHL insight sections: overview,
 // matchup calculator, hot streaks, rosters and player game logs.
 // ---------------------------------------------------------------------------
@@ -6141,6 +6179,26 @@ export const Actions = {
     },
   }),
   getOddsApiKeyStatus: defineAction({ request: z.object({}), response: providerStatusResponse, async handler(ctx) { return getProviderStatus(ctx, "theoddsapi"); } }),
+  getAffiliateConfig: defineAction({ request: z.object({}), response: affiliateConfigResponse, async handler(ctx) { return loadAffiliateConfig(ctx); } }),
+  getAffiliateLinkStatus: defineAction({ request: z.object({ book: z.enum(["draftkings", "fanduel", "betmgm"]) }), response: providerStatusResponse, async handler(ctx, args) { return getProviderStatus(ctx, `affiliate-${args.book}`); } }),
+  saveAffiliateLink: defineAction({
+    request: z.object({ book: z.enum(["draftkings", "fanduel", "betmgm"]), url: z.string().trim().min(12).max(2048), adminToken: adminTokenSchema }),
+    response: providerStatusResponse,
+    async handler(ctx, args): Promise<z.infer<typeof providerStatusResponse>> {
+      requireAdmin(args);
+      if (!args.url.startsWith("https://")) throw new Error("Affiliate links must be https URLs.");
+      return saveAffiliateLink(ctx, args.book, args.url);
+    },
+  }),
+  removeAffiliateLink: defineAction({
+    request: z.object({ book: z.enum(["draftkings", "fanduel", "betmgm"]), adminToken: adminTokenSchema }),
+    response: removedResponse,
+    async handler(ctx, args): Promise<z.infer<typeof removedResponse>> {
+      requireAdmin(args);
+      await ctx.db.delete(schema.providerCredentials).where(eq(schema.providerCredentials.provider, `affiliate-${args.book}`));
+      return { configured: false, updatedAt: null };
+    },
+  }),
   saveOddsApiKey: defineAction({
     request: z.object({ key: z.string().trim().min(16).max(512), adminToken: adminTokenSchema }),
     response: providerStatusResponse,

@@ -595,6 +595,66 @@ function moneylinePicks(groups: MarketGroup[]): MarketGroup[] {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Compliance surface: affiliate buttons (rendered only for books the owner
+// has enabled with an approved tracked link), the app footer, and the
+// disclosures sheet/card. Copy stays plain: estimates are estimates,
+// commissions are disclosed, help is one tap away.
+// ---------------------------------------------------------------------------
+
+function BetButtons() {
+  const config = useQuery({
+    queryKey: ["affiliate-config"],
+    queryFn: () => api.getAffiliateConfig({}),
+    staleTime: 10 * 60 * 1000,
+    retry: 1,
+  });
+  const books = config.data?.books ?? [];
+  if (books.length === 0) return null;
+  return <div className="bet-buttons">
+    <div className="bet-buttons-row">{books.map((b) => <a key={b.book} className="bet-button" href={b.url} target="_blank" rel="sponsored noopener noreferrer">Bet on {b.label} →</a>)}</div>
+    <p className="bet-disclosure">We may earn a commission if you sign up through links here — it never changes the price you get. 21+ · Only where legal · Gambling problem? Call or text 1-800-GAMBLER</p>
+  </div>;
+}
+
+function DisclosuresBody() {
+  return <div className="disclosures-body">
+    <h3>Model estimates, not betting advice</h3>
+    <p>Every percentage, projection and lean in this app is a model estimate built from public statistics. It is not a sportsbook line, not a guarantee, and not financial advice. Sportsbooks set their own prices; the model's job is to show its work so you can compare.</p>
+    <h3>Affiliate disclosure</h3>
+    <p>Some "Bet on…" buttons are affiliate links. If you sign up or deposit through one, the sportsbook may pay The Daily Ham a commission. It costs you nothing and never changes the price, bonus or terms you receive. We only link to licensed sportsbooks, and a book appears here only after its affiliate program has approved this site.</p>
+    <h3>Responsible gaming</h3>
+    <p>You must be 21 or older and physically located in a state where sports betting is legal to wager. Betting is entertainment, never a way to make money — only bet what you can afford to lose, and never chase losses.</p>
+    <p><strong>Gambling problem? Call or text 1-800-GAMBLER</strong> — free, confidential, 24/7. West Virginia's Problem Gamblers Help Network is at 1800gambler.net.</p>
+  </div>;
+}
+
+function DisclosuresSheet({ onClose }: { onClose: () => void }) {
+  return <div className="sheet-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <section className="sheet disclosures-sheet" role="dialog" aria-modal="true" aria-labelledby="disclosures-title">
+      <button className="close" onClick={onClose} aria-label="Close disclosures">×</button>
+      <p className="kicker">THE FINE PRINT, IN PLAIN LANGUAGE</p>
+      <h2 id="disclosures-title">Disclosures & responsible gaming</h2>
+      <DisclosuresBody />
+    </section>
+  </div>;
+}
+
+function DisclosuresCard() {
+  return <section className="settings-panel disclosures-card">
+    <div className="settings-heading"><p className="kicker">DISCLOSURES</p><h2>Estimates, affiliates & responsible gaming</h2></div>
+    <DisclosuresBody />
+  </section>;
+}
+
+function AppFooter({ onOpenDisclosures }: { onOpenDisclosures: () => void }) {
+  return <footer className="app-footer">
+    <p><strong>Model estimates, not betting advice. 21+</strong></p>
+    <p>Gambling problem? Call or text <a href="tel:18004262537">1-800-GAMBLER</a></p>
+    <button type="button" className="footer-link" onClick={onOpenDisclosures}>Affiliate disclosure & responsible gaming</button>
+  </footer>;
+}
+
 function ParlayView({ parlay, setParlay, sport, onGoBoard }: { parlay: ParlayPick[]; setParlay: (next: ParlayPick[]) => void; sport: Sport; onGoBoard: () => void }) {
   const [stake, setStake] = useState("10");
   const [priceMode, setPriceMode] = useState<PriceMode>("draftkings");
@@ -618,6 +678,7 @@ function ParlayView({ parlay, setParlay, sport, onGoBoard }: { parlay: ParlayPic
       <ul className="slip-legs">{parlay.map((item)=>{const priced=offerForMode(item.side,priceMode);return <li key={item.id}><div><strong>{item.entity}</strong><small>{titleCase(item.side.side)}{item.side.line ? ` ${item.side.line}` : ""} · {item.marketName}</small></div><b>{priced ? `${bookName(priced.book)} ${formatAmerican(priced.odds)}` : "Not offered"}</b><button type="button" className="slip-remove" onClick={() => setParlay(parlay.filter((p) => p.id !== item.id))} aria-label={`Remove ${item.entity} from slip`}>×</button></li>;})}</ul>
       <button className="slip-clear" onClick={()=>setParlay([])}>Clear slip</button>
       <p className="slip-disclaimer">Planning tool only. Every leg must be offered by the selected sportsbook; unavailable legs are never substituted.</p>
+      <BetButtons />
     </div>}
   </section>;
 }
@@ -1515,6 +1576,7 @@ function MatchupCalculator() {
       {data && <ModelVsBooks sport="nhl" awayCode={data.away.team} homeCode={data.home.team} awayModel={data.awayWinProbability} homeModel={data.homeWinProbability} groups={boardGroups} />}
       {data && <MatchupScorersSection sport="nhl" awayCode={data.away.team} homeCode={data.home.team} />}
       {data && <BookReadSection sport="nhl" awayCode={data.away.team} homeCode={data.home.team} />}
+      <BetButtons />
       <section className="first-goal-card">
         <div className="section-heading"><div><p className="kicker">MODEL ESTIMATE</p><h2>First goal probability</h2></div><span>{data.edgeTeam ? `${data.edgeTeam} +${data.edgePoints?.toFixed(1) ?? "0.0"} pts` : "Insufficient sample"}</span></div>
         <div className="first-goal-score"><div><span>{data.away.team} · away</span><strong>{percentage(data.awayProbability)}</strong></div><div className="first-goal-track" role="img" aria-label={`${data.away.team} ${percentage(data.awayProbability)} and ${data.home.team} ${percentage(data.homeProbability)} to score first`}><i style={{ width: `${(data.awayProbability ?? .5) * 100}%` }}/><b style={{ width: `${(data.homeProbability ?? .5) * 100}%` }}/></div><div className="home"><span>{data.home.team} · home</span><strong>{percentage(data.homeProbability)}</strong></div></div>
@@ -1685,6 +1747,51 @@ function FeedbackForm() {
       {status === "sent" && <span className="feedback-ok">Thanks — got it!</span>}
       {status === "error" && <span className="feedback-err">Couldn't send. Try again.</span>}
     </div>
+  </div>;
+}
+
+function AffiliateLinksManager({ adminToken }: { adminToken: string }) {
+  const books = [
+    { book: "draftkings", label: "DraftKings" },
+    { book: "fanduel", label: "FanDuel" },
+    { book: "betmgm", label: "BetMGM" },
+  ] as const;
+  return <section className="settings-panel affiliate-manager">
+    <div className="settings-heading"><p className="kicker">MONETIZATION</p><h2>Affiliate links</h2><p>Paste each book's approved tracked URL once its affiliate program accepts the site. That book's "Bet on…" buttons then appear in the public app — on the parlay slip and under every matchup's Book Read — with the commission disclosure attached. CPA deals only; no revenue share (WV licensing). A saved URL is never shown publicly except as the button's destination.</p></div>
+    {books.map((b) => <AffiliateLinkCard key={b.book} book={b.book} label={b.label} adminToken={adminToken} />)}
+  </section>;
+}
+
+function AffiliateLinkCard({ book, label, adminToken }: { book: "draftkings" | "fanduel" | "betmgm"; label: string; adminToken: string }) {
+  const queryClient = useQueryClient();
+  const status = useQuery({ queryKey: ["affiliate-link-status", book], queryFn: () => api.getAffiliateLinkStatus({ book }) });
+  const [url, setUrl] = useState("");
+  const [message, setMessage] = useState<string | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const refresh = async () => {
+    await queryClient.invalidateQueries({ queryKey: ["affiliate-link-status", book] });
+    await queryClient.invalidateQueries({ queryKey: ["affiliate-config"] });
+  };
+  const save = useMutation({
+    mutationFn: () => api.saveAffiliateLink({ book, url: url.trim(), adminToken }),
+    onSuccess: async () => { setUrl(""); setMessage(`${label} link saved — its buttons are live in the app.`); await refresh(); },
+    onError: (e) => setMessage(e instanceof Error ? e.message : "Couldn't save that link."),
+  });
+  const remove = useMutation({
+    mutationFn: () => api.removeAffiliateLink({ book, adminToken }),
+    onSuccess: async () => { setConfirmRemove(false); setMessage(`${label} link removed — its buttons are hidden.`); await refresh(); },
+    onError: (e) => setMessage(e instanceof Error ? e.message : "Couldn't remove that link."),
+  });
+  const configured = status.data?.configured ?? false;
+  return <div className="credential-card">
+    <div className="credential-status"><span className={`status-dot ${configured ? "configured" : ""}`} /><div><small>{label.toUpperCase()} AFFILIATE</small><strong>{status.isPending ? "Checking…" : configured ? "Link saved — buttons live" : "No link saved"}</strong><span>{configured && status.data?.updatedAt ? `Updated ${new Date(status.data.updatedAt).toLocaleString()}` : "Buttons stay hidden until a link is saved."}</span></div></div>
+    <form className="credential-entry" onSubmit={(event) => { event.preventDefault(); if (url.trim()) save.mutate(); }}>
+      <input type="url" inputMode="url" autoComplete="off" spellCheck={false} value={url} onChange={(event) => setUrl(event.target.value)} placeholder="Paste the approved tracked URL (https://…)" aria-label={`${label} affiliate link`} />
+      <button className="primary" type="submit" disabled={!url.trim() || save.isPending}>{save.isPending ? "Saving…" : configured ? "Replace link" : "Save link"}</button>
+    </form>
+    {configured && !confirmRemove && <button className="remove-key" onClick={() => setConfirmRemove(true)}>Remove link</button>}
+    {configured && confirmRemove && <div className="credential-entry"><span>Hide {label}'s buttons?</span><button className="remove-key" onClick={() => remove.mutate()} disabled={remove.isPending}>Yes, remove</button><button className="slip-clear" onClick={() => setConfirmRemove(false)}>Keep it</button></div>}
+    {message && <p className="settings-message" role="status">{message}</p>}
   </div>;
 }
 
@@ -1870,6 +1977,7 @@ function OwnerConsole() {
     {gateConfigured && adminToken && <HamSelectionManager adminToken={adminToken} />}
     {gateConfigured && adminToken && <UsagePanel adminToken={adminToken} />}
     {gateConfigured && adminToken && <DatabasePanel adminToken={adminToken} />}
+    {gateConfigured && adminToken && <AffiliateLinksManager adminToken={adminToken} />}
     {gateConfigured && adminToken && <FeedbackPanel adminToken={adminToken} />}
   </section></div>;
 }
@@ -2128,7 +2236,7 @@ function FeedbackPanel({ adminToken }: { adminToken: string }) {
 }
 
 function SiteSettings() {
-  return <DisplaySettings />;
+  return <><DisplaySettings /><DisclosuresCard /></>;
 }
 
 function InstallCard() {
@@ -2440,6 +2548,7 @@ function NflMatchupCalculator() {
       {data && <ModelVsBooks sport="nfl" awayCode={data.away.team} homeCode={data.home.team} awayModel={data.awayWinProbability} homeModel={data.homeWinProbability} groups={boardGroups} />}
       {data && <MatchupScorersSection sport="nfl" awayCode={data.away.team} homeCode={data.home.team} />}
       {data && <BookReadSection sport="nfl" awayCode={data.away.team} homeCode={data.home.team} />}
+      <BetButtons />
       <section className="first-goal-card">
         <div className="section-heading"><div><p className="kicker">MODEL ESTIMATE</p><h2>First score probability</h2></div><span>{data.firstScoreEdgeTeam ? `${data.firstScoreEdgeTeam} +${data.firstScoreEdgePoints?.toFixed(1) ?? "0.0"} pts` : "Insufficient sample"}</span></div>
         <div className="first-goal-score"><div><span>{data.away.team} · away</span><strong>{percentage(data.firstScoreAwayProbability)}</strong></div><div className="first-goal-track" role="img" aria-label={`${data.away.team} ${percentage(data.firstScoreAwayProbability)} and ${data.home.team} ${percentage(data.firstScoreHomeProbability)} to score first`}><i style={{ width: `${(data.firstScoreAwayProbability ?? .5) * 100}%` }}/><b style={{ width: `${(data.firstScoreHomeProbability ?? .5) * 100}%` }}/></div><div className="home"><span>{data.home.team} · home</span><strong>{percentage(data.firstScoreHomeProbability)}</strong></div></div>
@@ -2511,6 +2620,7 @@ function NcaafMatchupCalculator() {
       {data && <ModelVsBooks sport="ncaaf" awayCode={data.away.team} homeCode={data.home.team} awayModel={data.awayWinProbability} homeModel={data.homeWinProbability} groups={boardGroups} />}
       {data && <MatchupScorersSection sport="ncaaf" awayCode={data.away.team} homeCode={data.home.team} />}
       {data && <BookReadSection sport="ncaaf" awayCode={data.away.team} homeCode={data.home.team} />}
+      <BetButtons />
       <section className="first-goal-card">
         <div className="section-heading"><div><p className="kicker">MODEL ESTIMATE</p><h2>First score probability</h2></div><span>{data.firstScoreEdgeTeam ? `${data.firstScoreEdgeTeam} +${data.firstScoreEdgePoints?.toFixed(1) ?? "0.0"} pts` : "Insufficient sample"}</span></div>
         <div className="first-goal-score"><div><span>{data.away.team} · away</span><strong>{percentage(data.firstScoreAwayProbability)}</strong></div><div className="first-goal-track" role="img" aria-label={`${data.away.team} ${percentage(data.firstScoreAwayProbability)} and ${data.home.team} ${percentage(data.firstScoreHomeProbability)} to score first`}><i style={{ width: `${(data.firstScoreAwayProbability ?? .5) * 100}%` }}/><b style={{ width: `${(data.firstScoreHomeProbability ?? .5) * 100}%` }}/></div><div className="home"><span>{data.home.team} · home</span><strong>{percentage(data.firstScoreHomeProbability)}</strong></div></div>
@@ -3167,6 +3277,7 @@ export function App(){
   }, []);
   const [mode, setMode] = useState<Mode>("board");
   const [tutorialOpen, setTutorialOpen] = useState(false);
+  const [disclosuresOpen, setDisclosuresOpen] = useState(false);
 
   const [sport, setSport] = useState<Sport>(() => loadSport());
   const [parlay, setParlay] = useState<ParlayPick[]>([]);
@@ -3204,7 +3315,7 @@ export function App(){
         ["standings", "League"],
         ["watchlist", "Watchlist"],
         ["settings", "Settings"],
-      ] as [Mode, string][]).map(([key, label]) => <button key={key} type="button" className={"mode-shape" + (mode === key ? " active" : "")} onClick={() => setMode(key)} aria-pressed={mode === key} aria-label={label}><span className={"rink " + (key === "jamon" ? "platter" : sport === "nhl" ? "ice" : sport === "nfl" || sport === "ncaaf" ? "turf" : sport === "nba" ? "court" : "pitch")} aria-hidden="true"><span className={"shape " + (key === "jamon" ? "plate" : sport === "nhl" ? "puck" : sport === "nfl" || sport === "ncaaf" ? "ball" : sport === "nba" ? "hoop" : "soccerball")} /></span>{mode === key && <i className="mode-glow" aria-hidden="true" />}<em>{label}</em></button>)}</nav></div>{mode==="board"&&<ProView parlay={parlay} setParlay={setParlay} home sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="record"&&<RecordView/>} {mode==="jamon"&&<HamSelectionView/>} {mode==="parlay"&&<ParlayView parlay={parlay} setParlay={setParlay} sport={sport} onGoBoard={()=>setMode("board")}/>} {mode==="matchup"&&<MatchupView sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="rosters"&&<RosterView parlay={parlay} setParlay={setParlay} sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague} teamFocus={teamFocus}/>} {mode==="streaks"&&<StreaksView sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="standings"&&<LeagueView sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="watchlist"&&<WatchlistView onViewTeam={viewTeam}/>} {mode==="settings"&&<SiteSettings/>}{tutorialOpen&&<TutorialSheet onClose={() => setTutorialOpen(false)}/>}</main></div>;
+      ] as [Mode, string][]).map(([key, label]) => <button key={key} type="button" className={"mode-shape" + (mode === key ? " active" : "")} onClick={() => setMode(key)} aria-pressed={mode === key} aria-label={label}><span className={"rink " + (key === "jamon" ? "platter" : sport === "nhl" ? "ice" : sport === "nfl" || sport === "ncaaf" ? "turf" : sport === "nba" ? "court" : "pitch")} aria-hidden="true"><span className={"shape " + (key === "jamon" ? "plate" : sport === "nhl" ? "puck" : sport === "nfl" || sport === "ncaaf" ? "ball" : sport === "nba" ? "hoop" : "soccerball")} /></span>{mode === key && <i className="mode-glow" aria-hidden="true" />}<em>{label}</em></button>)}</nav></div>{mode==="board"&&<ProView parlay={parlay} setParlay={setParlay} home sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="record"&&<RecordView/>} {mode==="jamon"&&<HamSelectionView/>} {mode==="parlay"&&<ParlayView parlay={parlay} setParlay={setParlay} sport={sport} onGoBoard={()=>setMode("board")}/>} {mode==="matchup"&&<MatchupView sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="rosters"&&<RosterView parlay={parlay} setParlay={setParlay} sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague} teamFocus={teamFocus}/>} {mode==="streaks"&&<StreaksView sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="standings"&&<LeagueView sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="watchlist"&&<WatchlistView onViewTeam={viewTeam}/>} {mode==="settings"&&<SiteSettings/>}<AppFooter onOpenDisclosures={() => setDisclosuresOpen(true)}/>{tutorialOpen&&<TutorialSheet onClose={() => setTutorialOpen(false)}/>}{disclosuresOpen&&<DisclosuresSheet onClose={() => setDisclosuresOpen(false)}/>}</main></div>;
 }
 
 // NBA views. Mirror the NFL sections: schedule strip, league, matchup
@@ -3312,6 +3423,7 @@ function NbaMatchupCalculator() {
       {data && <ModelVsBooks sport="nba" awayCode={data.away.team} homeCode={data.home.team} awayModel={data.awayWinProbability} homeModel={data.homeWinProbability} groups={boardGroups} />}
       {data && <MatchupScorersSection sport="nba" awayCode={data.away.team} homeCode={data.home.team} />}
       {data && <BookReadSection sport="nba" awayCode={data.away.team} homeCode={data.home.team} />}
+      <BetButtons />
       <section className="first-goal-card">
         <div className="section-heading"><div><p className="kicker">MODEL ESTIMATE</p><h2>First basket probability</h2></div><span>{data.firstBasketEdgeTeam ? `${data.firstBasketEdgeTeam} +${data.firstBasketEdgePoints?.toFixed(1) ?? "0.0"} pts` : "Insufficient sample"}</span></div>
         <div className="first-goal-score"><div><span>{data.away.team} · away</span><strong>{percentage(data.firstBasketAwayProbability)}</strong></div><div className="first-goal-track" role="img" aria-label={`${data.away.team} ${percentage(data.firstBasketAwayProbability)} and ${data.home.team} ${percentage(data.firstBasketHomeProbability)} to score first`}><i style={{ width: `${(data.firstBasketAwayProbability ?? .5) * 100}%` }}/><b style={{ width: `${(data.firstBasketHomeProbability ?? .5) * 100}%` }}/></div><div className="home"><span>{data.home.team} · home</span><strong>{percentage(data.firstBasketHomeProbability)}</strong></div></div>
@@ -3878,6 +3990,7 @@ function SoccerMatchupCalculator({ league, onLeagueChange }: { league: SoccerLea
       <SoccerModelVsBooks league={league} homeCode={data.home.team} awayCode={data.away.team} homeModel={data.homeWinProbability} drawModel={data.drawProbability} awayModel={data.awayWinProbability} groups={boardGroups} />
       {data && <MatchupScorersSection sport="soccer" awayCode={data.away.team} homeCode={data.home.team} league={league} />}
       {data && <BookReadSection sport="soccer" awayCode={data.away.team} homeCode={data.home.team} league={league} />}
+      <BetButtons />
       <section className="scenario-grid" aria-label="Matchup model estimates">
         <article><span>Over 2.5 goals</span><strong>{percentage(data.over25Probability)}</strong><small>Three or more total goals</small></article>
         <article><span>Both teams to score</span><strong>{percentage(data.bttsProbability)}</strong><small>Each side scores at least once</small></article>
