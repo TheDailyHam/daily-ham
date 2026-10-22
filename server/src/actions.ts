@@ -3,6 +3,7 @@ import { timingSafeEqual } from "node:crypto";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { dbSource, dbNote } from "./db.js";
 import { applyCalibration, ensureCalibrationLoaded, runLearningCycle, getLearningLogData } from "./learning.js";
+import { recognizeSlipText } from "./ocr.js";
 
 // Admin gate: key management and manual sportsbook refreshes require the
 // ADMIN_TOKEN environment variable. This keeps public visitors from
@@ -6413,6 +6414,7 @@ export const Actions = {
   getTrackRecord: defineAction({ request: z.object({}), response: trackRecordResponse, async handler(ctx) { return loadTrackRecord(ctx); } }),
   getLearningLog: defineAction({ request: z.object({}), response: learningLogResponse, async handler() { return getLearningLogData(); } }),
   checkSlip: defineAction({ request: z.object({ legs: z.array(slipLegSchema).min(1).max(20) }), response: checkSlipResponse, async handler(ctx, args) { return analyzeSlip(ctx, args.legs); } }),
+  ocrSlipPhoto: defineAction({ request: z.object({ imageBase64: z.string().min(100).max(12000000) }), response: z.object({ text: z.string() }), async handler(_ctx, args) { const buf = Buffer.from(args.imageBase64, "base64"); if (buf.length === 0 || buf.length > 8 * 1024 * 1024) throw new Error("That image couldn't be read — try a screenshot of the slip instead of a full-resolution photo."); return { text: await recognizeSlipText(buf) }; } }),
   getCalibration: defineAction({ request: z.object({}), response: calibrationResponse, async handler(ctx) { return loadCalibration(ctx); } }),
   getTrackerStatus: defineAction({ request: z.object({ adminToken: adminTokenSchema }), response: trackerStatusResponse, async handler(ctx, args) { requireAdmin(args); return loadTrackerStatus(ctx); } }),
   getAdminStatus: defineAction({ request: z.object({}), response: z.object({ configured: z.boolean() }), async handler() { return { configured: !!process.env.ADMIN_TOKEN?.trim() }; } }),

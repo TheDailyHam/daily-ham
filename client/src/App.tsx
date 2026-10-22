@@ -745,22 +745,19 @@ async function fetchSlipRoster(sport: Sport, team: string, league: SoccerLeague)
 }
 
 async function runSlipOcr(file: File): Promise<string> {
-  const w = window as unknown as { Tesseract?: { createWorker: (lang: string) => Promise<{ recognize: (f: File) => Promise<{ data: { text: string } }>; terminate: () => Promise<void> }> } };
-  if (!w.Tesseract) {
-    await new Promise<void>((resolve, reject) => {
-      const s = document.createElement("script");
-      s.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5.0.5/dist/tesseract.min.js";
-      s.onload = () => resolve();
-      s.onerror = () => reject(new Error("The photo reader couldn't load — check your connection, or build the slip by hand below."));
-      document.head.appendChild(s);
-    });
-  }
-  if (!w.Tesseract) throw new Error("The photo reader didn't start — build the slip by hand below.");
-  const worker = await w.Tesseract.createWorker("eng");
-  try {
-    const { data } = await worker.recognize(file);
-    return data.text;
-  } finally { await worker.terminate(); }
+  // The photo is read by the server (the in-browser reader's CDN chain
+  // stalled silently in the installed app). The image goes up once, the
+  // text comes back, and the photo itself is never stored.
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error("Couldn't read that photo file — try picking it again."));
+    reader.readAsDataURL(file);
+  });
+  const base64 = dataUrl.split(",")[1] ?? "";
+  if (!base64) throw new Error("Couldn't read that photo file — try picking it again.");
+  const { text } = await api.ocrSlipPhoto({ imageBase64: base64 });
+  return text;
 }
 
 function slipLineText(threshold: number, comparator: string, statLabel: string): string {
@@ -814,7 +811,7 @@ function SlipCheckView({ sport, soccerLeague }: { sport: Sport; soccerLeague: So
 
   const onPhoto = async (file: File) => {
     setPhotoUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return URL.createObjectURL(file); });
-    setOcrBusy(true); setNotice("Reading your slip photo on this device…");
+    setOcrBusy(true); setNotice("Reading your slip photo — a few seconds…");
     try {
       const text = await runSlipOcr(file);
       // The slip names its own game ("New England Patriots at Chicago
@@ -923,7 +920,7 @@ function SlipCheckView({ sport, soccerLeague }: { sport: Sport; soccerLeague: So
         <button type="button" className="primary" disabled={validRows.length === 0 || check.isPending || awayTeam === homeTeam} onClick={() => { const legs = buildLegsFromRows(); if (legs.length > 0) check.mutate(legs); }}>{check.isPending ? "Checking every leg…" : `Run the check (${validRows.length} leg${validRows.length === 1 ? "" : "s"})`}</button>
         <button type="button" className="slip-clear" onClick={() => { setRows([]); setResult(null); }}>Clear slip</button>
       </>}
-      <p className="slip-disclaimer">Every read comes from the player's official game log this season. Slip Check never invents a sportsbook prop price — the only prices here are the ones on your slip.</p>
+      <p className="slip-disclaimer">Every read comes from the player's official game log this season. Slip Check never invents a sportsbook prop price — the only prices here are the ones on your slip. Slip photos are read once to extract the text and are never stored.</p>
     </div>
 
     {result && <div className="slip-card" aria-label="Slip check results">
