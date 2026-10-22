@@ -63,13 +63,27 @@ export function parseSlipText(rawText: string, candidates: SlipCandidate[], spor
   const normLines = lines.map(normalize);
   const drafts: { line: number; leg: SlipDraftLeg }[] = [];
 
+  // Every occurrence of every candidate: a player can carry several legs
+  // on one slip (Stevenson rushing AND Stevenson anytime TD), so a single
+  // first-match scan would silently drop legs. Full-name matches claim
+  // their line; a last-name-only match is ignored on a claimed line, so
+  // "A.J. Brown" can never also draft his teammate Ben Brown.
+  interface Occurrence { cand: SlipCandidate; idx: number; full: boolean }
+  const occurrences: Occurrence[] = [];
+  const claimed = new Set<number>();
   for (const cand of candidates) {
     const full = normalize(cand.name);
+    normLines.forEach((l, idx) => { if (l.includes(full)) { occurrences.push({ cand, idx, full: true }); claimed.add(idx); } });
+  }
+  for (const cand of candidates) {
     const last = lastNameOf(cand.name);
-    let idx = normLines.findIndex((l) => l.includes(full));
-    if (idx < 0 && last.length >= 4) idx = normLines.findIndex((l) => new RegExp(`\\b${last}\\b`).test(l));
-    if (idx < 0) continue;
+    if (last.length < 4) continue;
+    const re = new RegExp(`\\b${last}\\b`);
+    normLines.forEach((l, idx) => { if (!claimed.has(idx) && re.test(l)) occurrences.push({ cand, idx, full: false }); });
+  }
+  occurrences.sort((a, b) => a.idx - b.idx);
 
+  for (const { cand, idx } of occurrences) {
     // Window: the name line plus the two lines after it (sportsbooks print
     // name + line on one row, the stat label on the next), and the line
     // before it for books that stack the stat above the name.
@@ -104,7 +118,7 @@ export function parseSlipText(rawText: string, candidates: SlipCandidate[], spor
   drafts.sort((a, b) => a.line - b.line);
   const seen = new Set<string>();
   return drafts.filter(({ leg }) => {
-    const key = `${leg.playerId}:${leg.stat}`;
+    const key = `${leg.playerId}:${leg.stat}:${leg.threshold}:${leg.comparator}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;

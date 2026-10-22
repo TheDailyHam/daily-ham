@@ -1086,6 +1086,11 @@ const TUTORIAL_SLIDES: { icon: string; kicker: string; title: string; points: st
     "Your Watchlist keeps every starred player and team one tap away.",
     "Team cards open the full team file with the depth chart.",
   ]},
+  { icon: "🔍", kicker: "SLIP CHECK", title: "Already built a slip?", points: [
+    "Snap a photo of a parlay from any sportsbook — or rebuild it by hand — and Slip Check grades every leg against the player's real game log.",
+    "You'll see his hit rate at your exact line, whether your price matches the evidence, flags for doubled-up players and legs that fight each other, and the model's read on the game.",
+    "It never invents a prop price: the only prices it uses are the ones on your slip. No data on a player? It says so instead of guessing.",
+  ]},
   { icon: "🍽️", kicker: "HAM SELECTION", title: "Cody's picks", points: [
     "The Ham Selection tab holds Cody's personal picks on three tiered plates.",
     "Jamón Ibérico de Bellota is the top tier (+1500 odds and up), Prosciutto di Parma the middle (+900), Prosciutto di San Daniele the everyday plate (+500).",

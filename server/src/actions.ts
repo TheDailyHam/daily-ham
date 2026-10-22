@@ -6211,8 +6211,8 @@ async function analyzeSlipLeg(ctx: Ctx, leg: SlipLeg): Promise<z.infer<typeof sl
   const scoring = SLIP_SCORING_STATS.has(leg.stat) && leg.threshold <= 1;
   const lineText = leg.comparator === "gte" ? `${leg.threshold}+` : leg.comparator === "gt" ? `over ${leg.threshold}` : leg.comparator === "lt" ? `under ${leg.threshold}` : `${leg.threshold} or fewer`;
   const core = scoring
-    ? `Scored in ${hits} of ${games} games (${slipPct(hitRate)}) · last 5: ${last5Hits} of ${last5.length}`
-    : `Cleared ${lineText} ${statLabel} in ${hits} of ${games} games (${slipPct(hitRate)}) · median ${median ?? "—"} · last 5: ${last5Hits} of ${last5.length}`;
+    ? `Scored in ${hits} of ${games} games (${slipPct(hitRate)}) · last 5: ${last5Hits} of ${last5.length}.`
+    : `Cleared ${lineText} ${statLabel} in ${hits} of ${games} games (${slipPct(hitRate)}) · median ${median ?? "—"} · last 5: ${last5Hits} of ${last5.length}.`;
   let verdict: z.infer<typeof slipLegResultSchema>["verdict"];
   let priceNote = "";
   if (games < 3) {
