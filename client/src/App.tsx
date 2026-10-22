@@ -736,6 +736,8 @@ type SlipRowComparator = "gte" | "gt" | "lt";
 interface SlipRow { rowId: number; side: "away" | "home"; playerId: number | null; stat: string; threshold: string; comparator: SlipRowComparator; price: string }
 type SlipResult = Awaited<ReturnType<typeof api.checkSlip>>;
 const SLIPCHECK_KEY = "dh-slipcheck-v1";
+const SLIP_HANDOFF_KEY = "dh-slipcheck-handoff-v1";
+interface SlipHandoff { sport: Sport; soccerLeague: SoccerLeague; away: string; home: string; rows: SlipRow[]; note: string }
 let slipRowSeq = 1;
 
 async function fetchSlipRoster(sport: Sport, team: string, league: SoccerLeague): Promise<{ id: number; name: string; position: string }[]> {
@@ -783,7 +785,7 @@ function slipLineText(threshold: number, comparator: string, statLabel: string):
   return comparator === "gte" ? `${threshold}+ ${statLabel}` : comparator === "gt" ? `Over ${threshold} ${statLabel}` : comparator === "lt" ? `Under ${threshold} ${statLabel}` : `${threshold} or fewer ${statLabel}`;
 }
 
-function SlipCheckView({ sport, soccerLeague }: { sport: Sport; soccerLeague: SoccerLeague }) {
+function SlipCheckView({ sport, soccerLeague, onSportDetected }: { sport: Sport; soccerLeague: SoccerLeague; onSportDetected: (sport: Sport, league?: SoccerLeague) => void }) {
   const teamList: { code: string; name: string }[] = sport === "nhl" ? teams : sport === "nfl" ? nflTeams : sport === "nba" ? nbaTeams : sport === "ncaaf" ? ncaafTeams : soccerLeague === "mls" ? MLS_TEAM_THEMES : EPL_TEAM_THEMES;
   const fallbackA = sport === "nhl" ? "WSH" : sport === "nfl" ? "NE" : teamList[0]?.code ?? "";
   const fallbackB = sport === "nhl" ? "PIT" : sport === "nfl" ? "CHI" : teamList[1]?.code ?? "";
@@ -791,10 +793,17 @@ function SlipCheckView({ sport, soccerLeague }: { sport: Sport; soccerLeague: So
     try { const raw = localStorage.getItem(SLIPCHECK_KEY); if (raw) { const p = JSON.parse(raw) as { sport?: string; soccerLeague?: string; away?: string; home?: string; rows?: SlipRow[] }; if (p.sport === sport && p.soccerLeague === soccerLeague) return p; } } catch { /* fresh start */ }
     return null;
   });
-  const [awayTeam, setAwayTeam] = useState<string>(saved?.away ?? fallbackA);
-  const [homeTeam, setHomeTeam] = useState<string>(saved?.home ?? fallbackB);
-  const [rows, setRows] = useState<SlipRow[]>(saved?.rows ?? []);
-  const [notice, setNotice] = useState<string | null>(null);
+  // A photo read on another sport's tab hands its drafted legs across the
+  // switch: the reader writes the handoff, App changes the sport, this
+  // view remounts (keyed by sport) and picks the legs up here.
+  const [handoff] = useState<SlipHandoff | null>(() => {
+    try { const raw = localStorage.getItem(SLIP_HANDOFF_KEY); if (raw) { const h = JSON.parse(raw) as SlipHandoff; if (h.sport === sport && h.soccerLeague === soccerLeague) { localStorage.removeItem(SLIP_HANDOFF_KEY); return h; } } } catch { /* no handoff */ }
+    return null;
+  });
+  const [awayTeam, setAwayTeam] = useState<string>(handoff?.away ?? saved?.away ?? fallbackA);
+  const [homeTeam, setHomeTeam] = useState<string>(handoff?.home ?? saved?.home ?? fallbackB);
+  const [rows, setRows] = useState<SlipRow[]>(handoff?.rows ?? saved?.rows ?? []);
+  const [notice, setNotice] = useState<string | null>(handoff?.note ?? null);
   const [ocrBusy, setOcrBusy] = useState(false);
   const [result, setResult] = useState<SlipResult | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -833,20 +842,42 @@ function SlipCheckView({ sport, soccerLeague }: { sport: Sport; soccerLeague: So
     setOcrBusy(true); setNotice("Reading your slip photo — a few seconds…");
     try {
       const text = await runSlipOcr(file, (pct) => setNotice(`Reading your slip photo — ${pct}%`));
+      if (!text || text.trim().length < 8) { setNotice("The photo read came back empty — try a sharper screenshot of the slip, or add the legs by hand below."); return; }
       // The slip names its own game ("New England Patriots at Chicago
-      // Bears" on every leg) — believe the photo, not the picker. Fetch
-      // those two rosters fresh, then match the legs against them.
+      // Bears" on every leg) — believe the photo, not the tab the user
+      // left open. Scan EVERY sport's team directory: a slip read while
+      // the tab sat on the wrong sport used to match nothing and say
+      // nothing (Cody's NFL slip on the NHL tab, 2026-10-22).
+      const dirs: { sport: Sport; league: SoccerLeague; list: { code: string; name: string }[] }[] = [
+        { sport: "nhl", league: soccerLeague, list: teams },
+        { sport: "nfl", league: soccerLeague, list: nflTeams },
+        { sport: "nba", league: soccerLeague, list: nbaTeams },
+        { sport: "ncaaf", league: soccerLeague, list: ncaafTeams },
+        { sport: "soccer", league: "mls", list: MLS_TEAM_THEMES },
+        { sport: "soccer", league: "epl", list: EPL_TEAM_THEMES },
+      ];
+      const score = (d: { sport: Sport; league: SoccerLeague }) => (d.sport === sport ? 2 : 0) + (d.sport === "soccer" && d.league === soccerLeague ? 1 : 0);
+      const ordered = [...dirs].sort((a, b) => score(b) - score(a));
+      let hitSport: Sport = sport; let hitLeague: SoccerLeague = soccerLeague;
+      let detected: [string, string] | null = null;
+      for (const d of ordered) { const found = detectSlipTeams(text, d.list); if (found) { hitSport = d.sport; hitLeague = d.league; detected = found; break; } }
       let away = awayTeam; let home = homeTeam;
-      const detected = detectSlipTeams(text, teamList);
-      const gameSwitched = detected !== null && (detected[0] !== awayTeam || detected[1] !== homeTeam);
-      if (detected) { away = detected[0]; home = detected[1]; if (gameSwitched) { setAwayTeam(away); setHomeTeam(home); setResult(null); } }
-      const [ra, rb] = await Promise.all([
-        queryClient.fetchQuery({ queryKey: ["slip-roster", sport, soccerLeague, away], queryFn: () => fetchSlipRoster(sport, away, soccerLeague), staleTime: 15 * 60 * 1000 }),
-        queryClient.fetchQuery({ queryKey: ["slip-roster", sport, soccerLeague, home], queryFn: () => fetchSlipRoster(sport, home, soccerLeague), staleTime: 15 * 60 * 1000 }),
-      ]);
+      if (detected) { away = detected[0]; home = detected[1]; }
+      // Fetch the two rosters for the sport the slip actually belongs
+      // to. A sick roster feed must say so plainly — never fail silent.
+      let ra: { id: number; name: string; position: string }[]; let rb: { id: number; name: string; position: string }[];
+      try {
+        [ra, rb] = await Promise.all([
+          queryClient.fetchQuery({ queryKey: ["slip-roster", hitSport, hitLeague, away], queryFn: () => fetchSlipRoster(hitSport, away, hitLeague), staleTime: 15 * 60 * 1000, retry: 1 }),
+          queryClient.fetchQuery({ queryKey: ["slip-roster", hitSport, hitLeague, home], queryFn: () => fetchSlipRoster(hitSport, home, hitLeague), staleTime: 15 * 60 * 1000, retry: 1 }),
+        ]);
+      } catch {
+        setNotice(`Your photo read fine${detected ? ` — it's ${away} @ ${home}` : ""}, but the roster feed for that game isn't answering right now, so the legs couldn't be matched. Give it a minute and read the photo again.`); return;
+      }
       const cands: SlipCandidate[] = [...ra.map((p) => ({ id: p.id, name: p.name, team: away })), ...rb.map((p) => ({ id: p.id, name: p.name, team: home }))];
-      const drafts = parseSlipText(text, cands, sport);
-      if (drafts.length === 0) { setNotice("The reader couldn't match any legs on that photo. A tighter crop on just the legs helps — or add the legs by hand below."); return; }
+      if (cands.length === 0) { setNotice(`Your photo read fine${detected ? ` — it's ${away} @ ${home}` : ""}, but the roster feed for that game came back empty, so the legs couldn't be matched. Give it a minute and read the photo again.`); return; }
+      const drafts = parseSlipText(text, cands, hitSport);
+      if (drafts.length === 0) { setNotice(detected ? `The photo read fine and the game is ${away} @ ${home} — but none of the players on it matched those rosters. If a name is written differently on your slip, add that leg by hand below.` : "The reader couldn't spot the game or match any legs on that photo. A tighter crop on just the legs helps — or add the legs by hand below."); return; }
       const draftRows: SlipRow[] = drafts.map((d) => ({
         rowId: slipRowSeq++,
         side: (d.team === home ? "home" : "away") as "away" | "home",
@@ -854,10 +885,22 @@ function SlipCheckView({ sport, soccerLeague }: { sport: Sport; soccerLeague: So
         comparator: (d.comparator === "lte" ? "lt" : d.comparator) as SlipRowComparator,
         price: d.price !== null ? String(d.price) : "",
       }));
+      const note = `Read ${drafts.length} leg${drafts.length === 1 ? "" : "s"} from your photo — game: ${away} @ ${home}. Grading them now. If any row below doesn't match your slip, fix it and run the check again.`;
+      if (hitSport !== sport || (hitSport === "soccer" && hitLeague !== soccerLeague)) {
+        // Different sport than the open tab: hand the drafted legs
+        // across the switch — App changes the sport, this view
+        // remounts on it and picks the legs up, then auto-grades.
+        try { localStorage.setItem(SLIP_HANDOFF_KEY, JSON.stringify({ sport: hitSport, soccerLeague: hitLeague, away, home, rows: draftRows, note } satisfies SlipHandoff)); } catch { /* private mode */ }
+        setNotice(`That's a ${hitSport.toUpperCase()} slip — switching you over and grading your ${drafts.length} legs…`);
+        onSportDetected(hitSport, hitSport === "soccer" ? hitLeague : undefined);
+        return;
+      }
+      const gameSwitched = detected !== null && (away !== awayTeam || home !== homeTeam);
+      if (gameSwitched) { setAwayTeam(away); setHomeTeam(home); setResult(null); }
       setRows((prev) => (gameSwitched ? draftRows : [...prev, ...draftRows]));
-      setNotice(`Read ${drafts.length} leg${drafts.length === 1 ? "" : "s"} from your photo${gameSwitched ? ` — and spotted the game: ${away} @ ${home}` : ""}. Grading them now. If any row below doesn't match your slip, fix it and run the check again.`);
+      setNotice(note);
       check.mutate(drafts.map((d) => ({
-        sport, ...(sport === "soccer" ? { league: soccerLeague } : {}),
+        sport: hitSport, ...(hitSport === "soccer" ? { league: hitLeague } : {}),
         team: d.team, playerId: d.playerId, playerName: d.playerName,
         stat: d.stat, threshold: d.threshold, comparator: d.comparator, price: d.price,
         gameAway: away, gameHome: home,
@@ -887,6 +930,16 @@ function SlipCheckView({ sport, soccerLeague }: { sport: Sport; soccerLeague: So
     onError: () => setNotice("The check didn't come back — the data feed may be busy. Give it a moment and run it again."),
   });
 
+  // Legs handed across a sport switch grade themselves once the new
+  // sport's rosters are in (the rows need them to resolve player names).
+  const handoffFired = useRef(false);
+  useEffect(() => {
+    if (!handoff || handoffFired.current || !rostersReady || validRows.length === 0) return;
+    handoffFired.current = true;
+    check.mutate(buildLegsFromRows());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [handoff, rostersReady, rows]);
+
   const statLabelOf = (key: string) => SLIP_STATS[sport].find((s) => s.key === key)?.label ?? key;
 
   return <section className="parlay-section">
@@ -910,7 +963,7 @@ function SlipCheckView({ sport, soccerLeague }: { sport: Sport; soccerLeague: So
       </div>
       {photoUrl && <figure style={{ margin: "10px 0" }}><img src={photoUrl} alt="The slip photo you added" style={{ width: "100%", borderRadius: 12, display: "block" }} /><figcaption className="calculator-note">Your slip photo — the legs below were drafted from it.</figcaption></figure>}
       {notice && <p className="calculator-note" role="status">{notice}</p>}
-      {!rostersReady && <p className="calculator-note">Loading the two rosters…</p>}
+      {!rostersReady && (rosters[0].isLoading || rosters[1].isLoading ? <p className="calculator-note">Loading the two rosters…</p> : <p className="calculator-note">The roster feed for this game isn't answering right now — photo reads and checks need it. It usually clears within a minute.</p>)}
       {rows.length === 0 ? <div className="history-empty"><strong>No legs yet.</strong><span>Read a photo of your slip or add legs by hand. The check runs on official game logs — the same raw data behind everything else here — never on invented prop prices.</span></div> :
       <ul className="slip-legs">{rows.map((r) => <li key={r.rowId} style={{ alignItems: "flex-start" }}>
         <div style={{ flex: 1, display: "grid", gap: 6 }}>
@@ -3651,7 +3704,7 @@ export function App(){
         ["standings", "League"],
         ["watchlist", "Watchlist"],
         ["settings", "Settings"],
-      ] as [Mode, string][]).map(([key, label]) => <button key={key} type="button" className={"mode-shape" + (mode === key ? " active" : "")} onClick={() => setMode(key)} aria-pressed={mode === key} aria-label={label}><span className={"rink " + (key === "jamon" ? "platter" : sport === "nhl" ? "ice" : sport === "nfl" || sport === "ncaaf" ? "turf" : sport === "nba" ? "court" : "pitch")} aria-hidden="true"><span className={"shape " + (key === "jamon" ? "plate" : sport === "nhl" ? "puck" : sport === "nfl" || sport === "ncaaf" ? "ball" : sport === "nba" ? "hoop" : "soccerball")} /></span>{mode === key && <i className="mode-glow" aria-hidden="true" />}<em>{label}</em></button>)}</nav></div>{mode==="board"&&<ProView parlay={parlay} setParlay={setParlay} home sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="record"&&<RecordView/>} {mode==="jamon"&&<HamSelectionView/>} {mode==="parlay"&&<ParlayView parlay={parlay} setParlay={setParlay} sport={sport} onGoBoard={()=>setMode("board")}/>} {mode==="slipcheck"&&<SlipCheckView key={sport + ":" + soccerLeague} sport={sport} soccerLeague={soccerLeague}/>} {mode==="matchup"&&<MatchupView sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="rosters"&&<RosterView parlay={parlay} setParlay={setParlay} sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague} teamFocus={teamFocus}/>} {mode==="streaks"&&<StreaksView sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="standings"&&<LeagueView sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="watchlist"&&<WatchlistView onViewTeam={viewTeam}/>} {mode==="settings"&&<SiteSettings/>}<AppFooter onOpenDisclosures={() => setDisclosuresOpen(true)}/>{tutorialOpen&&<TutorialSheet onClose={() => setTutorialOpen(false)}/>}{disclosuresOpen&&<DisclosuresSheet onClose={() => setDisclosuresOpen(false)}/>}</main></div>;
+      ] as [Mode, string][]).map(([key, label]) => <button key={key} type="button" className={"mode-shape" + (mode === key ? " active" : "")} onClick={() => setMode(key)} aria-pressed={mode === key} aria-label={label}><span className={"rink " + (key === "jamon" ? "platter" : sport === "nhl" ? "ice" : sport === "nfl" || sport === "ncaaf" ? "turf" : sport === "nba" ? "court" : "pitch")} aria-hidden="true"><span className={"shape " + (key === "jamon" ? "plate" : sport === "nhl" ? "puck" : sport === "nfl" || sport === "ncaaf" ? "ball" : sport === "nba" ? "hoop" : "soccerball")} /></span>{mode === key && <i className="mode-glow" aria-hidden="true" />}<em>{label}</em></button>)}</nav></div>{mode==="board"&&<ProView parlay={parlay} setParlay={setParlay} home sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="record"&&<RecordView/>} {mode==="jamon"&&<HamSelectionView/>} {mode==="parlay"&&<ParlayView parlay={parlay} setParlay={setParlay} sport={sport} onGoBoard={()=>setMode("board")}/>} {mode==="slipcheck"&&<SlipCheckView key={sport + ":" + soccerLeague} sport={sport} soccerLeague={soccerLeague} onSportDetected={(s, l) => { setSport(s); if (l) setSoccerLeague(l); }}/>} {mode==="matchup"&&<MatchupView sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="rosters"&&<RosterView parlay={parlay} setParlay={setParlay} sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague} teamFocus={teamFocus}/>} {mode==="streaks"&&<StreaksView sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="standings"&&<LeagueView sport={sport} soccerLeague={soccerLeague} onSoccerLeague={chooseSoccerLeague}/>} {mode==="watchlist"&&<WatchlistView onViewTeam={viewTeam}/>} {mode==="settings"&&<SiteSettings/>}<AppFooter onOpenDisclosures={() => setDisclosuresOpen(true)}/>{tutorialOpen&&<TutorialSheet onClose={() => setTutorialOpen(false)}/>}{disclosuresOpen&&<DisclosuresSheet onClose={() => setDisclosuresOpen(false)}/>}</main></div>;
 }
 
 // NBA views. Mirror the NFL sections: schedule strip, league, matchup
