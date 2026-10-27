@@ -166,6 +166,26 @@ function parseCodeBar(line: string, dirs: SlipDirectory[]): SlipGameRef | null {
     if (distinct.length === 2 && resolved.length === 2) {
       return { sport: dir.sport, league: dir.league, away: distinct[0]!, home: distinct[1]! };
     }
+    // One clean code + one OCR-mangled token at edit distance 1 from a
+    // unique other code in this directory ("vek" for VGK).
+    if (distinct.length === 1) {
+      const near = (a: string, b: string) => { if (Math.abs(a.length - b.length) > 1) return false; let d = 0; for (let i = 0; i < Math.min(a.length, b.length); i++) if (a[i] !== b[i]) d++; return d + Math.abs(a.length - b.length) <= 1; };
+      const fuzzy = new Map<string, number>();
+      tokens.forEach((tok, ti) => {
+        if (codes.has(tok) || resolved.includes(tok)) return;
+        const hits = [...codes].filter((c) => c !== distinct[0] && near(tok, c));
+        if (hits.length === 1) fuzzy.set(hits[0]!, ti);
+        const aliasHits = Object.entries(aliases).filter(([, target]) => target !== distinct[0] && codes.has(target) && near(tok, target));
+        if (aliasHits.length === 1) fuzzy.set(aliasHits[0]![1], ti);
+      });
+      if (fuzzy.size === 1) {
+        const [fuzzyCode, fuzzyIdx] = [...fuzzy.entries()][0]!;
+        const cleanTok = tokens.find((t) => t === distinct[0] || aliases[t] === distinct[0]) ?? "";
+        const cleanIdx = tokens.indexOf(cleanTok);
+        const awayFirst = fuzzyIdx < cleanIdx;
+        return { sport: dir.sport, league: dir.league, away: awayFirst ? fuzzyCode : distinct[0]!, home: awayFirst ? distinct[0]! : fuzzyCode };
+      }
+    }
   }
   return null;
 }
@@ -192,6 +212,7 @@ function cleanName(raw: string): string {
   // Drop short OCR icon junk tokens ("ij", "iw", "ti") ahead of the name.
   const parts = s.split(/\s+/);
   while (parts.length > 2 && (parts[0] ?? "").length <= 2 && !/[.']/.test(parts[0] ?? "")) parts.shift();
+  while (parts.length > 2 && /^[a-z]{1,3}$/.test(parts[parts.length - 1] ?? "")) parts.pop();
   return parts.join(" ").replace(/\s+/g, " ").trim();
 }
 
@@ -226,8 +247,10 @@ export function parseParlayList(rawText: string, dirs: SlipDirectory[]): SlipDra
   let lastWasDescriptor = false;
   let lastBlock: RawBlock | null = null;
 
-  for (const rawLine of rawLines) {
-    const line = rawLine.trim();
+  const DESCRIPTORISH = /anytime|winner|moneyline|total points|total goals|over \d|under \d|\bpoints\b|\brebounds\b|\bassists\b|\bgoals\b|\byards\b|\breceptions\b|\bstrikeouts\b|\bsaves\b|\bshots\b|\bthrees\b/i;
+  const nonEmpty = rawLines.map((l) => l.trim());
+  for (let li = 0; li < rawLines.length; li++) {
+    const line = (rawLines[li] ?? "").trim();
     if (!line) continue;
     const norm = normalize(line);
     if (/^\d+\s*leg\b/.test(norm) || /^leg\s/.test(norm)) { lastWasDescriptor = false; continue; }
@@ -242,8 +265,14 @@ export function parseParlayList(rawText: string, dirs: SlipDirectory[]): SlipDra
     // Pick line: trailing price, or a bare Over/Under headline.
     const priceMatch = line.match(/^(.+?)\s+([+-]\d{2,4})\s*$/);
     const ouHead = norm.match(/^(over|under)\s+(\d+(?:\.\d+)?)/);
-    if (priceMatch || ouHead) {
-      const headline = ouHead ? `${ouHead[1] ?? "over"} ${ouHead[2] ?? ""}` : cleanName(priceMatch![1]!);
+    // No readable price: still a pick line when the next non-empty line is
+    // a descriptor — the price renders as OCR junk on dark-mode slips.
+    const nextLine = nonEmpty.slice(li + 1).find((l) => l.length > 0) ?? "";
+    const barePick = !priceMatch && !ouHead && !ctx && !NOISE_RE.test(norm)
+      && /^[A-Za-zÀ-ÿ'’.-]+(\s+[A-Za-zÀ-ÿ'’.-]+){1,3}$/.test(cleanName(line))
+      && DESCRIPTORISH.test(nextLine) ? cleanName(line) : null;
+    if (priceMatch || ouHead || barePick) {
+      const headline = ouHead ? `${ouHead[1] ?? "over"} ${ouHead[2] ?? ""}` : barePick ?? cleanName(priceMatch![1]!);
       lastBlock = { headline, price: priceMatch ? priceIn(line) : priceIn(norm), descriptor: "", subs: [], game: null, section };
       blocks.push(lastBlock);
       lastWasDescriptor = false;
