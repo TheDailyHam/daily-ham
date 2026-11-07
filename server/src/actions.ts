@@ -1229,7 +1229,16 @@ async function loadClubSchedule(team: (typeof teamCodes)[number]): Promise<{ gam
       games.push({ id, date, away, home, awayScore: num(objectValue(row.awayTeam)?.score), homeScore: num(objectValue(row.homeTeam)?.score) });
     }
   }
-  if (!sourceUrl) throw new Error(`The official NHL schedule for ${team} is temporarily unavailable`);
+  if (!sourceUrl) {
+    // Both club-schedule seasons failed outright — the ESPN schedule is the
+    // only sample available; throw only if it fails too.
+    try {
+      const espn = await loadClubScheduleEspn(team);
+      return { games: espn.games.slice(0, 20), sourceUrl: espn.sourceUrl };
+    } catch {
+      throw new Error(`The official NHL schedule for ${team} is temporarily unavailable`);
+    }
+  }
   const deduped = new Map<number, FirstGoalGame>();
   for (const game of games.sort((a, b) => b.date.localeCompare(a.date))) if (!deduped.has(game.id)) deduped.set(game.id, game);
   let finalGames = Array.from(deduped.values()).slice(0, 20);
@@ -1290,10 +1299,15 @@ function teamFirstGoalStats(team: (typeof teamCodes)[number], venue: "away" | "h
   const venueFirstGoalGames = venueGames.filter((game) => game.firstTeam !== null);
   const scoredFirst = firstGoalGames.filter((game) => game.firstTeam === team).length;
   const venueScoredFirst = venueFirstGoalGames.filter((game) => game.firstTeam === team).length;
-  const firstPeriodUnder25 = games.filter((game) => game.firstPeriodGoals <= 2).length;
+  // firstPeriodGoals -1 marks a score-only row (play-by-play unavailable):
+  // first-period and regulation-draw reads come only from rows where the
+  // play-by-play actually landed.
+  const firstPeriodKnown = games.filter((game) => game.firstPeriodGoals >= 0);
+  const firstPeriodUnder25 = firstPeriodKnown.filter((game) => game.firstPeriodGoals <= 2).length;
   const blowouts = games.filter((game) => game.awayScore !== null && game.homeScore !== null && Math.abs(game.awayScore - game.homeScore) >= 3).length;
   const scoredTwo = games.filter((game) => game.awayScore !== null && game.homeScore !== null && game.awayScore >= 2 && game.homeScore >= 2).length;
-  const venueUnder = venueGames.filter((game) => game.firstPeriodGoals <= 2).length;
+  const venueFirstPeriodKnown = venueGames.filter((game) => game.firstPeriodGoals >= 0);
+  const venueUnder = venueFirstPeriodKnown.filter((game) => game.firstPeriodGoals <= 2).length;
   const venueBlowouts = venueGames.filter((game) => game.awayScore !== null && game.homeScore !== null && Math.abs(game.awayScore - game.homeScore) >= 3).length;
   const venueScoredTwo = venueGames.filter((game) => game.awayScore !== null && game.homeScore !== null && game.awayScore >= 2 && game.homeScore >= 2).length;
   const regulationDraws = games.filter((game) => game.regulationDraw).length;
@@ -1309,14 +1323,14 @@ function teamFirstGoalStats(team: (typeof teamCodes)[number], venue: "away" | "h
     allowedFirstPct: firstGoalGames.length ? (firstGoalGames.length - scoredFirst) / firstGoalGames.length : null,
     venueGames: venueGames.length, venueScoredFirst,
     venueScoredFirstPct: venueFirstGoalGames.length ? venueScoredFirst / venueFirstGoalGames.length : null,
-    firstPeriodUnder25, firstPeriodUnder25Pct: games.length ? firstPeriodUnder25 / games.length : null,
-    venueFirstPeriodUnder25Pct: venueGames.length ? venueUnder / venueGames.length : null,
+    firstPeriodUnder25, firstPeriodUnder25Pct: firstPeriodKnown.length ? firstPeriodUnder25 / firstPeriodKnown.length : null,
+    venueFirstPeriodUnder25Pct: venueFirstPeriodKnown.length ? venueUnder / venueFirstPeriodKnown.length : null,
     blowouts, blowoutPct: games.length ? blowouts / games.length : null,
     venueBlowoutPct: venueGames.length ? venueBlowouts / venueGames.length : null,
     bothTeamsTwo: scoredTwo, bothTeamsTwoPct: games.length ? scoredTwo / games.length : null,
     venueBothTeamsTwoPct: venueGames.length ? venueScoredTwo / venueGames.length : null,
-    regulationDraws, regulationDrawPct: games.length ? regulationDraws / games.length : null,
-    venueRegulationDrawPct: venueGames.length ? venueRegulationDraws / venueGames.length : null,
+    regulationDraws, regulationDrawPct: firstPeriodKnown.length ? regulationDraws / firstPeriodKnown.length : null,
+    venueRegulationDrawPct: venueFirstPeriodKnown.length ? venueRegulationDraws / venueFirstPeriodKnown.length : null,
     wins, winPct: scoredGames.length ? wins / scoredGames.length : null,
     venueWins, venueWinPct: venueScoredGames.length ? venueWins / venueScoredGames.length : null,
     recentGames: toRecentGames(games.filter((g) => g.awayScore !== null && g.homeScore !== null).map((g) => {
@@ -1478,6 +1492,23 @@ async function loadFirstGoalMatchup(ctx: Ctx, awayTeam: (typeof teamCodes)[numbe
   for (let index = 0; index < pending.length; index += 4) {
     const batch = await Promise.all(pending.slice(index, index + 4).map(fetchFirstGoalResult));
     results.push(...batch.filter((row): row is FirstGoalResult => row !== null));
+  }
+  // Play-by-play often fails from the Render host, which would leave the
+  // whole sample empty even when the schedule is known. Fill the gaps with
+  // score-only rows: W/L form, venue splits, totals and H2H all derive
+  // from scores, while first-goal / first-period reads stay unknown
+  // (firstPeriodGoals -1) and are excluded from those counts below.
+  const seenIds = new Set(results.map((r) => r.id));
+  for (const game of pending) {
+    if (seenIds.has(game.id)) continue;
+    if (game.awayScore === null || game.homeScore === null) continue;
+    results.push({
+      ...game,
+      firstTeam: null,
+      firstPeriodGoals: -1,
+      regulationDraw: false,
+      sourceUrl: awaySchedule.sourceUrl,
+    });
   }
   const away = teamFirstGoalStats(awayTeam, "away", results);
   const home = teamFirstGoalStats(homeTeam, "home", results);
