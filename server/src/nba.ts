@@ -363,13 +363,50 @@ function scheduleScore(value: unknown): number | null {
   return int(value);
 }
 
+/** Scoreboard-scan fallback for a team's recent games. The ESPN team
+ * schedule occasionally fails or comes back thin from the Render host; the
+ * 7-day scoreboard scan is the same source the recent-games collector
+ * already relies on. First-half / OT / first-basket detail stays null here
+ * — enrichNbaGameDetails fills it from summaries afterwards. */
+async function fetchNbaTeamGamesFromScoreboards(abbr: string): Promise<NbaTeamGame[]> {
+  const label = `${NBA_SEASON - 1}-${String(NBA_SEASON).slice(2)}`;
+  const out: NbaTeamGame[] = [];
+  for (let daysAgo = 0; daysAgo < 7; daysAgo++) {
+    const d = new Date();
+    d.setUTCDate(d.getUTCDate() - daysAgo);
+    const key = `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, "0")}${String(d.getUTCDate()).padStart(2, "0")}`;
+    let board;
+    try { board = await fetchNbaScoreboard(key); } catch { continue; }
+    for (const g of board.games) {
+      if (g.state !== "final") continue;
+      const isAway = g.away.abbr === abbr;
+      const isHome = g.home.abbr === abbr;
+      if (!isAway && !isHome) continue;
+      const teamScore = isAway ? g.away.score : g.home.score;
+      const oppScore = isAway ? g.home.score : g.away.score;
+      if (teamScore === null || oppScore === null) continue;
+      out.push({
+        gameId: g.id, date: g.date.slice(0, 10),
+        opponent: isAway ? g.home.abbr : g.away.abbr, homeAway: isAway ? "away" : "home",
+        teamScore, oppScore, won: teamScore > oppScore,
+        firstHalfFor: null, firstHalfAgainst: null,
+        margin: Math.abs(teamScore - oppScore), overtime: null,
+        firstScoringTeam: null, seasonLabel: label,
+      });
+    }
+  }
+  out.sort((a, b) => b.date.localeCompare(a.date) || b.gameId - a.gameId);
+  return out;
+}
+
 export async function fetchNbaTeamGames(abbr: string, maxGames = 10): Promise<{ games: NbaTeamGame[]; sourceUrl: string; seasonLabel: string }> {
   const meta = nbaTeamMeta(abbr);
   if (!meta) throw new Error(`Unknown NBA team ${abbr}`);
   const url = `${ESPN_SITE}/teams/${meta.id}/schedule`;
-  const payload = await getJson(url);
+  let payload: unknown = null;
+  try { payload = await getJson(url); } catch { payload = null; }
   const root = record(payload);
-  const seasonLabel = text(record(root?.season)?.displayName) ?? text(record(root?.season)?.name) ?? "";
+  const seasonLabel = text(record(root?.season)?.displayName) ?? text(record(root?.season)?.name) ?? `${NBA_SEASON - 1}-${String(NBA_SEASON).slice(2)}`;
   const games: NbaTeamGame[] = [];
   for (const eventValue of arr(root?.events)) {
     const e = record(eventValue);
@@ -407,6 +444,16 @@ export async function fetchNbaTeamGames(abbr: string, maxGames = 10): Promise<{ 
       margin: Math.abs(teamScore - oppScore), overtime: null,
       firstScoringTeam: null, seasonLabel,
     });
+  }
+  // The team schedule occasionally fails or comes back thin from the Render
+  // host; a thin sample here is what turns a matchup into no-model, so
+  // merge the scoreboard scan before giving up.
+  if (games.length < 3) {
+    try {
+      const extra = await fetchNbaTeamGamesFromScoreboards(abbr);
+      const seen = new Set(games.map((g) => g.gameId));
+      for (const g of extra) if (!seen.has(g.gameId)) { seen.add(g.gameId); games.push(g); }
+    } catch { /* fallback is best-effort; the primary sample stands */ }
   }
   games.sort((a, b) => b.date.localeCompare(a.date) || b.gameId - a.gameId);
   return { games: games.slice(0, maxGames), sourceUrl: url, seasonLabel };

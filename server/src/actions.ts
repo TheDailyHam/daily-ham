@@ -1152,6 +1152,66 @@ type FirstGoalResult = FirstGoalGame & { firstTeam: (typeof teamCodes)[number] |
 
 function isTeamCode(value: string): value is (typeof teamCodes)[number] { return teamCodes.includes(value as (typeof teamCodes)[number]); }
 
+// ESPN site-API fallback for a club's recent games. The NHL club-schedule
+// feed answers with silent blanks (or stale content) from the Render host
+// often enough that a matchup sample comes back empty; the ESPN team
+// schedule is the same host family the NBA path already relies on. ESPN
+// game ids are offset so they can never collide with NHL ids — play-by-play
+// is skipped for them, and the first-goal fields degrade to null (the stats
+// code already handles that) while W/L form, venue splits, totals and H2H
+// keep working from the scores.
+const ESPN_GAME_ID_OFFSET = 10_000_000;
+const ESPN_NHL_TEAMS_URL = "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/teams";
+const ESPN_NHL_SITE = "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl";
+
+async function loadClubScheduleEspn(team: (typeof teamCodes)[number]): Promise<{ games: FirstGoalGame[]; sourceUrl: string }> {
+  const espnAbbr = NHL_ESPN_ABBR_OVERRIDES[team] ?? team;
+  const teamsResponse = await fetch(ESPN_NHL_TEAMS_URL, { headers: { Accept: "application/json" } });
+  if (!teamsResponse.ok) throw new Error("ESPN NHL teams list unavailable");
+  const teamsPayload = await teamsResponse.json() as unknown;
+  let teamId: number | null = null;
+  for (const sport of arrayValue(objectValue(teamsPayload)?.sports)) {
+    for (const league of arrayValue(objectValue(sport)?.leagues)) {
+      for (const entry of arrayValue(objectValue(league)?.teams)) {
+        const t = objectValue(objectValue(entry)?.team);
+        if (textValue(t?.abbreviation) === espnAbbr) teamId = num(t?.id);
+      }
+    }
+  }
+  if (teamId === null) throw new Error(`ESPN id not found for ${team}`);
+  const schedResponse = await fetch(`${ESPN_NHL_SITE}/teams/${teamId}/schedule`, { headers: { Accept: "application/json" } });
+  if (!schedResponse.ok) throw new Error("ESPN NHL team schedule unavailable");
+  const payload = await schedResponse.json() as unknown;
+  const games: FirstGoalGame[] = [];
+  for (const eventValue of arrayValue(objectValue(payload)?.events)) {
+    const event = objectValue(eventValue);
+    const comp = objectValue(arrayValue(event?.competitions)?.[0]);
+    const statusName = textValue(objectValue(objectValue(comp?.status)?.type)?.name);
+    if (statusName !== "STATUS_FINAL") continue;
+    const dateRaw = textValue(event?.date);
+    const date = dateRaw ? dateRaw.slice(0, 10) : null;
+    const id = num(event?.id);
+    let away: (typeof teamCodes)[number] | null = null;
+    let home: (typeof teamCodes)[number] | null = null;
+    let awayScore: number | null = null;
+    let homeScore: number | null = null;
+    for (const compValue of arrayValue(comp?.competitors)) {
+      const competitor = objectValue(compValue);
+      const abbr = textValue(objectValue(competitor?.team)?.abbreviation);
+      const side = textValue(competitor?.homeAway);
+      const scoreNum = num(objectValue(competitor?.score)?.value);
+      if (!abbr || (side !== "home" && side !== "away")) continue;
+      const tri = (Object.entries(NHL_ESPN_ABBR_OVERRIDES).find(([, v]) => v === abbr)?.[0] ?? abbr) as string;
+      if (!isTeamCode(tri)) continue;
+      if (side === "away") { away = tri; awayScore = scoreNum; } else { home = tri; homeScore = scoreNum; }
+    }
+    if (id === null || !date || !away || !home || awayScore === null || homeScore === null) continue;
+    games.push({ id: id + ESPN_GAME_ID_OFFSET, date, away, home, awayScore, homeScore });
+  }
+  games.sort((a, b) => b.date.localeCompare(a.date));
+  return { games: games.slice(0, 20), sourceUrl: schedResponse.url };
+}
+
 async function loadClubSchedule(team: (typeof teamCodes)[number]): Promise<{ games: FirstGoalGame[]; sourceUrl: string }> {
   const seasons = [NHL_SEASON, "20252026"];
   const responses = await Promise.all(seasons.map((season) => fetch(`${NHL_API}/club-schedule-season/${team}/${season}`, { headers: { Accept: "application/json" } })));
@@ -1172,10 +1232,32 @@ async function loadClubSchedule(team: (typeof teamCodes)[number]): Promise<{ gam
   if (!sourceUrl) throw new Error(`The official NHL schedule for ${team} is temporarily unavailable`);
   const deduped = new Map<number, FirstGoalGame>();
   for (const game of games.sort((a, b) => b.date.localeCompare(a.date))) if (!deduped.has(game.id)) deduped.set(game.id, game);
-  return { games: Array.from(deduped.values()).slice(0, 20), sourceUrl };
+  let finalGames = Array.from(deduped.values()).slice(0, 20);
+  // The club-schedule feed blinks from the Render host (silent blanks or
+  // stale content): if the sample is thin or its newest game is over 5 days
+  // old, merge the ESPN team schedule so the matchup still has a sample.
+  const completed = finalGames.filter((g) => g.awayScore !== null && g.homeScore !== null);
+  const newest = completed[0]?.date ?? null;
+  const stale = newest === null || Date.parse(newest) < Date.now() - 5 * 24 * 60 * 60 * 1000;
+  if (completed.length < 4 || stale) {
+    try {
+      const espn = await loadClubScheduleEspn(team);
+      const seen = new Set(finalGames.map((g) => `${g.date}|${g.away}|${g.home}`));
+      for (const g of espn.games) {
+        const key = `${g.date}|${g.away}|${g.home}`;
+        if (!seen.has(key)) { seen.add(key); finalGames.push(g); }
+      }
+      finalGames.sort((a, b) => b.date.localeCompare(a.date));
+      finalGames = finalGames.slice(0, 20);
+    } catch { /* fallback is best-effort; the primary sample stands */ }
+  }
+  return { games: finalGames, sourceUrl };
 }
 
 async function fetchFirstGoalResult(game: FirstGoalGame): Promise<FirstGoalResult | null> {
+  // ESPN-fallback rows carry offset ids, not NHL game ids — there is no NHL
+  // play-by-play to fetch for them.
+  if (game.id >= ESPN_GAME_ID_OFFSET) return null;
   try {
     const response = await fetch(`${NHL_API}/gamecenter/${game.id}/play-by-play`, { headers: { Accept: "application/json" } });
     if (!response.ok) return null;
