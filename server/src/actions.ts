@@ -5588,7 +5588,7 @@ function coreRef(value: unknown): string | null {
 // NHL clubs are keyed by tri-code on the api-web.nhle.com side, but the ESPN
 // core injuries endpoint needs ESPN's numeric team ids. Resolve dynamically
 // (cached 7 days); ESPN abbreviations match our tri-codes except LA/NJ/SJ.
-const NHL_ESPN_ABBR_OVERRIDES: Record<string, string> = { LAK: "LA", NJD: "NJ", SJS: "SJ" };
+const NHL_ESPN_ABBR_OVERRIDES: Record<string, string> = { LAK: "LA", NJD: "NJ", SJS: "SJ", TBL: "TB", UTA: "UTAH" };
 
 async function nhlEspnIdMap(ctx: Ctx): Promise<Record<string, number>> {
   const cacheKey = "nhl-espn-team-ids";
