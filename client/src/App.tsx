@@ -1952,6 +1952,116 @@ async function fetchMatchupRoster(sport: Sport, team: string, league: SoccerLeag
   return api.getSoccerRoster({ league: league ?? "mls", team });
 }
 
+// Matchup history deep dive (Nov 2026): per-player stat lines vs this
+// opponent, last meetings with scores, and a defensive read — from the
+// getMatchupHistory action. Stacked rows only; nothing bleeds past the
+// background edges. Model numbers are labeled estimates, never book lines.
+function MatchupHistorySection({ sport, awayCode, homeCode, league }: {
+  sport: Sport;
+  awayCode: string;
+  homeCode: string;
+  league?: SoccerLeague;
+}) {
+  const history = useQuery({
+    queryKey: ["matchup-history", sport, league ?? "na", awayCode, homeCode],
+    queryFn: () => api.getMatchupHistory({ sport, away: awayCode, home: homeCode, league }),
+    staleTime: 6 * 60 * 60 * 1000, retry: 1,
+  });
+  const d = history.data;
+  const scoreWord = sport === "nhl" || sport === "soccer" ? "goals" : "points";
+  const playerLine = (p: NonNullable<typeof d>["playersAway"][number]) => {
+    const bits: string[] = [];
+    if (sport === "nfl" || sport === "ncaaf") {
+      if ((p.passYards ?? 0) > 0) bits.push(`${p.passYards} pass yds · ${p.passTds ?? 0} TD`);
+      if ((p.rushYards ?? 0) > 0) bits.push(`${p.rushYards} rush yds · ${p.rushTds ?? 0} TD`);
+      if ((p.recYards ?? 0) > 0) bits.push(`${p.receptions ?? 0} rec · ${p.recYards} rec yds · ${p.recTds ?? 0} TD`);
+    } else if (sport === "nhl") {
+      bits.push(`${p.goals ?? 0} G · ${p.assists ?? 0} A · ${p.points ?? 0} PTS · ${p.shots ?? 0} SOG`);
+    } else if (sport === "nba") {
+      bits.push(`${p.pointsAvg ?? 0} PTS · ${p.reboundsAvg ?? 0} REB · ${p.assistsAvg ?? 0} AST · ${p.threePointMadeAvg ?? 0} 3PM / game`);
+    } else {
+      bits.push(`${p.goals ?? 0} G · ${p.assists ?? 0} A`);
+    }
+    return bits.join(" · ") || "—";
+  };
+  const defenseLine = (def: NonNullable<typeof d>["defenseAway"], oppCode: string) => {
+    const parts: string[] = [];
+    if (def.pointsAllowedPerGame !== null && def.opponentAvgPointsPerGame !== null) {
+      parts.push(`allowed ${def.pointsAllowedPerGame} ${scoreWord}/game · ${oppCode} averages ${def.opponentAvgPointsPerGame}`);
+      if (def.heldBelowScoringAverage !== null) parts.push(def.heldBelowScoringAverage ? "held them below their average" : "gave up more than their average");
+    }
+    if (def.rushYardsAllowedPerGame !== null && def.opponentAvgRushYardsPerGame !== null) {
+      parts.push(`allowed ${def.rushYardsAllowedPerGame} rush yds/game · ${oppCode} averages ${def.opponentAvgRushYardsPerGame}`);
+      if (def.stoppedRun !== null) parts.push(def.stoppedRun ? "stopped the run" : "did not stop the run");
+    }
+    return parts.join(" · ") || "No meetings yet to read the defense from.";
+  };
+  const sides: ["playersAway" | "playersHome", string][] = [["playersAway", awayCode], ["playersHome", homeCode]];
+  const empty = d && d.meetings.length === 0 && d.playersAway.length === 0 && d.playersHome.length === 0;
+  return <section className="matchup-history" aria-label="Matchup history deep dive">
+    <div className="section-heading"><div><p className="kicker">MATCHUP HISTORY</p><h3>How they've played each other</h3></div><span>Model estimate</span></div>
+    {history.isPending ? <div className="loading"><span />Reading their history…</div>
+      : history.isError || !d ? <p className="mvb-note">Matchup history is unavailable right now.</p>
+      : empty ? <p className="mvb-note">These teams haven't met yet this season — no head-to-head history to show.</p>
+      : <>
+        {d.lastMeeting && <div className="mh-block">
+          <p className="mh-label">Last meeting</p>
+          <div className="mh-row"><strong>{d.lastMeeting.date} · {d.lastMeeting.awayTeam} {d.lastMeeting.awayScore}–{d.lastMeeting.homeScore} {d.lastMeeting.homeTeam}</strong>
+            {d.lastMeeting.topScorers.length > 0 && <small>Top scorers: {d.lastMeeting.topScorers.map((s) => `${s.name} (${s.team}) — ${s.line}`).join(" · ")}</small>}</div>
+        </div>}
+        {sides.map(([key, teamCode]) => {
+          const players = d[key];
+          if (players.length === 0) return null;
+          const opp = teamCode === awayCode ? homeCode : awayCode;
+          return <div key={teamCode} className="mh-block">
+            <p className="mh-label">{teamCode} vs {opp}</p>
+            {players.map((p) => <div key={`${teamCode}-${p.id}`} className="mh-row"><strong>{p.name}</strong> <span className="mh-stat">{playerLine(p)}</span><small>{p.games} game{p.games === 1 ? "" : "s"} vs {opp}{p.position !== "—" ? ` · ${p.position}` : ""}</small></div>)}
+          </div>;
+        })}
+        {d.meetings.length > 0 && <div className="mh-block">
+          <p className="mh-label">Head-to-head · {awayCode} {d.h2h.awayWins} – {d.h2h.homeWins} {homeCode}{d.h2h.draws > 0 ? ` · ${d.h2h.draws} draw${d.h2h.draws === 1 ? "" : "s"}` : ""}</p>
+          {d.meetings.map((m) => <div key={m.date} className="mh-row"><span>{m.date} · {m.awayTeam} {m.awayScore}–{m.homeScore} {m.homeTeam}</span>{(m.awayRushYards !== null || m.homeRushYards !== null) && <small>Rush yds: {m.awayTeam} {m.awayRushYards ?? "—"} · {m.homeTeam} {m.homeRushYards ?? "—"}</small>}</div>)}
+        </div>}
+        {d.meetings.length > 0 && <div className="mh-block">
+          <p className="mh-label">Defensive read</p>
+          <div className="mh-row"><strong>{awayCode} defense vs {homeCode}</strong><small>{defenseLine(d.defenseAway, homeCode)}</small></div>
+          <div className="mh-row"><strong>{homeCode} defense vs {awayCode}</strong><small>{defenseLine(d.defenseHome, awayCode)}</small></div>
+        </div>}
+        <p className="mvb-note">{d.windowNote} Per-player lines are official game-log totals vs this opponent. Model estimates are labeled as estimates, never sportsbook lines.</p>
+      </>}
+  </section>;
+}
+
+// College football cross-conference ranking translation (Nov 2026): where
+// each team would sit in the other's conference, on one 138-team power
+// scale. Model estimate, never an official ranking. Independents show
+// national rank only.
+function ConferenceRanksSection({ awayCode, homeCode }: { awayCode: NcaafTeamCode; homeCode: NcaafTeamCode }) {
+  const ranks = useQuery({
+    queryKey: ["ncaaf-conference-ranks", awayCode, homeCode],
+    queryFn: () => api.getNcaafConferenceRanks({ awayTeam: awayCode, homeTeam: homeCode }),
+    staleTime: 6 * 60 * 60 * 1000, retry: 1,
+  });
+  const d = ranks.data;
+  const line = (r: NonNullable<typeof d>["away"]) => {
+    if (r.conferenceRank === null) return `${r.conference} · National #${r.nationalRank}`;
+    const translated = r.translatedRank !== null && r.translatedConference ? ` · would be ${r.translatedConference} #${r.translatedRank}` : "";
+    return `${r.conference} #${r.conferenceRank} · National #${r.nationalRank}${translated}`;
+  };
+  return <section className="matchup-history" aria-label="Cross-conference ranking">
+    <div className="section-heading"><div><p className="kicker">CROSS-CONFERENCE RANK</p><h3>Where they'd sit in the other league</h3></div><span>Model estimate</span></div>
+    {ranks.isPending ? <div className="loading"><span />Ranking all 138 FBS teams…</div>
+      : ranks.isError || !d ? <p className="mvb-note">Conference ranks are unavailable right now.</p>
+      : <>
+        <div className="mh-block">
+          <div className="mh-rank"><strong>{d.away.team}</strong><span>{line(d.away)}</span><span>{d.away.wins}–{d.away.losses} · {d.away.gamesPlayed} games</span></div>
+          <div className="mh-rank"><strong>{d.home.team}</strong><span>{line(d.home)}</span><span>{d.home.wins}–{d.home.losses} · {d.home.gamesPlayed} games</span></div>
+        </div>
+        <p className="mvb-note">One power scale for all {d.totalTeams} FBS teams, from the same model inputs as Flip % (points %, Pythagorean, recent form). A model estimate, not an official ranking. Independents show national rank only.</p>
+      </>}
+  </section>;
+}
+
 function MatchupScorersSection({ sport, awayCode, homeCode, league }: {
   sport: Sport;
   awayCode: string;
@@ -2101,6 +2211,7 @@ function MatchupCalculator() {
         <p className="winner-explain">The winner model blends each club’s recent win rate with the opponent’s loss rate, weighting away and home splits when at least five matching games exist. Overtime and shootout winners count. This is a model estimate, not a sportsbook line.</p>
       </section>
       {data && <DeepDiveSection awayName={ddTeamName(teams, matchup.away)} homeName={ddTeamName(teams, matchup.home)} awayCode={matchup.away} homeCode={matchup.home} awayGames={data.away.recentGames} homeGames={data.home.recentGames} awayProb={data.awayWinProbability} homeProb={data.homeWinProbability} scoreWord="goals" />}
+      {data && <MatchupHistorySection sport="nhl" awayCode={data.away.team} homeCode={data.home.team} />}
       {data && <ProjectedTotalCard awayName={ddTeamName(teams, matchup.away)} homeName={ddTeamName(teams, matchup.home)} unit="goals" projectedTotal={data.projectedTotal} projectedAwayScore={data.projectedAwayScore} projectedHomeScore={data.projectedHomeScore} bookTotal={data.bookTotal} totalLean={data.totalLean} totalGap={data.totalGap} totalOverProbability={data.totalOverProbability} awayScoredPerGame={data.awayScoredPerGame} homeScoredPerGame={data.homeScoredPerGame} note={data.goalieAway && data.goalieHome ? `Goalie edge baked in: ${data.goalieAway.name} (${(data.goalieAway.savePct * 100).toFixed(1)}%) vs ${data.goalieHome.name} (${(data.goalieHome.savePct * 100).toFixed(1)}%) recent save pct.` : null} />}
       {data && <ModelVsBooks sport="nhl" awayCode={data.away.team} homeCode={data.home.team} awayModel={data.awayWinProbability} homeModel={data.homeWinProbability} groups={boardGroups} />}
       {data && <MatchupScorersSection sport="nhl" awayCode={data.away.team} homeCode={data.home.team} />}
@@ -3073,6 +3184,7 @@ function NflMatchupCalculator() {
         <p className="winner-explain">The winner model blends each club's recent win rate with the opponent's loss rate, weighting away and home splits when at least three matching games exist. This is a model estimate, not a sportsbook line.</p>
       </section>
       {data && <DeepDiveSection awayName={ddTeamName(nflTeams, matchup.away)} homeName={ddTeamName(nflTeams, matchup.home)} awayCode={matchup.away} homeCode={matchup.home} awayGames={data.away.recentGames} homeGames={data.home.recentGames} awayProb={data.awayWinProbability} homeProb={data.homeWinProbability} />}
+      {data && <MatchupHistorySection sport="nfl" awayCode={data.away.team} homeCode={data.home.team} />}
       {data && <ProjectedTotalCard awayName={ddTeamName(nflTeams, matchup.away)} homeName={ddTeamName(nflTeams, matchup.home)} unit="points" projectedTotal={data.projectedTotal} projectedAwayScore={data.projectedAwayScore} projectedHomeScore={data.projectedHomeScore} bookTotal={data.bookTotal} totalLean={data.totalLean} totalGap={data.totalGap} totalOverProbability={data.totalOverProbability} awayScoredPerGame={data.awayScoredPerGame} homeScoredPerGame={data.homeScoredPerGame} />}
       {data && <ModelVsBooks sport="nfl" awayCode={data.away.team} homeCode={data.home.team} awayModel={data.awayWinProbability} homeModel={data.homeWinProbability} groups={boardGroups} />}
       {data && <MatchupScorersSection sport="nfl" awayCode={data.away.team} homeCode={data.home.team} />}
@@ -3145,6 +3257,8 @@ function NcaafMatchupCalculator() {
         <p className="winner-explain">The winner model blends each club's recent win rate with the opponent's loss rate, weighting away and home splits when at least three matching games exist. This is a model estimate, not a sportsbook line.</p>
       </section>
       {data && <DeepDiveSection awayName={ddTeamName(ncaafTeams, matchup.away)} homeName={ddTeamName(ncaafTeams, matchup.home)} awayCode={matchup.away} homeCode={matchup.home} awayGames={data.away.recentGames} homeGames={data.home.recentGames} awayProb={data.awayWinProbability} homeProb={data.homeWinProbability} />}
+      {data && <MatchupHistorySection sport="ncaaf" awayCode={data.away.team} homeCode={data.home.team} />}
+      {data && <ConferenceRanksSection awayCode={matchup.away} homeCode={matchup.home} />}
       {data && <ProjectedTotalCard awayName={ddTeamName(ncaafTeams, matchup.away)} homeName={ddTeamName(ncaafTeams, matchup.home)} unit="points" projectedTotal={data.projectedTotal} projectedAwayScore={data.projectedAwayScore} projectedHomeScore={data.projectedHomeScore} bookTotal={data.bookTotal} totalLean={data.totalLean} totalGap={data.totalGap} totalOverProbability={data.totalOverProbability} awayScoredPerGame={data.awayScoredPerGame} homeScoredPerGame={data.homeScoredPerGame} />}
       {data && <ModelVsBooks sport="ncaaf" awayCode={data.away.team} homeCode={data.home.team} awayModel={data.awayWinProbability} homeModel={data.homeWinProbability} groups={boardGroups} />}
       {data && <MatchupScorersSection sport="ncaaf" awayCode={data.away.team} homeCode={data.home.team} />}
@@ -3963,6 +4077,7 @@ function NbaMatchupCalculator() {
         <p className="winner-explain">The winner model blends each club's recent win rate with the opponent's loss rate, weighting away and home splits when at least three matching games exist. This is a model estimate, not a sportsbook line.</p>
       </section>
       {data && <DeepDiveSection awayName={ddTeamName(nbaTeams, matchup.away)} homeName={ddTeamName(nbaTeams, matchup.home)} awayCode={matchup.away} homeCode={matchup.home} awayGames={data.away.recentGames} homeGames={data.home.recentGames} awayProb={data.awayWinProbability} homeProb={data.homeWinProbability} />}
+      {data && <MatchupHistorySection sport="nba" awayCode={data.away.team} homeCode={data.home.team} />}
       {data && <ProjectedTotalCard awayName={ddTeamName(nbaTeams, matchup.away)} homeName={ddTeamName(nbaTeams, matchup.home)} unit="points" projectedTotal={data.projectedTotal} projectedAwayScore={data.projectedAwayScore} projectedHomeScore={data.projectedHomeScore} bookTotal={data.bookTotal} totalLean={data.totalLean} totalGap={data.totalGap} totalOverProbability={data.totalOverProbability} awayScoredPerGame={data.awayScoredPerGame} homeScoredPerGame={data.homeScoredPerGame} />}
       {data && <ModelVsBooks sport="nba" awayCode={data.away.team} homeCode={data.home.team} awayModel={data.awayWinProbability} homeModel={data.homeWinProbability} groups={boardGroups} />}
       {data && <MatchupScorersSection sport="nba" awayCode={data.away.team} homeCode={data.home.team} />}
@@ -4539,6 +4654,7 @@ function SoccerMatchupCalculator({ league, onLeagueChange }: { league: SoccerLea
         <p className="winner-explain">The result model blends each club's recent home/away form with goals scored and allowed, weighting venue splits when the sample allows. Draws are a real outcome here — always price all three. This is a model estimate, not a sportsbook line.</p>
       </section>
       {data && <DeepDiveSection awayName={ddTeamName(soccerTeamsFor(league), matchup.away)} homeName={ddTeamName(soccerTeamsFor(league), matchup.home)} awayCode={matchup.away} homeCode={matchup.home} awayGames={data.away.recentGames} homeGames={data.home.recentGames} awayProb={data.awayWinProbability} homeProb={data.homeWinProbability} scoreWord="goals" />}
+      {data && <MatchupHistorySection sport="soccer" awayCode={data.away.team} homeCode={data.home.team} league={league} />}
       {data && <ProjectedTotalCard awayName={ddTeamName(soccerTeamsFor(league), matchup.away)} homeName={ddTeamName(soccerTeamsFor(league), matchup.home)} unit="goals" projectedTotal={data.projectedTotal} projectedAwayScore={data.projectedAwayScore} projectedHomeScore={data.projectedHomeScore} bookTotal={data.bookTotal} totalLean={data.totalLean} totalGap={data.totalGap} totalOverProbability={data.totalOverProbability} awayScoredPerGame={data.awayScoredPerGame} homeScoredPerGame={data.homeScoredPerGame} />}
       <SoccerModelVsBooks league={league} homeCode={data.home.team} awayCode={data.away.team} homeModel={data.homeWinProbability} drawModel={data.drawProbability} awayModel={data.awayWinProbability} groups={boardGroups} />
       {data && <MatchupScorersSection sport="soccer" awayCode={data.away.team} homeCode={data.home.team} league={league} />}

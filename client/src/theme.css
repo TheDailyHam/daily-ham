@@ -1585,6 +1585,30 @@ html[data-dimmed="true"] .brightness-veil { display: block; }
 }
 .scorer-rating b { font-size: 15px; font-weight: 900; color: #3d2b00; text-shadow: 0 1px 0 rgba(255,255,255,.5); }
 .scorer-player small.ms-h2h { color: var(--gold-deep); font-weight: 700; }
+/* Matchup history deep dive + cross-conference ranks: stacked rows only,
+   wide text wraps inside its own row — nothing bleeds past the edges. */
+.matchup-history { margin: 14px 0; }
+.mh-block { margin-top: 12px; }
+.mh-block:first-of-type { margin-top: 2px; }
+.mh-label {
+  font-size: 11px; font-weight: 900; letter-spacing: .12em; color: var(--gold-deep);
+  margin: 0 0 6px 2px; text-transform: uppercase; text-shadow: 0 1px 0 rgba(255,255,255,.4);
+}
+.mh-row {
+  padding: 8px 12px; border-radius: 10px; background: var(--paper);
+  border: 1px solid var(--border); margin-bottom: 6px;
+  font-size: 13px; line-height: 1.45; overflow-wrap: anywhere;
+}
+.mh-row strong { font-size: 13px; }
+.mh-row small { display: block; font-size: 12px; color: var(--dim); margin-top: 2px; line-height: 1.45; }
+.mh-stat { color: var(--gold-deep); font-weight: 700; }
+.mh-rank {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px;
+  padding: 10px 12px; border-radius: 10px; background: var(--paper);
+  border: 1px solid var(--border); margin-bottom: 6px; font-size: 13px; line-height: 1.45;
+}
+.mh-rank strong { font-size: 14px; }
+.mh-rank span { color: var(--dim); font-size: 12px; }
 .scorer-open { font-size: 20px; font-weight: 900; color: var(--gold-deep); line-height: 1; padding-right: 2px; }
 .scorer-row:disabled .scorer-open { display: none; }
 @media (min-width: 560px) { .slate-flips { grid-template-columns: repeat(2, minmax(0,1fr)); } }

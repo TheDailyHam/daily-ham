@@ -5139,6 +5139,619 @@ const bookReadResponse = z.object({
   fetchedAt: z.string(),
 });
 
+// ---------------------------------------------------------------------------
+// Matchup history deep dive (Feature 1, Nov 2026): per-player stat lines vs
+// this opponent, last meetings with scores, and a defensive read — built from
+// the same per-player game logs the matchup scorer blend uses. Every number
+// carries its games sample; blended/model numbers are estimates, never
+// sportsbook lines.
+// ---------------------------------------------------------------------------
+const matchupHistoryPlayerSchema = z.object({
+  id: z.number(), name: z.string(), position: z.string(), team: z.string(),
+  games: z.number(),
+  passYards: z.number().nullable(), passTds: z.number().nullable(),
+  rushYards: z.number().nullable(), rushTds: z.number().nullable(),
+  receptions: z.number().nullable(), recYards: z.number().nullable(), recTds: z.number().nullable(),
+  goals: z.number().nullable(), assists: z.number().nullable(), points: z.number().nullable(), shots: z.number().nullable(),
+  pointsAvg: z.number().nullable(), reboundsAvg: z.number().nullable(), assistsAvg: z.number().nullable(), threePointMadeAvg: z.number().nullable(),
+});
+const matchupHistoryMeetingSchema = z.object({
+  date: z.string(), awayTeam: z.string(), homeTeam: z.string(),
+  awayScore: z.number(), homeScore: z.number(),
+  awayRushYards: z.number().nullable(), homeRushYards: z.number().nullable(),
+});
+const matchupHistoryDefenseSchema = z.object({
+  pointsAllowedPerGame: z.number().nullable(),
+  opponentAvgPointsPerGame: z.number().nullable(),
+  rushYardsAllowedPerGame: z.number().nullable(),
+  opponentAvgRushYardsPerGame: z.number().nullable(),
+  stoppedRun: z.boolean().nullable(),
+  heldBelowScoringAverage: z.boolean().nullable(),
+});
+const matchupHistoryResponse = z.object({
+  sport: z.string(), awayTeam: z.string(), homeTeam: z.string(),
+  playersAway: z.array(matchupHistoryPlayerSchema),
+  playersHome: z.array(matchupHistoryPlayerSchema),
+  meetings: z.array(matchupHistoryMeetingSchema),
+  h2h: z.object({ games: z.number(), awayWins: z.number(), homeWins: z.number(), draws: z.number() }),
+  defenseAway: matchupHistoryDefenseSchema,
+  defenseHome: matchupHistoryDefenseSchema,
+  lastMeeting: z.object({
+    date: z.string(), awayTeam: z.string(), homeTeam: z.string(), awayScore: z.number(), homeScore: z.number(),
+    topScorers: z.array(z.object({ name: z.string(), team: z.string(), line: z.string() })),
+  }).nullable(),
+  windowNote: z.string(),
+  fetchedAt: z.string(), sourceUrl: z.string(),
+});
+
+// College football cross-conference ranking translation (Feature 2, Nov
+// 2026): every FBS team ranked on one power scale built from the same model
+// inputs Flip % v3 uses (points %, Pythagorean from points for/against,
+// blended with recent form). A team's translated rank is where it would sit
+// in the opponent's conference. Model estimate, never an official ranking.
+const ncaafConferenceRankSchema = z.object({
+  team: z.string(), name: z.string(), conference: z.string(),
+  gamesPlayed: z.number(), wins: z.number(), losses: z.number(),
+  rating: z.number().nullable(),
+  nationalRank: z.number(),
+  conferenceRank: z.number().nullable(),
+  translatedRank: z.number().nullable(),
+  translatedConference: z.string().nullable(),
+});
+const ncaafConferenceRanksResponse = z.object({
+  awayTeam: z.string(), homeTeam: z.string(),
+  away: ncaafConferenceRankSchema, home: ncaafConferenceRankSchema,
+  totalTeams: z.number(), fetchedAt: z.string(), sourceUrl: z.string(),
+});
+
+function historyRound1(n: number): number {
+  return Math.round(n * 10) / 10;
+}
+function historyAvg(xs: number[]): number | null {
+  if (xs.length === 0) return null;
+  return xs.reduce((a, b) => a + b, 0) / xs.length;
+}
+function historyDefense(allowedPoints: number[], oppAvgPoints: number | null, allowedRush: (number | null)[], oppAvgRush: number | null): z.infer<typeof matchupHistoryDefenseSchema> {
+  const pointsAvg = historyAvg(allowedPoints);
+  const rushVals = allowedRush.filter((v): v is number => v !== null);
+  const rushAvg = historyAvg(rushVals);
+  return {
+    pointsAllowedPerGame: pointsAvg === null ? null : historyRound1(pointsAvg),
+    opponentAvgPointsPerGame: oppAvgPoints === null ? null : historyRound1(oppAvgPoints),
+    rushYardsAllowedPerGame: rushAvg === null ? null : historyRound1(rushAvg),
+    opponentAvgRushYardsPerGame: oppAvgRush === null ? null : historyRound1(oppAvgRush),
+    stoppedRun: rushAvg !== null && oppAvgRush !== null ? rushAvg < oppAvgRush : null,
+    heldBelowScoringAverage: pointsAvg !== null && oppAvgPoints !== null ? pointsAvg < oppAvgPoints : null,
+  };
+}
+
+// Sum team rushing yards from an ESPN game-summary box (NFL and NCAAF share
+// the box shape: a "rushing" category with a "rushingYards" stat per athlete).
+function sumBoxRushYards(categories: { category: string; athletes: { stats: Record<string, string> }[] }[]): number | null {
+  const cat = categories.find((c) => c.category === "rushing");
+  if (!cat) return null;
+  let total = 0; let seen = false;
+  for (const a of cat.athletes) {
+    const n = parseStatNumber(a.stats["rushingYards"]);
+    if (n !== null) { total += n; seen = true; }
+  }
+  return seen ? total : null;
+}
+
+type FootballLogPlayer = {
+  id: number; name: string; position: string;
+  games: { date: string; opponent: string; stats: NflPlayerGameStats }[];
+};
+type FootballLogs = { players: FootballLogPlayer[] } | null;
+
+function footballVsOpponent(logs: FootballLogs, opponent: string, team: string): z.infer<typeof matchupHistoryPlayerSchema>[] {
+  if (!logs) return [];
+  const rows: (z.infer<typeof matchupHistoryPlayerSchema> & { _tds: number; _yards: number })[] = [];
+  for (const p of logs.players) {
+    const vs = p.games.filter((g) => g.opponent === opponent);
+    if (vs.length === 0) continue;
+    const sum = (f: (s: NflPlayerGameStats) => number | null) => vs.reduce((t, g) => t + (f(g.stats) ?? 0), 0);
+    const passYards = sum((s) => s.passYards); const passTds = sum((s) => s.passTds);
+    const rushYards = sum((s) => s.rushYards); const rushTds = sum((s) => s.rushTds);
+    const receptions = sum((s) => s.receptions); const recYards = sum((s) => s.recYards); const recTds = sum((s) => s.recTds);
+    const totalTds = passTds + rushTds + recTds;
+    const totalYards = passYards + rushYards + recYards;
+    if (totalTds === 0 && totalYards === 0) continue;
+    rows.push({
+      id: p.id, name: p.name, position: p.position, team, games: vs.length,
+      passYards, passTds, rushYards, rushTds, receptions, recYards, recTds,
+      goals: null, assists: null, points: null, shots: null,
+      pointsAvg: null, reboundsAvg: null, assistsAvg: null, threePointMadeAvg: null,
+      _tds: totalTds, _yards: totalYards,
+    });
+  }
+  rows.sort((a, b) => b._tds - a._tds || b._yards - a._yards);
+  return rows.slice(0, 6).map(({ _tds: _t, _yards: _y, ...rest }) => rest);
+}
+
+function footballSeasonRushAvg(logs: FootballLogs): number | null {
+  if (!logs) return null;
+  const gameKeys = new Set<string>();
+  let yards = 0;
+  for (const p of logs.players) {
+    for (const g of p.games) {
+      gameKeys.add(`${g.date}|${g.opponent}`);
+      yards += g.stats.rushYards ?? 0;
+    }
+  }
+  return gameKeys.size > 0 ? yards / gameKeys.size : null;
+}
+
+function footballTopScorers(logsAway: FootballLogs, logsHome: FootballLogs, away: string, home: string, date: string): { name: string; team: string; line: string }[] {
+  const rows: { name: string; team: string; tds: number; yards: number; line: string }[] = [];
+  const collect = (logs: FootballLogs, team: string, opp: string) => {
+    if (!logs) return;
+    for (const p of logs.players) {
+      const g = p.games.find((x) => x.date === date && x.opponent === opp);
+      if (!g) continue;
+      const s = g.stats;
+      const tds = (s.passTds ?? 0) + (s.rushTds ?? 0) + (s.recTds ?? 0);
+      const yards = (s.passYards ?? 0) + (s.rushYards ?? 0) + (s.recYards ?? 0);
+      if (tds === 0 && yards < 50) continue;
+      const bits: string[] = [];
+      if ((s.passYards ?? 0) > 0) bits.push(`${s.passYards} pass yds${(s.passTds ?? 0) ? `, ${s.passTds} TD` : ""}`);
+      if ((s.rushYards ?? 0) > 0) bits.push(`${s.rushYards} rush yds${(s.rushTds ?? 0) ? `, ${s.rushTds} TD` : ""}`);
+      if ((s.recYards ?? 0) > 0) bits.push(`${s.receptions ?? 0} rec, ${s.recYards} yds${(s.recTds ?? 0) ? `, ${s.recTds} TD` : ""}`);
+      rows.push({ name: p.name, team, tds, yards, line: bits.join(" · ") || `${yards} yds` });
+    }
+  };
+  collect(logsAway, away, home);
+  collect(logsHome, home, away);
+  rows.sort((a, b) => b.tds - a.tds || b.yards - a.yards);
+  return rows.slice(0, 3).map(({ name, team, line }) => ({ name, team, line }));
+}
+
+async function buildFootballHistory(ctx: Ctx, sport: "nfl" | "ncaaf", away: string, home: string): Promise<z.infer<typeof matchupHistoryResponse>> {
+  const isNfl = sport === "nfl";
+  const [logsAway, logsHome] = await Promise.all([
+    (isNfl ? nflTeamPlayerLogs(ctx, away as (typeof nflTeamCodes)[number]) : ncaafTeamPlayerLogs(ctx, away as (typeof ncaafTeamCodes)[number])).catch(() => null) as Promise<FootballLogs>,
+    (isNfl ? nflTeamPlayerLogs(ctx, home as (typeof nflTeamCodes)[number]) : ncaafTeamPlayerLogs(ctx, home as (typeof ncaafTeamCodes)[number])).catch(() => null) as Promise<FootballLogs>,
+  ]);
+  const [gamesAway, gamesHome] = await Promise.all([
+    (isNfl ? fetchNflTeamGames(away, 10) : fetchNcaafTeamGames(away, 10)).catch(() => null),
+    (isNfl ? fetchNflTeamGames(home, 10) : fetchNcaafTeamGames(home, 10)).catch(() => null),
+  ]);
+  const meetingGames = (gamesAway?.games ?? []).filter((g) => g.opponent === home).slice(0, 5);
+  // One summary per meeting gives both teams' rushing yards for that game.
+  const rushById = new Map<number, { away: number | null; home: number | null }>();
+  for (let i = 0; i < meetingGames.length; i += 4) {
+    const batch = meetingGames.slice(i, i + 4);
+    const summaries = await Promise.all(batch.map(async (g) => {
+      try { return { id: g.gameId, summary: isNfl ? await fetchNflGameSummary(g.gameId) : await fetchNcaafGameSummary(g.gameId) }; }
+      catch { return { id: g.gameId, summary: null }; }
+    }));
+    for (const { id, summary } of summaries) {
+      if (!summary) continue;
+      const awayBox = summary.teams.find((t) => t.abbr === away);
+      const homeBox = summary.teams.find((t) => t.abbr === home);
+      rushById.set(id, {
+        away: awayBox ? sumBoxRushYards(awayBox.categories) : null,
+        home: homeBox ? sumBoxRushYards(homeBox.categories) : null,
+      });
+    }
+  }
+  const meetings: z.infer<typeof matchupHistoryMeetingSchema>[] = meetingGames.map((g) => {
+    const rush = rushById.get(g.gameId);
+    // meetingGames come from the matchup away team's schedule, so teamScore
+    // is ALWAYS the away team's score and oppScore the home team's — the
+    // venue flag describes the away team's side, not which score is which.
+    return {
+      date: g.date.slice(0, 10), awayTeam: away, homeTeam: home,
+      awayScore: g.teamScore,
+      homeScore: g.oppScore,
+      awayRushYards: rush?.away ?? null, homeRushYards: rush?.home ?? null,
+    };
+  });
+  const avgScore = (games: { teamScore: number }[] | undefined) => {
+    const xs = (games ?? []).map((g) => g.teamScore);
+    const avg = historyAvg(xs);
+    return avg === null ? null : historyRound1(avg);
+  };
+  const defenseAway = historyDefense(
+    meetings.map((m) => m.homeScore), avgScore(gamesHome?.games),
+    meetings.map((m) => m.homeRushYards), footballSeasonRushAvg(logsHome),
+  );
+  const defenseHome = historyDefense(
+    meetings.map((m) => m.awayScore), avgScore(gamesAway?.games),
+    meetings.map((m) => m.awayRushYards), footballSeasonRushAvg(logsAway),
+  );
+  const last = meetings[0] ?? null;
+  return {
+    sport, awayTeam: away, homeTeam: home,
+    playersAway: footballVsOpponent(logsAway, home, away),
+    playersHome: footballVsOpponent(logsHome, away, home),
+    meetings,
+    h2h: {
+      games: meetings.length,
+      awayWins: meetings.filter((m) => m.awayScore > m.homeScore).length,
+      homeWins: meetings.filter((m) => m.homeScore > m.awayScore).length,
+      draws: meetings.filter((m) => m.awayScore === m.homeScore).length,
+    },
+    defenseAway, defenseHome,
+    lastMeeting: last ? {
+      date: last.date, awayTeam: away, homeTeam: home, awayScore: last.awayScore, homeScore: last.homeScore,
+      topScorers: footballTopScorers(logsAway, logsHome, away, home, last.date),
+    } : null,
+    windowNote: isNfl
+      ? "Full season — every game this season vs this opponent."
+      : "Last 4 weeks — per-player lines vs this opponent (college logs cover the last four weeks).",
+    fetchedAt: new Date().toISOString(),
+    sourceUrl: `${ESPN_SITE_NFL}/summary`,
+  };
+}
+
+async function buildNbaHistory(ctx: Ctx, away: string, home: string): Promise<z.infer<typeof matchupHistoryResponse>> {
+  const [logsAway, logsHome] = await Promise.all([
+    nbaTeamPlayerLogs(ctx, away as (typeof nbaTeamCodes)[number]).catch(() => null),
+    nbaTeamPlayerLogs(ctx, home as (typeof nbaTeamCodes)[number]).catch(() => null),
+  ]);
+  const [gamesAway, gamesHome] = await Promise.all([
+    fetchNbaTeamGames(away, 12).catch(() => null),
+    fetchNbaTeamGames(home, 12).catch(() => null),
+  ]);
+  const aggregate = (logs: { players: { id: number; name: string; position: string; games: { opponent: string; stats: NbaPlayerGameStats }[] }[] } | null, opponent: string, team: string) => {
+    if (!logs) return [];
+    const rows: (z.infer<typeof matchupHistoryPlayerSchema> & { _pts: number })[] = [];
+    for (const p of logs.players) {
+      const vs = p.games.filter((g) => g.opponent === opponent);
+      if (vs.length === 0) continue;
+      const sum = (f: (s: NbaPlayerGameStats) => number | null) => vs.reduce((t, g) => t + (f(g.stats) ?? 0), 0);
+      const pts = sum((s) => s.points); const reb = sum((s) => s.rebounds);
+      const ast = sum((s) => s.assists); const tpm = sum((s) => s.threePointMade);
+      if (pts === 0 && reb === 0 && ast === 0) continue;
+      rows.push({
+        id: p.id, name: p.name, position: p.position, team, games: vs.length,
+        passYards: null, passTds: null, rushYards: null, rushTds: null, receptions: null, recYards: null, recTds: null,
+        goals: null, assists: null, points: pts, shots: null,
+        pointsAvg: historyRound1(pts / vs.length), reboundsAvg: historyRound1(reb / vs.length),
+        assistsAvg: historyRound1(ast / vs.length), threePointMadeAvg: historyRound1(tpm / vs.length),
+        _pts: pts / vs.length,
+      });
+    }
+    rows.sort((a, b) => b._pts - a._pts);
+    return rows.slice(0, 6).map(({ _pts: _p, ...rest }) => rest);
+  };
+  const meetingGames = (gamesAway?.games ?? []).filter((g) => g.opponent === home).slice(0, 5);
+  const meetings: z.infer<typeof matchupHistoryMeetingSchema>[] = meetingGames.map((g) => ({
+    date: g.date.slice(0, 10), awayTeam: away, homeTeam: home,
+    // meetingGames come from the matchup away team's schedule: teamScore is
+    // the away team's score, oppScore the home team's.
+    awayScore: g.teamScore,
+    homeScore: g.oppScore,
+    awayRushYards: null, homeRushYards: null,
+  }));
+  const avgScore = (games: { teamScore: number }[] | undefined) => {
+    const avg = historyAvg((games ?? []).map((g) => g.teamScore));
+    return avg === null ? null : historyRound1(avg);
+  };
+  const defenseAway = historyDefense(meetings.map((m) => m.homeScore), avgScore(gamesHome?.games), [], null);
+  const defenseHome = historyDefense(meetings.map((m) => m.awayScore), avgScore(gamesAway?.games), [], null);
+  const last = meetings[0] ?? null;
+  let topScorers: { name: string; team: string; line: string }[] = [];
+  if (last) {
+    const rows: { name: string; team: string; pts: number; line: string }[] = [];
+    const collect = (logs: typeof logsAway, team: string, opp: string) => {
+      if (!logs) return;
+      for (const p of logs.players) {
+        const g = p.games.find((x) => x.date === last.date && x.opponent === opp);
+        if (!g) continue;
+        const s = g.stats;
+        if ((s.points ?? 0) < 8) continue;
+        rows.push({ name: p.name, team, pts: s.points ?? 0, line: `${s.points ?? 0} pts · ${s.rebounds ?? 0} reb · ${s.assists ?? 0} ast` });
+      }
+    };
+    collect(logsAway, away, home);
+    collect(logsHome, home, away);
+    rows.sort((a, b) => b.pts - a.pts);
+    topScorers = rows.slice(0, 3).map(({ name, team, line }) => ({ name, team, line }));
+  }
+  return {
+    sport: "nba", awayTeam: away, homeTeam: home,
+    playersAway: aggregate(logsAway, home, away),
+    playersHome: aggregate(logsHome, away, home),
+    meetings,
+    h2h: {
+      games: meetings.length,
+      awayWins: meetings.filter((m) => m.awayScore > m.homeScore).length,
+      homeWins: meetings.filter((m) => m.homeScore > m.awayScore).length,
+      draws: meetings.filter((m) => m.awayScore === m.homeScore).length,
+    },
+    defenseAway, defenseHome,
+    lastMeeting: last ? {
+      date: last.date, awayTeam: away, homeTeam: home, awayScore: last.awayScore, homeScore: last.homeScore, topScorers,
+    } : null,
+    windowNote: "Last 12 games — per-player lines vs this opponent.",
+    fetchedAt: new Date().toISOString(),
+    sourceUrl: `${ESPN_SITE_NBA}/summary`,
+  };
+}
+
+async function buildNhlHistory(ctx: Ctx, away: string, home: string): Promise<z.infer<typeof matchupHistoryResponse>> {
+  const { byPlayer } = await collectNhlRecentGames(ctx);
+  const [schedAway, schedHome] = await Promise.all([
+    loadClubSchedule(away as (typeof teamCodes)[number]).catch(() => null),
+    loadClubSchedule(home as (typeof teamCodes)[number]).catch(() => null),
+  ]);
+  const aggregate = (team: string, opp: string) => {
+    const rows: (z.infer<typeof matchupHistoryPlayerSchema> & { _pts: number })[] = [];
+    for (const acc of byPlayer.values()) {
+      if (acc.team !== team) continue;
+      const vs = acc.games.filter((g) => g.opponent === opp);
+      if (vs.length === 0) continue;
+      const goals = vs.reduce((t, g) => t + g.goals, 0);
+      const assists = vs.reduce((t, g) => t + g.assists, 0);
+      const points = vs.reduce((t, g) => t + g.points, 0);
+      const shots = vs.reduce((t, g) => t + g.shots, 0);
+      if (points === 0 && shots === 0) continue;
+      rows.push({
+        id: acc.playerId, name: acc.name, position: acc.position, team, games: vs.length,
+        passYards: null, passTds: null, rushYards: null, rushTds: null, receptions: null, recYards: null, recTds: null,
+        goals, assists, points, shots,
+        pointsAvg: null, reboundsAvg: null, assistsAvg: null, threePointMadeAvg: null,
+        _pts: points,
+      });
+    }
+    rows.sort((a, b) => b._pts - a._pts);
+    return rows.slice(0, 6).map(({ _pts: _p, ...rest }) => rest);
+  };
+  const meetingGames = (schedAway?.games ?? [])
+    .filter((g) => (g.away === away && g.home === home) || (g.away === home && g.home === away))
+    .filter((g) => g.awayScore !== null && g.homeScore !== null)
+    .slice(0, 5);
+  const meetings: z.infer<typeof matchupHistoryMeetingSchema>[] = meetingGames.map((g) => ({
+    date: g.date.slice(0, 10), awayTeam: away, homeTeam: home,
+    awayScore: g.away === away ? (g.awayScore ?? 0) : (g.homeScore ?? 0),
+    homeScore: g.away === away ? (g.homeScore ?? 0) : (g.awayScore ?? 0),
+    awayRushYards: null, homeRushYards: null,
+  }));
+  const avgScore = (sched: { games: FirstGoalGame[] } | null, team: string) => {
+    const xs = (sched?.games ?? [])
+      .map((g) => (g.away === team ? g.awayScore : g.home === team ? g.homeScore : null))
+      .filter((v): v is number => v !== null);
+    const avg = historyAvg(xs);
+    return avg === null ? null : historyRound1(avg);
+  };
+  const defenseAway = historyDefense(meetings.map((m) => m.homeScore), avgScore(schedHome, home), [], null);
+  const defenseHome = historyDefense(meetings.map((m) => m.awayScore), avgScore(schedAway, away), [], null);
+  const last = meetings[0] ?? null;
+  let topScorers: { name: string; team: string; line: string }[] = [];
+  if (last) {
+    const rows: { name: string; team: string; pts: number; line: string }[] = [];
+    for (const acc of byPlayer.values()) {
+      const g = acc.games.find((x) => x.date === last.date && x.opponent === (acc.team === away ? home : away));
+      if (!g) continue;
+      if (g.points === 0) continue;
+      rows.push({ name: acc.name, team: acc.team, pts: g.points, line: `${g.goals} G · ${g.assists} A · ${g.shots} SOG` });
+    }
+    rows.sort((a, b) => b.pts - a.pts);
+    topScorers = rows.slice(0, 3).map(({ name, team, line }) => ({ name, team, line }));
+  }
+  return {
+    sport: "nhl", awayTeam: away, homeTeam: home,
+    playersAway: aggregate(away, home),
+    playersHome: aggregate(home, away),
+    meetings,
+    h2h: {
+      games: meetings.length,
+      awayWins: meetings.filter((m) => m.awayScore > m.homeScore).length,
+      homeWins: meetings.filter((m) => m.homeScore > m.awayScore).length,
+      draws: meetings.filter((m) => m.awayScore === m.homeScore).length,
+    },
+    defenseAway, defenseHome,
+    lastMeeting: last ? {
+      date: last.date, awayTeam: away, homeTeam: home, awayScore: last.awayScore, homeScore: last.homeScore, topScorers,
+    } : null,
+    windowNote: "Last 21 days of game logs — per-player lines vs this opponent. Meetings list the last five this season.",
+    fetchedAt: new Date().toISOString(),
+    sourceUrl: `${NHL_API}/club-schedule-season/${away}/${NHL_SEASON}`,
+  };
+}
+
+async function buildSoccerHistory(_ctx: Ctx, league: SoccerLeagueParam, away: string, home: string): Promise<z.infer<typeof matchupHistoryResponse>> {
+  const [awayGames, homeGames] = await Promise.all([
+    fetchSoccerTeamGames(league, away, 12).catch(() => null),
+    fetchSoccerTeamGames(league, home, 12).catch(() => null),
+  ]);
+  if (!awayGames && !homeGames) throw new Error(`Soccer schedule for ${away} vs ${home} is temporarily unavailable`);
+  const meetingGames = (awayGames?.games ?? []).filter((g) => g.opponent === home).slice(0, 5);
+  const summaries: { gameId: number; summary: Awaited<ReturnType<typeof fetchSoccerGameSummary>> }[] = [];
+  for (let i = 0; i < meetingGames.length; i += 4) {
+    const batch = meetingGames.slice(i, i + 4);
+    const fetched = await Promise.all(batch.map(async (g) => {
+      try { return { gameId: g.gameId, summary: await fetchSoccerGameSummary(league, g.gameId) }; }
+      catch { return { gameId: g.gameId, summary: null }; }
+    }));
+    for (const f of fetched) if (f.summary) summaries.push({ gameId: f.gameId, summary: f.summary });
+  }
+  const aggregate = (team: string) => {
+    const byName = new Map<string, { id: number; goals: number; assists: number }>();
+    for (const { summary } of summaries) {
+      for (const goal of summary.goals) {
+        if (goal.teamAbbr !== team) continue;
+        const cur = byName.get(goal.scorer) ?? { id: 0, goals: 0, assists: 0 };
+        cur.goals += 1;
+        byName.set(goal.scorer, cur);
+      }
+      for (const p of summary.players) {
+        const a = p.stats["assists"] ?? p.stats["assist"] ?? 0;
+        if (a > 0) {
+          const cur = byName.get(p.name) ?? { id: p.athleteId, goals: 0, assists: 0 };
+          cur.id = p.athleteId;
+          cur.assists += a;
+          byName.set(p.name, cur);
+        }
+      }
+    }
+    const rows = Array.from(byName.entries())
+      .filter(([, v]) => v.goals > 0 || v.assists > 0)
+      .map(([name, v]) => ({
+        id: v.id, name, position: "—", team, games: meetingGames.length,
+        passYards: null, passTds: null, rushYards: null, rushTds: null, receptions: null, recYards: null, recTds: null,
+        goals: v.goals, assists: v.assists, points: v.goals + v.assists, shots: null,
+        pointsAvg: null, reboundsAvg: null, assistsAvg: null, threePointMadeAvg: null,
+      }))
+      .sort((a, b) => (b.goals ?? 0) - (a.goals ?? 0) || (b.assists ?? 0) - (a.assists ?? 0));
+    return rows.slice(0, 6);
+  };
+  const meetings: z.infer<typeof matchupHistoryMeetingSchema>[] = meetingGames.map((g) => ({
+    date: g.date.slice(0, 10), awayTeam: away, homeTeam: home,
+    // meetingGames come from the matchup away team's schedule: teamScore is
+    // the away team's score, oppScore the home team's.
+    awayScore: g.teamScore,
+    homeScore: g.oppScore,
+    awayRushYards: null, homeRushYards: null,
+  }));
+  const avgScore = (games: SoccerTeamGame[] | undefined) => {
+    const avg = historyAvg((games ?? []).map((g) => g.teamScore));
+    return avg === null ? null : historyRound1(avg);
+  };
+  const defenseAway = historyDefense(meetings.map((m) => m.homeScore), avgScore(homeGames?.games), [], null);
+  const defenseHome = historyDefense(meetings.map((m) => m.awayScore), avgScore(awayGames?.games), [], null);
+  const last = meetings[0] ?? null;
+  let topScorers: { name: string; team: string; line: string }[] = [];
+  if (last) {
+    const lastGame = meetingGames[0];
+    const summary = lastGame ? summaries.find((s) => s.gameId === lastGame.gameId)?.summary ?? null : null;
+    if (summary) {
+      const counts = new Map<string, { team: string; goals: number }>();
+      for (const goal of summary.goals) {
+        const cur = counts.get(goal.scorer) ?? { team: goal.teamAbbr, goals: 0 };
+        cur.goals += 1;
+        counts.set(goal.scorer, cur);
+      }
+      topScorers = Array.from(counts.entries())
+        .sort((a, b) => b[1].goals - a[1].goals)
+        .slice(0, 3)
+        .map(([name, v]) => ({ name, team: v.team, line: `${v.goals} goal${v.goals === 1 ? "" : "s"}` }));
+    }
+  }
+  return {
+    sport: "soccer", awayTeam: away, homeTeam: home,
+    playersAway: aggregate(away),
+    playersHome: aggregate(home),
+    meetings,
+    h2h: {
+      games: meetings.length,
+      awayWins: meetings.filter((m) => m.awayScore > m.homeScore).length,
+      homeWins: meetings.filter((m) => m.homeScore > m.awayScore).length,
+      draws: meetings.filter((m) => m.awayScore === m.homeScore).length,
+    },
+    defenseAway, defenseHome,
+    lastMeeting: last ? {
+      date: last.date, awayTeam: away, homeTeam: home, awayScore: last.awayScore, homeScore: last.homeScore, topScorers,
+    } : null,
+    windowNote: "Last 12 games — per-player lines vs this opponent.",
+    fetchedAt: new Date().toISOString(),
+    sourceUrl: awayGames?.sourceUrl ?? "",
+  };
+}
+
+async function buildMatchupHistory(ctx: Ctx, sport: (typeof sports)[number], away: string, home: string, league?: SoccerLeagueParam | null): Promise<z.infer<typeof matchupHistoryResponse>> {
+  const valid = sport === "nfl" ? new Set(nflTeamCodes as readonly string[])
+    : sport === "nba" ? new Set(nbaTeamCodes as readonly string[])
+    : sport === "ncaaf" ? new Set(ncaafTeamCodes as readonly string[])
+    : sport === "nhl" ? new Set(teamCodes as readonly string[])
+    : null;
+  if (valid && (!valid.has(away) || !valid.has(home))) throw new Error(`Unknown ${sport} team in matchup history`);
+  if (sport === "nfl" || sport === "ncaaf") return buildFootballHistory(ctx, sport, away, home);
+  if (sport === "nba") return buildNbaHistory(ctx, away, home);
+  if (sport === "nhl") return buildNhlHistory(ctx, away, home);
+  if (!league) throw new Error("Soccer league is required for matchup history");
+  return buildSoccerHistory(ctx, league, away, home);
+}
+
+async function fetchMatchupHistory(ctx: Ctx, sport: (typeof sports)[number], away: string, home: string, league?: SoccerLeagueParam | null): Promise<z.infer<typeof matchupHistoryResponse>> {
+  const key = `matchup-history:${sport}:${away}:${home}:${league ?? ""}`;
+  const db = ctx.db;
+  try {
+    const rows = await db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, key)).limit(1);
+    const row = rows[0];
+    if (row && row.expiresAt.getTime() > Date.now()) return matchupHistoryResponse.parse(JSON.parse(row.payloadJson));
+  } catch { /* fall through to a live build */ }
+  const built = await buildMatchupHistory(ctx, sport, away, home, league ?? null);
+  try {
+    await db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, key));
+    await db.insert(schema.nhlInsightCache).values({ key, payloadJson: JSON.stringify(built), fetchedAt: new Date(built.fetchedAt), expiresAt: new Date(Date.now() + 6 * 60 * 60 * 1000) });
+  } catch { /* cache is best-effort */ }
+  return built;
+}
+
+// ---------------------------------------------------------------------------
+// NCAAF cross-conference ranking translation (Feature 2, Nov 2026)
+// ---------------------------------------------------------------------------
+function ncaafIsIndependent(conference: string): boolean {
+  return conference === "" || conference === "FBS Indep.";
+}
+
+async function fetchNcaafConferenceRanks(ctx: Ctx, awayTeam: string, homeTeam: string): Promise<z.infer<typeof ncaafConferenceRanksResponse>> {
+  const key = `ncaaf-conference-ranks:${awayTeam}:${homeTeam}`;
+  const db = ctx.db;
+  try {
+    const rows = await db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, key)).limit(1);
+    const row = rows[0];
+    if (row && row.expiresAt.getTime() > Date.now()) return ncaafConferenceRanksResponse.parse(JSON.parse(row.payloadJson));
+  } catch { /* fall through to a live build */ }
+  const { standings, sourceUrl } = await fetchNcaafStandings();
+  const formMap = await formForOverview(ctx, "ncaaf").catch(() => null);
+  const rated = standings.map((s) => ({
+    team: s.team, name: s.name, conference: s.conference,
+    gamesPlayed: s.wins + s.losses + s.ties, wins: s.wins, losses: s.losses,
+    pointsDiff: s.pointsFor - s.pointsAgainst,
+    rating: modelWinPct({
+      sport: "ncaaf",
+      pointsFor: s.pointsFor, pointsAgainst: s.pointsAgainst,
+      wins: s.wins, losses: s.losses, ties: s.ties, exponent: 2.37,
+      form: formMap?.[s.team] ?? null,
+    }),
+  }));
+  rated.sort((a, b) => (b.rating ?? -1) - (a.rating ?? -1) || b.pointsDiff - a.pointsDiff || b.wins - a.wins);
+  const nationalRank = new Map(rated.map((r, i) => [r.team, i + 1]));
+  const rankInConference = (team: string): number | null => {
+    const row = rated.find((r) => r.team === team);
+    if (!row || ncaafIsIndependent(row.conference)) return null;
+    const inConf = rated.filter((r) => r.conference === row.conference);
+    return inConf.findIndex((r) => r.team === team) + 1;
+  };
+  const translatedRank = (team: string, oppConference: string): number | null => {
+    const row = rated.find((r) => r.team === team);
+    if (!row || ncaafIsIndependent(row.conference) || ncaafIsIndependent(oppConference)) return null;
+    const oppConf = rated.filter((r) => r.conference === oppConference);
+    const above = oppConf.filter((r) => (r.rating ?? -1) > (row.rating ?? -1)).length;
+    return above + 1;
+  };
+  const buildRow = (team: string): z.infer<typeof ncaafConferenceRankSchema> => {
+    const row = rated.find((r) => r.team === team);
+    if (!row) throw new Error(`Unknown NCAAF team ${team}`);
+    const opp = team === awayTeam ? homeTeam : awayTeam;
+    const oppRow = rated.find((r) => r.team === opp);
+    const oppConf = oppRow?.conference ?? "";
+    return {
+      team: row.team, name: row.name, conference: row.conference,
+      gamesPlayed: row.gamesPlayed, wins: row.wins, losses: row.losses,
+      rating: row.rating,
+      nationalRank: nationalRank.get(team) ?? rated.length,
+      conferenceRank: rankInConference(team),
+      translatedRank: translatedRank(team, oppConf),
+      translatedConference: translatedRank(team, oppConf) === null ? null : oppConf,
+    };
+  };
+  const built: z.infer<typeof ncaafConferenceRanksResponse> = {
+    awayTeam, homeTeam,
+    away: buildRow(awayTeam), home: buildRow(homeTeam),
+    totalTeams: rated.length, fetchedAt: new Date().toISOString(), sourceUrl,
+  };
+  try {
+    await db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, key));
+    await db.insert(schema.nhlInsightCache).values({ key, payloadJson: JSON.stringify(built), fetchedAt: new Date(built.fetchedAt), expiresAt: new Date(Date.now() + 6 * 60 * 60 * 1000) });
+  } catch { /* cache is best-effort */ }
+  return built;
+}
+
 function normScorerName(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ").trim();
 }
@@ -6568,6 +7181,8 @@ export const Actions = {
   getNbaColdStreaks: defineAction({ request: z.object({ force: z.boolean().default(false) }), response: nbaColdStreaksResponse, async handler(ctx, args) { return fetchNbaColdStreaks(ctx, args.force); } }),
   getLikelyScorers: defineAction({ request: z.object({ sport: z.enum(sports), league: z.enum(soccerLeagues).optional(), force: z.boolean().default(false) }), response: likelyScorersResponse, async handler(ctx, args) { return fetchLikelyScorers(ctx, args.sport, args.force, args.league); } }),
   getMatchupScorers: defineAction({ request: z.object({ sport: z.enum(sports), away: z.string().min(1), home: z.string().min(1), league: z.enum(soccerLeagues).optional() }), response: matchupScorersResponse, async handler(ctx, args) { return fetchMatchupScorers(ctx, args.sport, args.away, args.home, args.league); } }),
+  getMatchupHistory: defineAction({ request: z.object({ sport: z.enum(sports), away: z.string().min(1), home: z.string().min(1), league: z.enum(soccerLeagues).optional() }), response: matchupHistoryResponse, async handler(ctx, args) { return fetchMatchupHistory(ctx, args.sport, args.away, args.home, args.league); } }),
+  getNcaafConferenceRanks: defineAction({ request: z.object({ awayTeam: z.enum(ncaafTeamCodes), homeTeam: z.enum(ncaafTeamCodes) }).refine((value) => value.awayTeam !== value.homeTeam, { message: "Choose two different teams" }), response: ncaafConferenceRanksResponse, async handler(ctx, args) { return fetchNcaafConferenceRanks(ctx, args.awayTeam, args.homeTeam); } }),
   getBookRead: defineAction({ request: z.object({ sport: z.enum(sports), awayTeam: z.string().min(1), homeTeam: z.string().min(1), league: z.string().nullable().optional() }), response: bookReadResponse, async handler(ctx, args) { return loadBookRead(ctx, args.sport, args.awayTeam, args.homeTeam, args.league ?? null); } }),
   getHamPlates: defineAction({
     request: z.object({}),
