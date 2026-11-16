@@ -5665,18 +5665,44 @@ async function buildMatchupHistory(ctx: Ctx, sport: (typeof sports)[number], awa
   return buildSoccerHistory(ctx, league, away, home);
 }
 
+// An empty matchup build means the underlying sweep came back blank — a
+// feed failure, never a real result (the league has real players). Nov 16:
+// the NHL sweep blanked and the empty builds were cached for six hours, so
+// both of tonight's matchup screens stayed dark all night.
+function isEmptyMatchupHistory(h: z.infer<typeof matchupHistoryResponse>): boolean {
+  return h.playersAway.length === 0 && h.playersHome.length === 0 && h.meetings.length === 0;
+}
+
 async function fetchMatchupHistory(ctx: Ctx, sport: (typeof sports)[number], away: string, home: string, league?: SoccerLeagueParam | null): Promise<z.infer<typeof matchupHistoryResponse>> {
   const key = `matchup-history:${sport}:${away}:${home}:${league ?? ""}`;
   const db = ctx.db;
+  let priorPayload: string | null = null;
   try {
     const rows = await db.select().from(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, key)).limit(1);
     const row = rows[0];
-    if (row && row.expiresAt.getTime() > Date.now()) return matchupHistoryResponse.parse(JSON.parse(row.payloadJson));
+    if (row) priorPayload = row.payloadJson;
+    if (row && row.expiresAt.getTime() > Date.now()) {
+      const cached = matchupHistoryResponse.parse(JSON.parse(row.payloadJson));
+      // A cached empty build is never served: fall through to a live rebuild
+      // so the screen self-heals once the feed recovers.
+      if (!isEmptyMatchupHistory(cached)) return cached;
+    }
   } catch { /* fall through to a live build */ }
   const built = await buildMatchupHistory(ctx, sport, away, home, league ?? null);
+  if (isEmptyMatchupHistory(built) && priorPayload) {
+    // Stale beats blank: if the previous cached row held real players,
+    // serve it instead of the empty build.
+    try {
+      const prior = matchupHistoryResponse.parse(JSON.parse(priorPayload));
+      if (!isEmptyMatchupHistory(prior)) return prior;
+    } catch { /* fall through to caching the empty build briefly */ }
+  }
   try {
     await db.delete(schema.nhlInsightCache).where(eq(schema.nhlInsightCache.key, key));
-    await db.insert(schema.nhlInsightCache).values({ key, payloadJson: JSON.stringify(built), fetchedAt: new Date(built.fetchedAt), expiresAt: new Date(Date.now() + 6 * 60 * 60 * 1000) });
+    // Empty builds cache briefly (15 min, like degraded sweeps), never six
+    // hours — the next view retries instead of serving a blank screen.
+    const ttlMs = isEmptyMatchupHistory(built) ? 15 * 60 * 1000 : 6 * 60 * 60 * 1000;
+    await db.insert(schema.nhlInsightCache).values({ key, payloadJson: JSON.stringify(built), fetchedAt: new Date(built.fetchedAt), expiresAt: new Date(Date.now() + ttlMs) });
   } catch { /* cache is best-effort */ }
   return built;
 }
