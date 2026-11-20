@@ -27,7 +27,7 @@
 //     never a wrong one.
 // ---------------------------------------------------------------------------
 
-import { and, eq, isNotNull } from "drizzle-orm";
+import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 import { db } from "./db.js";
 import * as schema from "./schema.js";
@@ -108,6 +108,34 @@ async function gradedPairs(sport: LearningSport): Promise<PickPair[]> {
     const p = r.modelPick === "away" ? r.modelAway : r.modelPick === "home" ? r.modelHome : r.modelDraw;
     if (p === null || p <= 0.01 || p >= 0.99) continue;
     pairs.push({ p, y: r.modelCorrect });
+  }
+  // Props: the databank grades the model's stated prop probabilities too
+  // (anytime TD, shots, attempts, FGs, points, rebounds, assists...). A
+  // prop pick is the same kind of belief as a winner pick — the stated
+  // probability against the actual outcome — so it feeds the same Platt
+  // fit under the same guardrails (thresholds, caps, weekly cycle).
+  // DNP/void never enter the ledger as outcomes — only hit/miss. A missing
+  // databank table (pre-migration database) must never break the cycle.
+  try {
+    const propSources: Array<"live" | "chat"> = ["live", "chat"];
+    const propOutcomes: Array<"hit" | "miss"> = ["hit", "miss"];
+    const propRows = await db.select({
+      p: schema.databankPicks.statedProbability,
+      outcome: schema.databankGrades.outcome,
+    })
+      .from(schema.databankPicks)
+      .innerJoin(schema.databankGrades, eq(schema.databankGrades.pickId, schema.databankPicks.id))
+      .where(and(
+        eq(schema.databankPicks.sport, sport),
+        inArray(schema.databankPicks.source, propSources),
+        inArray(schema.databankGrades.outcome, propOutcomes),
+      ));
+    for (const r of propRows) {
+      if (r.p === null || r.p <= 0.01 || r.p >= 0.99) continue;
+      pairs.push({ p: r.p, y: r.outcome === "hit" ? 1 : 0 });
+    }
+  } catch (e) {
+    console.error("[learning] databank prop pairs unavailable (continuing with winner pairs only):", e instanceof Error ? e.message : e);
   }
   return pairs;
 }

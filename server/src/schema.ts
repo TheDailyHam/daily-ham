@@ -156,3 +156,123 @@ export const usageDaily = sqliteTable(
   },
   (table) => [primaryKey({ columns: [table.date, table.visitorHash, table.sport] })],
 );
+
+// ---------------------------------------------------------------------------
+// The databank — the model's own memory (added 2026-11-20, after the Nov 19
+// TNF 3-legger went 0/3 on advice the model had already forgotten how to
+// grade). Every game log the model ever uses, every pick it ever states,
+// every grade, and the rolling rates built from them live here — in the same
+// database as the tracker, renewed daily by the same refresh. Nothing the
+// model says is allowed to exist only in a chat transcript anymore.
+//   - game logs: raw per-player per-game stat lines (the memory).
+//   - picks: one row per stated pick (winner / total / prop), with the
+//     stated probability and the price it was given at.
+//   - grades: one row per graded pick. outcome "dnp" (did not play) is
+//     NEVER a miss — a leg that never had a chance grades as dnp.
+//   - rates: rolling hit rates recomputed from the grades on every
+//     renewal, always with the sample size beside the rate, plus the
+//     volume behind it (targets / shots per game) and a thin-volume flag.
+//   - renewals: one row per renewal run — the audit trail. A run that
+//     ingested 0 rows for a sport that should have data is partial/failed,
+//     never success, and the previous good copy stays.
+// ---------------------------------------------------------------------------
+export const databankGameLogs = sqliteTable(
+  "databank_game_logs",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    sport: text("sport", { enum: ["nhl", "nfl", "nba", "soccer", "ncaaf"] }).notNull(),
+    playerName: text("player_name").notNull(),
+    playerId: text("player_id").notNull(),
+    gameDate: text("game_date").notNull(),
+    opponent: text("opponent"),
+    homeAway: text("home_away", { enum: ["home", "away"] }),
+    statsJson: text("stats_json").notNull(),
+    source: text("source", { enum: ["nhl_api", "espn"] }).notNull(),
+    ingestedAt: integer("ingested_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("databank_game_logs_identity_idx").on(table.sport, table.playerId, table.gameDate),
+    index("databank_game_logs_player_idx").on(table.sport, table.playerId),
+  ],
+);
+
+export const databankPicks = sqliteTable(
+  "databank_picks",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    sport: text("sport", { enum: ["nhl", "nfl", "nba", "soccer", "ncaaf"] }).notNull(),
+    pickKind: text("pick_kind", { enum: ["winner", "total", "prop"] }).notNull(),
+    playerName: text("player_name"),
+    playerId: text("player_id"),
+    team: text("team"),
+    market: text("market").notNull(),
+    line: real("line"),
+    statedProbability: real("stated_probability").notNull(),
+    price: integer("price"),
+    gameDate: text("game_date").notNull(),
+    opponent: text("opponent"),
+    snapshotAt: integer("snapshot_at", { mode: "timestamp_ms" }).notNull(),
+    source: text("source", { enum: ["live", "backtest", "chat"] }).notNull().default("live"),
+    // Game-script shading and other grading notes live here — e.g. a
+    // blowout-favorite shade ("stated 0.67, shaded to 0.57: HOU -12.5").
+    // When shading applies, stated_probability stores the SHADED (effective)
+    // belief and the note preserves the original.
+    note: text("note"),
+  },
+  (table) => [
+    uniqueIndex("databank_picks_identity_idx").on(
+      table.sport, table.pickKind, table.playerId, table.team, table.market, table.line, table.gameDate,
+    ),
+    index("databank_picks_ungraded_idx").on(table.gameDate),
+  ],
+);
+
+export const databankGrades = sqliteTable(
+  "databank_grades",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    pickId: integer("pick_id").notNull(),
+    outcome: text("outcome", { enum: ["hit", "miss", "dnp", "void"] }).notNull(),
+    actualValue: text("actual_value"),
+    gradedAt: integer("graded_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [uniqueIndex("databank_grades_pick_idx").on(table.pickId)],
+);
+
+export const databankRates = sqliteTable(
+  "databank_rates",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    sport: text("sport", { enum: ["nhl", "nfl", "nba", "soccer", "ncaaf"] }).notNull(),
+    playerName: text("player_name").notNull(),
+    playerId: text("player_id").notNull(),
+    market: text("market").notNull(),
+    line: real("line"),
+    hits: integer("hits").notNull().default(0),
+    games: integer("games").notNull().default(0),
+    rate: real("rate").notNull().default(0),
+    // Volume behind the rate, e.g. {"targetsPerGame": 3.1} or
+    // {"shotsPerGame": 2.4}, plus "thinVolume": true when the volume is too
+    // thin to trust the rate at full strength (<3 targets/game for a
+    // receiver, <2 shots/game for NHL).
+    volumeJson: text("volume_json"),
+    lastGameDate: text("last_game_date"),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("databank_rates_identity_idx").on(table.sport, table.playerId, table.market, table.line),
+  ],
+);
+
+export const databankRenewals = sqliteTable("databank_renewals", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  startedAt: integer("started_at", { mode: "timestamp_ms" }).notNull(),
+  finishedAt: integer("finished_at", { mode: "timestamp_ms" }),
+  status: text("status", { enum: ["success", "partial", "failed"] }).notNull(),
+  rowsIngested: integer("rows_ingested").notNull().default(0),
+  picksSnapshot: integer("picks_snapshot").notNull().default(0),
+  picksGraded: integer("picks_graded").notNull().default(0),
+  ratesRecomputed: integer("rates_recomputed").notNull().default(0),
+  errorMessage: text("error_message"),
+  note: text("note"),
+});

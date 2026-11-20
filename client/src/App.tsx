@@ -2576,6 +2576,40 @@ function DatabasePanel({ adminToken }: { adminToken: string }) {
   </section>;
 }
 
+// Databank health: the model's own memory — game logs, picks, grades and
+// rolling rates, renewed daily. Admin-only. A renewal that is not
+// "success" names the sport that failed to ingest, so a dead feed can't
+// hide behind a green dashboard again.
+function DatabankPanel({ adminToken }: { adminToken: string }) {
+  const status = useQuery({ queryKey: ["databank-status"], queryFn: () => api.getDatabankStatus({ adminToken }), staleTime: 60 * 1000, retry: 1 });
+  const renewal = status.data?.lastRenewal;
+  const ok = renewal?.status === "success";
+  return <section className="credential-card usage-panel" aria-label="Private databank status">
+    <div className="credential-status"><span className={"status-dot " + (ok ? "configured" : "attention")} /><div><small>PRIVATE · ADMIN ONLY</small><strong>Databank</strong><span>The model's own memory — game logs, picks, grades, rolling rates. Renewed daily.</span></div></div>
+    {status.isPending ? <p className="settings-message">Checking databank…</p>
+    : status.isError || !status.data ? <p className="settings-message" role="status">Databank status isn't available yet — the server update is still rolling out.</p>
+    : <>
+      {renewal
+        ? <p className="settings-message" role="status"><strong>Last renewal: {renewal.status}.</strong>{renewal.finishedAt ? ` ${new Date(renewal.finishedAt).toLocaleString()}` : ""}{` · ${renewal.rowsIngested.toLocaleString()} game logs · ${renewal.picksGraded} graded · ${renewal.ratesRecomputed} rates`}{renewal.note ? ` — ${renewal.note}` : ""}</p>
+        : <p className="settings-message" role="status">No renewal has run yet — the next daily refresh starts the bank.</p>}
+      <div className="usage-grid">
+        <div className="usage-stat"><small>Game logs</small><strong>{status.data.totals.gameLogs.toLocaleString()}</strong><span>player games stored</span></div>
+        <div className="usage-stat"><small>Picks</small><strong>{status.data.totals.picks.toLocaleString()}</strong><span>stated picks</span></div>
+        <div className="usage-stat"><small>Graded</small><strong>{status.data.totals.grades.toLocaleString()}</strong><span>picks graded</span></div>
+        <div className="usage-stat"><small>Rates</small><strong>{status.data.totals.rates.toLocaleString()}</strong><span>rolling rates</span></div>
+      </div>
+      {status.data.gradedBySport.length > 0 && <div className="usage-block"><p className="kicker">GRADED PICKS BY SPORT</p><div className="usage-table" role="table">
+        <div className="usage-row header" role="row"><span>Sport</span><span>Hit / graded</span></div>
+        {status.data.gradedBySport.map((row) => <div className="usage-row" role="row" key={row.sport}><span>{row.sport.toUpperCase()}</span><span>{row.hits} / {row.graded}{row.winPct !== null ? ` · ${row.winPct}%` : ""}</span></div>)}
+      </div></div>}
+      {status.data.learning.length > 0 && <div className="usage-block"><p className="kicker">LEARNING</p><div className="usage-table" role="table">
+        <div className="usage-row header" role="row"><span>Sport</span><span>Status</span></div>
+        {status.data.learning.map((row) => <div className="usage-row" role="row" key={row.sport}><span>{row.sport.toUpperCase()}</span><span>{row.status}{row.gradedPicks > 0 ? ` · ${row.gradedPicks} graded` : ""}</span></div>)}
+      </div></div>}
+    </>}
+  </section>;
+}
+
 function OwnerConsole() {
   const adminStatus = useQuery({ queryKey: ["admin-status"], queryFn: () => api.getAdminStatus({}), retry: false });
   const [adminToken, setAdminToken] = useState<string | null>(() => {
@@ -2617,6 +2651,7 @@ function OwnerConsole() {
     {gateConfigured && adminToken && <HamSelectionManager adminToken={adminToken} />}
     {gateConfigured && adminToken && <UsagePanel adminToken={adminToken} />}
     {gateConfigured && adminToken && <DatabasePanel adminToken={adminToken} />}
+    {gateConfigured && adminToken && <DatabankPanel adminToken={adminToken} />}
     {gateConfigured && adminToken && <AffiliateLinksManager adminToken={adminToken} />}
     {gateConfigured && adminToken && <FeedbackPanel adminToken={adminToken} />}
   </section></div>;

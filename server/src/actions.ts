@@ -3,6 +3,8 @@ import { timingSafeEqual } from "node:crypto";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { dbSource, dbNote } from "./db.js";
 import { applyCalibration, ensureCalibrationLoaded, runLearningCycle, getLearningLogData } from "./learning.js";
+import { runDatabankRenewal } from "./databank/renew.js";
+import { getDatabankStatusData } from "./databank/status.js";
 
 
 // Admin gate: key management and manual sportsbook refreshes require the
@@ -6710,6 +6712,33 @@ async function loadTrackerStatus(ctx: Ctx): Promise<z.infer<typeof trackerStatus
   };
 }
 
+const databankStatusResponse = z.object({
+  dbSource: z.enum(["turso", "local"]),
+  dbNote: z.string().nullable(),
+  lastRenewal: z.object({
+    status: z.string(),
+    startedAt: z.string().nullable(),
+    finishedAt: z.string().nullable(),
+    rowsIngested: z.number(),
+    picksSnapshot: z.number(),
+    picksGraded: z.number(),
+    ratesRecomputed: z.number(),
+    note: z.string().nullable(),
+  }).nullable(),
+  totals: z.object({
+    gameLogs: z.number(),
+    picks: z.number(),
+    grades: z.number(),
+    rates: z.number(),
+  }),
+  gradedBySport: z.array(z.object({
+    sport: z.string(), graded: z.number(), hits: z.number(), winPct: z.number().nullable(),
+  })),
+  learning: z.array(z.object({
+    sport: z.string(), gradedPicks: z.number(), weight: z.number(), status: z.string(),
+  })),
+});
+
 type SnapshotRow = typeof schema.modelSnapshots.$inferSelect;
 
 function trackEra(rows: SnapshotRow[]) {
@@ -7187,7 +7216,7 @@ async function analyzeSlip(ctx: Ctx, legs: SlipLeg[]): Promise<z.infer<typeof ch
 
 export const Actions = {
   getDashboard: defineAction({ request: z.object({ sport: z.enum(sports).default("nhl") }), response: dashboardResponse, async handler(ctx, args) { return loadDashboard(ctx, args.sport); } }),
-  refreshDaily: defineAction({ request: z.object({}), response: z.object({ status: z.enum(["success", "partial", "failed"]), message: z.string(), rowCount: z.number(), snapshotDate: z.string() }), async handler(ctx) { const result = await refresh(ctx); try { await ensureCalibrationLoaded(); } catch { /* learning cache warms opportunistically; identity is the safe default */ } try { const tr = await snapshotTrackRecord(ctx); console.log(`[track-record] daily refresh: snapshotted=${tr.snapshotted} graded=${tr.graded}`); } catch (e) { console.error("[track-record] snapshotTrackRecord failed in daily refresh:", e instanceof Error ? e.message : e); } try { const lc = await runLearningCycle(); if (lc.ran) console.log("[learning] weekly learning cycle ran in daily refresh"); } catch (e) { console.error("[learning] cycle failed in daily refresh:", e instanceof Error ? e.message : e); } try { await fetchHotStreaks(ctx, true); } catch { /* Keep odds refresh independent of free NHL insight refresh. */ } try { await fetchNflHotStreaks(ctx, true); } catch { /* Same for the NFL leg. */ } try { await fetchColdStreaks(ctx, true); } catch { /* Cold streaks refresh with the same daily job. */ } try { await fetchNflColdStreaks(ctx, true); } catch { /* Same for the NFL leg. */ } try { await fetchNcaafHotStreaks(ctx, true); } catch { /* Same for the NCAAF leg. */ } try { await fetchNcaafColdStreaks(ctx, true); } catch { /* Same for the NCAAF leg. */ } try { await fetchNbaHotStreaks(ctx, true); } catch { /* Same for the NBA leg. */ } try { await fetchNbaColdStreaks(ctx, true); } catch { /* Same for the NBA leg. */ } try { await fetchLikelyScorers(ctx, "nhl", true); } catch { /* Likely scorers warm with the same daily job. */ } try { await fetchLikelyScorers(ctx, "nfl", true); } catch { /* Same for the NFL leg. */ } try { await fetchLikelyScorers(ctx, "ncaaf", true); } catch { /* Same for the NCAAF leg. */ } try { await fetchLikelyScorers(ctx, "nba", true); } catch { /* Same for the NBA leg. */ } try { await warmNflForm(ctx); } catch { /* Flip % v2 form warms with the same daily job. */ } try { await warmNcaafForm(ctx); } catch { /* Same for the NCAAF leg. */ } try { await warmNbaForm(ctx); } catch { /* Same for the NBA leg. */ } try { await fetchKeyInjuries(ctx, "nfl", true); } catch { /* Injury warnings warm with the same daily job. */ } try { await fetchKeyInjuries(ctx, "ncaaf", true); } catch { /* Same for the NCAAF leg. */ } try { await fetchKeyInjuries(ctx, "nba", true); } catch { /* Same for the NBA leg. */ } try { await fetchKeyInjuries(ctx, "nhl", true); } catch { /* Same for the NHL leg. */ } try { await fetchKeyInjuries(ctx, "soccer", true, "mls"); } catch { /* Same for the MLS leg. */ } try { await fetchKeyInjuries(ctx, "soccer", true, "epl"); } catch { /* Same for the EPL leg. */ } try { await fetchLikelyScorers(ctx, "soccer", true, "mls"); } catch { /* Same for the MLS leg. */ } try { await fetchLikelyScorers(ctx, "soccer", true, "epl"); } catch { /* Same for the EPL leg. */ } try { await fetchSoccerHotStreaks(ctx, "mls", true); } catch { /* Same for the MLS leg. */ } try { await fetchSoccerHotStreaks(ctx, "epl", true); } catch { /* Same for the EPL leg. */ } try { await fetchSoccerColdStreaks(ctx, "mls", true); } catch { /* Same for the MLS leg. */ } try { await fetchSoccerColdStreaks(ctx, "epl", true); } catch { /* Same for the EPL leg. */ } try { await loadSoccerStandings(ctx, "mls"); } catch { /* Standings warm with the same daily job. */ } try { await loadSoccerStandings(ctx, "epl"); } catch { /* Same for the EPL leg. */ } return result; } }),
+  refreshDaily: defineAction({ request: z.object({}), response: z.object({ status: z.enum(["success", "partial", "failed"]), message: z.string(), rowCount: z.number(), snapshotDate: z.string() }), async handler(ctx) { const result = await refresh(ctx); try { await ensureCalibrationLoaded(); } catch { /* learning cache warms opportunistically; identity is the safe default */ } try { const tr = await snapshotTrackRecord(ctx); console.log(`[track-record] daily refresh: snapshotted=${tr.snapshotted} graded=${tr.graded}`); } catch (e) { console.error("[track-record] snapshotTrackRecord failed in daily refresh:", e instanceof Error ? e.message : e); } try { const dbk = await runDatabankRenewal(ctx); console.log(`[databank] daily refresh: renewal=${dbk.status} ingested=${dbk.rowsIngested} graded=${dbk.picksGraded} rates=${dbk.ratesRecomputed}`); } catch (e) { console.error("[databank] renewal failed in daily refresh (free-data refresh continues):", e instanceof Error ? e.message : e); } try { const lc = await runLearningCycle(); if (lc.ran) console.log("[learning] weekly learning cycle ran in daily refresh"); } catch (e) { console.error("[learning] cycle failed in daily refresh:", e instanceof Error ? e.message : e); } try { await fetchHotStreaks(ctx, true); } catch { /* Keep odds refresh independent of free NHL insight refresh. */ } try { await fetchNflHotStreaks(ctx, true); } catch { /* Same for the NFL leg. */ } try { await fetchColdStreaks(ctx, true); } catch { /* Cold streaks refresh with the same daily job. */ } try { await fetchNflColdStreaks(ctx, true); } catch { /* Same for the NFL leg. */ } try { await fetchNcaafHotStreaks(ctx, true); } catch { /* Same for the NCAAF leg. */ } try { await fetchNcaafColdStreaks(ctx, true); } catch { /* Same for the NCAAF leg. */ } try { await fetchNbaHotStreaks(ctx, true); } catch { /* Same for the NBA leg. */ } try { await fetchNbaColdStreaks(ctx, true); } catch { /* Same for the NBA leg. */ } try { await fetchLikelyScorers(ctx, "nhl", true); } catch { /* Likely scorers warm with the same daily job. */ } try { await fetchLikelyScorers(ctx, "nfl", true); } catch { /* Same for the NFL leg. */ } try { await fetchLikelyScorers(ctx, "ncaaf", true); } catch { /* Same for the NCAAF leg. */ } try { await fetchLikelyScorers(ctx, "nba", true); } catch { /* Same for the NBA leg. */ } try { await warmNflForm(ctx); } catch { /* Flip % v2 form warms with the same daily job. */ } try { await warmNcaafForm(ctx); } catch { /* Same for the NCAAF leg. */ } try { await warmNbaForm(ctx); } catch { /* Same for the NBA leg. */ } try { await fetchKeyInjuries(ctx, "nfl", true); } catch { /* Injury warnings warm with the same daily job. */ } try { await fetchKeyInjuries(ctx, "ncaaf", true); } catch { /* Same for the NCAAF leg. */ } try { await fetchKeyInjuries(ctx, "nba", true); } catch { /* Same for the NBA leg. */ } try { await fetchKeyInjuries(ctx, "nhl", true); } catch { /* Same for the NHL leg. */ } try { await fetchKeyInjuries(ctx, "soccer", true, "mls"); } catch { /* Same for the MLS leg. */ } try { await fetchKeyInjuries(ctx, "soccer", true, "epl"); } catch { /* Same for the EPL leg. */ } try { await fetchLikelyScorers(ctx, "soccer", true, "mls"); } catch { /* Same for the MLS leg. */ } try { await fetchLikelyScorers(ctx, "soccer", true, "epl"); } catch { /* Same for the EPL leg. */ } try { await fetchSoccerHotStreaks(ctx, "mls", true); } catch { /* Same for the MLS leg. */ } try { await fetchSoccerHotStreaks(ctx, "epl", true); } catch { /* Same for the EPL leg. */ } try { await fetchSoccerColdStreaks(ctx, "mls", true); } catch { /* Same for the MLS leg. */ } try { await fetchSoccerColdStreaks(ctx, "epl", true); } catch { /* Same for the EPL leg. */ } try { await loadSoccerStandings(ctx, "mls"); } catch { /* Standings warm with the same daily job. */ } try { await loadSoccerStandings(ctx, "epl"); } catch { /* Same for the EPL leg. */ } return result; } }),
   getNhlOverview: defineAction({ request: z.object({}), response: nhlOverviewResponse, async handler(ctx) { return loadNhlOverview(undefined, ctx); } }),
   getFirstGoalMatchup: defineAction({ request: z.object({ awayTeam: z.enum(teamCodes), homeTeam: z.enum(teamCodes), force: z.boolean().default(false) }).refine((value) => value.awayTeam !== value.homeTeam, { message: "Choose two different teams" }), response: firstGoalMatchupResponse, async handler(ctx, args) { return loadFirstGoalMatchup(ctx, args.awayTeam, args.homeTeam, args.force); } }),
   getHotStreaks: defineAction({ request: z.object({ force: z.boolean().default(false) }), response: hotStreaksResponse, async handler(ctx, args) { return fetchHotStreaks(ctx, args.force); } }),
@@ -7285,6 +7314,7 @@ export const Actions = {
   ocrSlipPhoto: defineAction({ request: z.object({ imageBase64: z.string().min(1).max(12000000) }), response: z.object({ text: z.string() }), async handler() { throw new Error("Photo reading is being upgraded right now — for the moment, add the legs by hand below (it only takes a minute)."); } }),
   getCalibration: defineAction({ request: z.object({}), response: calibrationResponse, async handler(ctx) { return loadCalibration(ctx); } }),
   getTrackerStatus: defineAction({ request: z.object({ adminToken: adminTokenSchema }), response: trackerStatusResponse, async handler(ctx, args) { requireAdmin(args); return loadTrackerStatus(ctx); } }),
+  getDatabankStatus: defineAction({ request: z.object({ adminToken: adminTokenSchema }), response: databankStatusResponse, async handler(ctx, args) { requireAdmin(args); return getDatabankStatusData(ctx.db); } }),
   getAdminStatus: defineAction({ request: z.object({}), response: z.object({ configured: z.boolean() }), async handler() { return { configured: !!process.env.ADMIN_TOKEN?.trim() }; } }),
   getUsageStats: defineAction({ request: z.object({ adminToken: adminTokenSchema }), response: usageStatsResponse, async handler(ctx, args) { requireAdmin(args); return loadUsageStats(ctx); } }),
   refreshAllSportsbooks: defineAction({ request: z.object({ adminToken: adminTokenSchema }), response: premiumRefreshResponse, async handler(ctx, args) { requireAdmin(args); return refreshAllPremium(ctx); } }),

@@ -85,6 +85,13 @@
    "when": 1792421035928,
    "tag": "0013_model_snapshots_unique_idx",
    "breakpoints": true
+  },
+  {
+   "idx": 12,
+   "version": "6",
+   "when": 1793300000000,
+   "tag": "0014_add_databank",
+   "breakpoints": true
   }
  ]
 }

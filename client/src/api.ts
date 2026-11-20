@@ -189,6 +189,7 @@ export const api = {
   saveAffiliateLink: (args: ActionArgs<"saveAffiliateLink">) => callAction("saveAffiliateLink", args),
   removeAffiliateLink: (args: ActionArgs<"removeAffiliateLink">) => callAction("removeAffiliateLink", args),
   getTrackerStatus: (args: ActionArgs<"getTrackerStatus">) => callAction("getTrackerStatus", args),
+  getDatabankStatus: (args: ActionArgs<"getDatabankStatus">) => callAction("getDatabankStatus", args),
   getAdminStatus: (args: ActionArgs<"getAdminStatus">) => callAction("getAdminStatus", args),
   refreshAllSportsbooks: (args: ActionArgs<"refreshAllSportsbooks">) => callAction("refreshAllSportsbooks", args),
   getSportsGameOddsKeyStatus: (args: ActionArgs<"getSportsGameOddsKeyStatus">) => callAction("getSportsGameOddsKeyStatus", args),
